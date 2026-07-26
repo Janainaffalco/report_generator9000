@@ -70,10 +70,10 @@ def test_fixture_generator_reproduces_committed_document(tmp_path: Path) -> None
     )
 
     assert completed.returncode == 0, stderr_path.read_text(encoding="utf-8")
-    assert generated.read_bytes() == FIXTURE.read_bytes()
     with ZipFile(generated) as package:
         assert all(part.compress_type == ZIP_STORED for part in package.infolist())
     assert (
         hashlib.sha256(generated.read_bytes()).hexdigest()
         == "2875cec5da6cb30c91f883ac55227b04a3483380f792dfc47943fe3fc62a518e"
     )
+    assert generated.read_bytes() == FIXTURE.read_bytes()
