@@ -4,6 +4,7 @@ import hashlib
 import subprocess
 import sys
 from pathlib import Path
+from zipfile import ZIP_STORED, ZipFile
 
 
 FIXTURE = Path(__file__).parent / "fixtures" / "minimal.docx"
@@ -70,7 +71,9 @@ def test_fixture_generator_reproduces_committed_document(tmp_path: Path) -> None
 
     assert completed.returncode == 0, stderr_path.read_text(encoding="utf-8")
     assert generated.read_bytes() == FIXTURE.read_bytes()
+    with ZipFile(generated) as package:
+        assert all(part.compress_type == ZIP_STORED for part in package.infolist())
     assert (
         hashlib.sha256(generated.read_bytes()).hexdigest()
-        == "7f1a5e9dbeb857dd4fee97d0bb46f7ed6a25eeef4332b1b6cf0b7fd67cd83abe"
+        == "2875cec5da6cb30c91f883ac55227b04a3483380f792dfc47943fe3fc62a518e"
     )

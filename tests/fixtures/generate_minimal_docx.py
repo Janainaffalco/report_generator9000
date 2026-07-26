@@ -7,7 +7,7 @@ import binascii
 import struct
 import zlib
 from pathlib import Path
-from zipfile import ZIP_DEFLATED, ZipFile, ZipInfo
+from zipfile import ZIP_STORED, ZipFile, ZipInfo
 
 
 FIXTURE = Path(__file__).with_name("minimal.docx")
@@ -81,7 +81,7 @@ def generate(output: Path) -> None:
         for name, contents in PARTS.items():
             part = ZipInfo(name, date_time=(2026, 1, 1, 0, 0, 0))
             part.create_system = 3
-            part.compress_type = ZIP_DEFLATED
+            part.compress_type = ZIP_STORED
             part.external_attr = 0o600 << 16
             package.writestr(part, contents)
 
