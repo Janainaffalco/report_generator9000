@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import subprocess
 import sys
 from pathlib import Path
@@ -69,3 +70,7 @@ def test_fixture_generator_reproduces_committed_document(tmp_path: Path) -> None
 
     assert completed.returncode == 0, stderr_path.read_text(encoding="utf-8")
     assert generated.read_bytes() == FIXTURE.read_bytes()
+    assert (
+        hashlib.sha256(generated.read_bytes()).hexdigest()
+        == "7f1a5e9dbeb857dd4fee97d0bb46f7ed6a25eeef4332b1b6cf0b7fd67cd83abe"
+    )

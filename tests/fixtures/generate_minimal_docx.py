@@ -80,6 +80,7 @@ def generate(output: Path) -> None:
     with ZipFile(output, "w") as package:
         for name, contents in PARTS.items():
             part = ZipInfo(name, date_time=(2026, 1, 1, 0, 0, 0))
+            part.create_system = 3
             part.compress_type = ZIP_DEFLATED
             part.external_attr = 0o600 << 16
             package.writestr(part, contents)
