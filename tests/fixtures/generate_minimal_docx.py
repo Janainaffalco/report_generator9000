@@ -5,7 +5,6 @@ from __future__ import annotations
 import argparse
 import binascii
 import struct
-import zlib
 from pathlib import Path
 from zipfile import ZIP_STORED, ZipFile, ZipInfo
 
@@ -21,10 +20,24 @@ def png(width: int, height: int) -> bytes:
         )
 
     rows = b"".join(b"\x00" + (b"\xC0\x00\x00" * width) for _ in range(height))
+    if len(rows) > 65_535:
+        raise ValueError("fixture PNG data exceeds one stored DEFLATE block")
+    first = 1
+    second = 0
+    for byte in rows:
+        first = (first + byte) % 65_521
+        second = (second + first) % 65_521
+    stored_deflate = (
+        b"\x78\x01"
+        + b"\x01"
+        + struct.pack("<HH", len(rows), len(rows) ^ 0xFFFF)
+        + rows
+        + struct.pack(">I", (second << 16) | first)
+    )
     return (
         b"\x89PNG\r\n\x1a\n"
         + chunk(b"IHDR", struct.pack(">IIBBBBB", width, height, 8, 2, 0, 0, 0))
-        + chunk(b"IDAT", zlib.compress(rows))
+        + chunk(b"IDAT", stored_deflate)
         + chunk(b"IEND", b"")
     )
 

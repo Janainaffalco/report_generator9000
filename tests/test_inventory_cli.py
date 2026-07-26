@@ -47,7 +47,7 @@ def test_inventory_reports_package_media_relationships_and_slots(
     assert completed.returncode == 0, errors
     assert "PARTS (5)" in output
     assert "word/media/sample.png" in output
-    assert "537e43d17939422e642cfd94104652ab2231df979714283f29c156df1db2eef1" in output
+    assert "334f169f3f0085d4faf032624c21f5abe4def7b2a18bd598401f55563b645ab9" in output
     assert "2 x 3 px" in output
     assert "rIdImage" in output
     assert "word/media/sample.png" in output
