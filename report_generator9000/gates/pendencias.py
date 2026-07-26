@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from ..docx_package import DocxPackage
-from ..run_context import Artifact, RunContext
+from ..run_context import RunContext
 from .results import GateResult, Violation, result, violation
 
 
@@ -15,11 +15,14 @@ def check_pendencias_agreement(
 ) -> GateResult:
     violations: list[Violation] = []
 
-    placeholder_by_digest: dict[str, list[Artifact]] = {}
-    for artifact in context.artifacts_of("placeholder"):
-        placeholder_by_digest.setdefault(
-            artifact.digest.lower(), []
-        ).append(artifact)
+    placeholder_by_digest = {
+        digest: [
+            artifact
+            for artifact in artifacts
+            if artifact.origin == "placeholder"
+        ]
+        for digest, artifacts in context.media_by_digest().items()
+    }
     declared_evidence = {
         pendencia.evidence.lower() for pendencia in context.pendencias
     }

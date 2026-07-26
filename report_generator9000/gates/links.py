@@ -19,14 +19,14 @@ def _host(url: str) -> str | None:
     return host or None
 
 
-def _derived_from_inputs(target: str, input_urls: frozenset[str]) -> bool:
-    stripped_inputs = {url.strip() for url in input_urls}
-    if target in stripped_inputs:
+def _derived_from_inputs(target: str, origins: frozenset[str]) -> bool:
+    stripped = {origin.strip() for origin in origins}
+    if target in stripped:
         return True
     target_host = _host(target)
     if target_host is None:
         return False
-    return any(target_host == _host(url) for url in stripped_inputs)
+    return any(target_host == _host(origin) for origin in stripped)
 
 
 def check_link_provenance(
@@ -40,7 +40,7 @@ def check_link_provenance(
         target = relationship.target.strip()
         if target in boilerplate_links:
             continue
-        if _derived_from_inputs(target, context.input_urls):
+        if _derived_from_inputs(target, context.input_origins):
             continue
         violations.append(
             violation(

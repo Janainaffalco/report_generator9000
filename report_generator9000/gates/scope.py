@@ -26,17 +26,14 @@ def check_engagement_scope(
 ) -> GateResult:
     violations: list[Violation] = []
 
-    declared = bool(
-        context.drop_folder or context.capture_folder or context.output_paths
-    )
-    if not context.pasta and declared:
+    if not context.pasta and context.declares_a_location:
         violations.append(
             violation(
                 GATE,
                 "pasta-not-declared",
                 "run context",
-                "no Pasta declared while drop_folder, capture_folder, or "
-                "output_paths is present",
+                "no Pasta declared while this run context names a path it "
+                "read from or wrote to",
             )
         )
 

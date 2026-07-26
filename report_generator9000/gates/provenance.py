@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from ..docx_package import DocxPackage
-from ..run_context import Artifact, RunContext
+from ..run_context import RunContext
 from .results import GateResult, Violation, result, violation
 
 
@@ -14,11 +14,7 @@ def check_media_provenance(
     package: DocxPackage, context: RunContext
 ) -> GateResult:
     violations: list[Violation] = []
-    claims_by_digest: dict[str, list[Artifact]] = {}
-    for artifact in context.media:
-        claims_by_digest.setdefault(artifact.digest.lower(), []).append(
-            artifact
-        )
+    claims_by_digest = context.media_by_digest()
     for media in package.media:
         digest = media.sha256.lower()
         claims = claims_by_digest.get(digest)

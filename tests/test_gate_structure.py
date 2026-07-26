@@ -1,45 +1,14 @@
 from __future__ import annotations
 
-import hashlib
-import json
-import subprocess
-import sys
 from pathlib import Path
 
+from fixtures.check_cli import digest, run_check, write_context
 from fixtures.docx_builder import (
     RelationshipSpec,
     build_docx,
     paragraph,
     png_bytes,
 )
-
-
-def write_context(path: Path, document: dict) -> Path:
-    path.write_text(json.dumps(document), encoding="utf-8")
-    return path
-
-
-def run_check(
-    document: Path, context: Path
-) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(
-        [
-            sys.executable,
-            "-m",
-            "report_generator9000.check",
-            str(document),
-            "--context",
-            str(context),
-        ],
-        check=False,
-        stdin=subprocess.DEVNULL,
-        capture_output=True,
-        text=True,
-    )
-
-
-def digest_of(data: bytes) -> str:
-    return hashlib.sha256(data).hexdigest()
 
 
 def test_a_well_formed_block_passes_both_gates(tmp_path: Path) -> None:
@@ -60,7 +29,7 @@ def test_a_well_formed_block_passes_both_gates(tmp_path: Path) -> None:
         {
             "media": [
                 {
-                    "digest": digest_of(image),
+                    "digest": digest(image),
                     "origin": "capture",
                     "label": "Página Exemplo",
                 }
@@ -110,7 +79,7 @@ def test_block_heading_missing_is_reported(tmp_path: Path) -> None:
         {
             "media": [
                 {
-                    "digest": digest_of(image),
+                    "digest": digest(image),
                     "origin": "capture",
                     "label": "Página Exemplo",
                 }
@@ -125,6 +94,129 @@ def test_block_heading_missing_is_reported(tmp_path: Path) -> None:
     assert "GATE block-integrity: FAIL" in completed.stdout
     assert "block-heading-missing" in completed.stdout
     assert "SEÇÃO Ausente" in completed.stdout
+
+
+def test_block_heading_unbound_is_reported(tmp_path: Path) -> None:
+    image = png_bytes(2, 2)
+    docx_path = build_docx(
+        tmp_path / "doc.docx",
+        paragraphs=[
+            paragraph("SEÇÃO SOBRE"),
+            paragraph(image="rIdImage1"),
+        ],
+        media={"media/image1.png": image},
+        relationships=[
+            RelationshipSpec(id="rIdImage1", target="media/image1.png")
+        ],
+    )
+    context_path = write_context(
+        tmp_path / "run.json",
+        {
+            "media": [
+                {
+                    "digest": digest(image),
+                    "origin": "capture",
+                    "label": "Página Sobre",
+                }
+            ],
+            "blocks": ["SEÇÃO SOBRE"],
+        },
+    )
+
+    completed = run_check(docx_path, context_path)
+
+    assert completed.returncode == 1
+    assert "GATE block-integrity: FAIL" in completed.stdout
+    assert "block-heading-unbound" in completed.stdout
+    assert "SEÇÃO SOBRE" in completed.stdout
+
+
+def test_duplicate_block_heading_is_reported(tmp_path: Path) -> None:
+    image = png_bytes(2, 2)
+    docx_path = build_docx(
+        tmp_path / "doc.docx",
+        paragraphs=[
+            paragraph("SEÇÃO SOBRE", keep_next=True),
+            paragraph(image="rIdImage1"),
+            paragraph("SEÇÃO SOBRE", keep_next=True),
+            paragraph(image="rIdImage2"),
+        ],
+        media={
+            "media/image1.png": image,
+            "media/image2.png": image,
+        },
+        relationships=[
+            RelationshipSpec(id="rIdImage1", target="media/image1.png"),
+            RelationshipSpec(id="rIdImage2", target="media/image2.png"),
+        ],
+    )
+    context_path = write_context(
+        tmp_path / "run.json",
+        {
+            "media": [
+                {
+                    "digest": digest(image),
+                    "origin": "capture",
+                    "label": "Página Sobre",
+                }
+            ],
+            "blocks": ["SEÇÃO SOBRE"],
+        },
+    )
+
+    completed = run_check(docx_path, context_path)
+
+    assert completed.returncode == 1
+    assert "GATE block-integrity: FAIL" in completed.stdout
+    assert "duplicate-block-heading" in completed.stdout
+    assert "SEÇÃO SOBRE" in completed.stdout
+
+
+def test_undeclared_block_is_reported(tmp_path: Path) -> None:
+    image1 = png_bytes(2, 2)
+    image2 = png_bytes(2, 2, red=0x00, green=0xC0, blue=0x00)
+    docx_path = build_docx(
+        tmp_path / "doc.docx",
+        paragraphs=[
+            paragraph("SEÇÃO Exemplo", keep_next=True),
+            paragraph(image="rIdImage1"),
+            paragraph("SEÇÃO SOBRE", keep_next=True),
+            paragraph(image="rIdImage2"),
+        ],
+        media={
+            "media/image1.png": image1,
+            "media/image2.png": image2,
+        },
+        relationships=[
+            RelationshipSpec(id="rIdImage1", target="media/image1.png"),
+            RelationshipSpec(id="rIdImage2", target="media/image2.png"),
+        ],
+    )
+    context_path = write_context(
+        tmp_path / "run.json",
+        {
+            "media": [
+                {
+                    "digest": digest(image1),
+                    "origin": "capture",
+                    "label": "Página Exemplo",
+                },
+                {
+                    "digest": digest(image2),
+                    "origin": "capture",
+                    "label": "Página Sobre",
+                },
+            ],
+            "blocks": ["SEÇÃO Exemplo"],
+        },
+    )
+
+    completed = run_check(docx_path, context_path)
+
+    assert completed.returncode == 1
+    assert "GATE block-integrity: FAIL" in completed.stdout
+    assert "undeclared-block" in completed.stdout
+    assert "SEÇÃO SOBRE" in completed.stdout
 
 
 def test_orphaned_relationship_is_reported(tmp_path: Path) -> None:
@@ -158,7 +250,7 @@ def test_unreferenced_media_is_reported(tmp_path: Path) -> None:
         {
             "media": [
                 {
-                    "digest": digest_of(image),
+                    "digest": digest(image),
                     "origin": "capture",
                     "label": "Página Exemplo",
                 }
@@ -216,7 +308,7 @@ def test_placeholder_without_pendencia_is_reported(tmp_path: Path) -> None:
         {
             "media": [
                 {
-                    "digest": digest_of(image),
+                    "digest": digest(image),
                     "origin": "placeholder",
                     "label": "Print de tela indisponível",
                 }

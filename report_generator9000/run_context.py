@@ -37,17 +37,27 @@ class RunContext:
     pasta: str = ""
     media: tuple[Artifact, ...] = ()
     boilerplate_links: frozenset[str] = frozenset()
-    input_urls: frozenset[str] = frozenset()
+    input_origins: frozenset[str] = frozenset()
     drop_folder: str | None = None
     capture_folder: str | None = None
     output_paths: tuple[str, ...] = ()
     blocks: tuple[str, ...] = ()
     pendencias: tuple[Pendencia, ...] = ()
 
+    @property
+    def declares_a_location(self) -> bool:
+        """True once this run declares a path it read from or wrote to."""
+        return bool(
+            self.drop_folder
+            or self.capture_folder
+            or self.output_paths
+            or any(artifact.source for artifact in self.media)
+        )
+
     def media_by_digest(self) -> dict[str, tuple[Artifact, ...]]:
         grouped: dict[str, list[Artifact]] = {}
         for artifact in self.media:
-            grouped.setdefault(artifact.digest, []).append(artifact)
+            grouped.setdefault(artifact.digest.lower(), []).append(artifact)
         return {digest: tuple(items) for digest, items in grouped.items()}
 
     def artifacts_of(self, origin: str) -> tuple[Artifact, ...]:
@@ -56,11 +66,15 @@ class RunContext:
 
 def _require_mapping(value: Any, where: str) -> Mapping[str, Any]:
     if not isinstance(value, dict):
-        raise ValueError(f"{where}: expected an object, got {type(value).__name__}")
+        raise ValueError(
+            f"{where}: expected an object, got {type(value).__name__}"
+        )
     return value
 
 
-def _reject_unknown(value: Mapping[str, Any], allowed: tuple[str, ...], where: str) -> None:
+def _reject_unknown(
+    value: Mapping[str, Any], allowed: tuple[str, ...], where: str
+) -> None:
     unknown = sorted(set(value) - set(allowed))
     if unknown:
         raise ValueError(f"{where}: unknown field(s) {', '.join(unknown)}")
@@ -122,7 +136,7 @@ def _pendencia(value: Any, where: str) -> Pendencia:
 
 
 def parse_run_context(document: Any) -> RunContext:
-    """Build a RunContext from already-decoded JSON, rejecting anything unknown."""
+    """Build a RunContext from decoded JSON, rejecting anything unknown."""
     mapping = _require_mapping(document, "run context")
     _reject_unknown(
         mapping,
@@ -130,7 +144,7 @@ def parse_run_context(document: Any) -> RunContext:
             "pasta",
             "media",
             "boilerplate_links",
-            "input_urls",
+            "input_origins",
             "drop_folder",
             "capture_folder",
             "output_paths",
@@ -162,9 +176,9 @@ def parse_run_context(document: Any) -> RunContext:
                 "run context.boilerplate_links",
             )
         ),
-        input_urls=frozenset(
+        input_origins=frozenset(
             _string_tuple(
-                mapping.get("input_urls", []), "run context.input_urls"
+                mapping.get("input_origins", []), "run context.input_origins"
             )
         ),
         drop_folder=mapping.get("drop_folder"),

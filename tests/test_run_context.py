@@ -1,12 +1,10 @@
 from __future__ import annotations
 
-import json
-import subprocess
-import sys
 from pathlib import Path
 
 import pytest
 
+from fixtures.check_cli import run_check, write_context
 from report_generator9000.run_context import (
     Artifact,
     Pendencia,
@@ -16,11 +14,6 @@ from report_generator9000.run_context import (
 
 
 FIXTURE = Path(__file__).parent / "fixtures" / "minimal.docx"
-
-
-def write_context(path: Path, document: dict) -> Path:
-    path.write_text(json.dumps(document), encoding="utf-8")
-    return path
 
 
 def test_load_reads_every_declared_field(tmp_path: Path) -> None:
@@ -42,7 +35,7 @@ def test_load_reads_every_declared_field(tmp_path: Path) -> None:
                 },
             ],
             "boilerplate_links": ["https://w3techs.example/"],
-            "input_urls": ["https://cliente.example/"],
+            "input_origins": ["https://cliente.example/"],
             "drop_folder": "gated/115-2026",
             "capture_folder": "outputs/115-2026_CLIENTE/capturas",
             "output_paths": ["outputs/115-2026_CLIENTE/RELATORIO.docx"],
@@ -71,7 +64,7 @@ def test_load_reads_every_declared_field(tmp_path: Path) -> None:
         ),
     )
     assert context.boilerplate_links == frozenset({"https://w3techs.example/"})
-    assert context.input_urls == frozenset({"https://cliente.example/"})
+    assert context.input_origins == frozenset({"https://cliente.example/"})
     assert context.drop_folder == "gated/115-2026"
     assert context.capture_folder == "outputs/115-2026_CLIENTE/capturas"
     assert context.output_paths == ("outputs/115-2026_CLIENTE/RELATORIO.docx",)
@@ -156,20 +149,7 @@ def test_invalid_json_is_reported_with_the_file(tmp_path: Path) -> None:
 def test_check_refuses_a_malformed_context(tmp_path: Path) -> None:
     location = write_context(tmp_path / "run.json", {"pasta": "1", "tema": "x"})
 
-    completed = subprocess.run(
-        [
-            sys.executable,
-            "-m",
-            "report_generator9000.check",
-            str(FIXTURE),
-            "--context",
-            str(location),
-        ],
-        check=False,
-        stdin=subprocess.DEVNULL,
-        capture_output=True,
-        text=True,
-    )
+    completed = run_check(FIXTURE, location)
 
     assert completed.returncode == 2
     assert "unknown field(s) tema" in completed.stderr

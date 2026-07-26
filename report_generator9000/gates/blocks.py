@@ -21,13 +21,19 @@ def check_block_integrity(
         (paragraph.source_part, paragraph.index): paragraph
         for paragraph in package.paragraphs
     }
-    for paragraph in package.paragraphs:
-        if not paragraph.keep_next or not paragraph.text.strip():
-            continue
+
+    def _image_follows(paragraph) -> bool:
         following = by_position.get(
             (paragraph.source_part, paragraph.index + 1)
         )
-        if following is None or not following.has_image:
+        return following is not None and following.has_image
+
+    stranded: set[tuple[str, int]] = set()
+    for paragraph in package.paragraphs:
+        if not paragraph.keep_next or not paragraph.text.strip():
+            continue
+        if not _image_follows(paragraph):
+            stranded.add((paragraph.source_part, paragraph.index))
             violations.append(
                 violation(
                     GATE,
@@ -37,11 +43,16 @@ def check_block_integrity(
                 )
             )
 
-    heading_texts = {
-        paragraph.text.strip() for paragraph in package.paragraphs
-    }
-    for heading in context.blocks:
-        if heading.strip() not in heading_texts:
+    declared = tuple(heading.strip() for heading in context.blocks)
+    occurrences: dict[str, list] = {heading: [] for heading in declared}
+    for paragraph in package.paragraphs:
+        text = paragraph.text.strip()
+        if text in occurrences:
+            occurrences[text].append(paragraph)
+
+    for heading in declared:
+        found = occurrences[heading]
+        if not found:
             violations.append(
                 violation(
                     GATE,
@@ -50,6 +61,52 @@ def check_block_integrity(
                     "no paragraph in the package matches this heading",
                 )
             )
+            continue
+        if len(found) > 1:
+            violations.append(
+                violation(
+                    GATE,
+                    "duplicate-block-heading",
+                    heading,
+                    f"{len(found)} paragraphs carry this heading",
+                )
+            )
+        for paragraph in found:
+            position = (paragraph.source_part, paragraph.index)
+            if not paragraph.keep_next:
+                violations.append(
+                    violation(
+                        GATE,
+                        "block-heading-unbound",
+                        f"{paragraph.source_part} p={paragraph.index}",
+                        f"{heading} is not bound to the paragraph below it",
+                    )
+                )
+            if not _image_follows(paragraph) and position not in stranded:
+                stranded.add(position)
+                violations.append(
+                    violation(
+                        GATE,
+                        "heading-without-image",
+                        f"{paragraph.source_part} p={paragraph.index}",
+                        paragraph.text,
+                    )
+                )
+
+    if declared:
+        for paragraph in package.paragraphs:
+            text = paragraph.text.strip()
+            if not paragraph.keep_next or not text or text in occurrences:
+                continue
+            if _image_follows(paragraph):
+                violations.append(
+                    violation(
+                        GATE,
+                        "undeclared-block",
+                        f"{paragraph.source_part} p={paragraph.index}",
+                        f"{text} is a Block the run context does not declare",
+                    )
+                )
 
     part_names = {part.name for part in package.parts}
     for relationship in package.relationships:

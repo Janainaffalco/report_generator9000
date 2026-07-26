@@ -1,47 +1,9 @@
 from __future__ import annotations
 
-import json
-import subprocess
-import sys
 from pathlib import Path
 
+from fixtures.check_cli import run_check, write_context
 from fixtures.docx_builder import build_docx, paragraph
-
-
-def write_context(path: Path, document: dict) -> Path:
-    path.write_text(json.dumps(document), encoding="utf-8")
-    return path
-
-
-class Completed:
-    def __init__(self, returncode: int, stdout: str, stderr: str) -> None:
-        self.returncode = returncode
-        self.stdout = stdout
-        self.stderr = stderr
-
-
-def run_check(document: Path, context: Path | None, tmp_path: Path) -> Completed:
-    stdout_path = tmp_path / "stdout.txt"
-    stderr_path = tmp_path / "stderr.txt"
-    command = [sys.executable, "-m", "report_generator9000.check", str(document)]
-    if context is not None:
-        command.extend(["--context", str(context)])
-    with stdout_path.open("w", encoding="utf-8") as stdout, stderr_path.open(
-        "w", encoding="utf-8"
-    ) as stderr:
-        completed = subprocess.run(
-            command,
-            check=False,
-            stdin=subprocess.DEVNULL,
-            stdout=stdout,
-            stderr=stderr,
-            text=True,
-        )
-    return Completed(
-        completed.returncode,
-        stdout_path.read_text(encoding="utf-8"),
-        stderr_path.read_text(encoding="utf-8"),
-    )
 
 
 def test_both_gates_pass_on_a_clean_document_and_context(
@@ -61,7 +23,7 @@ def test_both_gates_pass_on_a_clean_document_and_context(
         },
     )
 
-    completed = run_check(document, context, tmp_path)
+    completed = run_check(document, context)
 
     assert completed.returncode == 0, completed.stdout + completed.stderr
     assert "GATE token-residue: PASS" in completed.stdout
@@ -76,7 +38,7 @@ def test_empty_run_context_leaves_engagement_scope_passing(
         paragraphs=[paragraph("nothing declared")],
     )
 
-    completed = run_check(document, None, tmp_path)
+    completed = run_check(document, None)
 
     assert completed.returncode == 0, completed.stdout + completed.stderr
     assert "GATE engagement-scope: PASS" in completed.stdout
@@ -90,7 +52,7 @@ def test_unreplaced_token_in_document_xml_is_reported(
         paragraphs=[paragraph("Razão Social: {{RAZAO_SOCIAL}}")],
     )
 
-    completed = run_check(document, None, tmp_path)
+    completed = run_check(document, None)
 
     assert completed.returncode == 1, completed.stdout + completed.stderr
     assert "GATE token-residue: FAIL" in completed.stdout
@@ -105,7 +67,7 @@ def test_token_split_across_runs_is_reported(tmp_path: Path) -> None:
         paragraphs=[paragraph("{{RAZAO", "_SOCIAL}}")],
     )
 
-    completed = run_check(document, None, tmp_path)
+    completed = run_check(document, None)
 
     assert completed.returncode == 1, completed.stdout + completed.stderr
     assert "GATE token-residue: FAIL" in completed.stdout
@@ -125,7 +87,7 @@ def test_token_split_across_runs_not_double_reported_when_whole_elsewhere(
         ],
     )
 
-    completed = run_check(document, None, tmp_path)
+    completed = run_check(document, None)
 
     assert completed.returncode == 1, completed.stdout + completed.stderr
     assert "GATE token-residue: FAIL" in completed.stdout
@@ -144,7 +106,7 @@ def test_drop_folder_not_this_engagement_is_reported(tmp_path: Path) -> None:
         {"pasta": "115-2026", "drop_folder": "gated/999-2026"},
     )
 
-    completed = run_check(document, context, tmp_path)
+    completed = run_check(document, context)
 
     assert completed.returncode == 1, completed.stdout + completed.stderr
     assert "GATE engagement-scope: FAIL" in completed.stdout
@@ -173,7 +135,7 @@ def test_gated_input_outside_drop_folder_is_reported(tmp_path: Path) -> None:
         },
     )
 
-    completed = run_check(document, context, tmp_path)
+    completed = run_check(document, context)
 
     assert completed.returncode == 1, completed.stdout + completed.stderr
     assert "GATE engagement-scope: FAIL" in completed.stdout
@@ -203,7 +165,7 @@ def test_capture_outside_run_is_reported(tmp_path: Path) -> None:
         },
     )
 
-    completed = run_check(document, context, tmp_path)
+    completed = run_check(document, context)
 
     assert completed.returncode == 1, completed.stdout + completed.stderr
     assert "GATE engagement-scope: FAIL" in completed.stdout
@@ -224,7 +186,7 @@ def test_output_path_outside_pasta_is_reported(tmp_path: Path) -> None:
         },
     )
 
-    completed = run_check(document, context, tmp_path)
+    completed = run_check(document, context)
 
     assert completed.returncode == 1, completed.stdout + completed.stderr
     assert "GATE engagement-scope: FAIL" in completed.stdout
@@ -245,7 +207,7 @@ def test_capture_folder_not_this_engagement_is_reported(tmp_path: Path) -> None:
         },
     )
 
-    completed = run_check(document, context, tmp_path)
+    completed = run_check(document, context)
 
     assert completed.returncode == 1, completed.stdout + completed.stderr
     assert "GATE engagement-scope: FAIL" in completed.stdout
@@ -273,7 +235,7 @@ def test_drop_folder_not_declared_is_reported(tmp_path: Path) -> None:
         },
     )
 
-    completed = run_check(document, context, tmp_path)
+    completed = run_check(document, context)
 
     assert completed.returncode == 1, completed.stdout + completed.stderr
     assert "GATE engagement-scope: FAIL" in completed.stdout
@@ -291,7 +253,36 @@ def test_pasta_not_declared_is_reported(tmp_path: Path) -> None:
         {"drop_folder": "gated/115-2026"},
     )
 
-    completed = run_check(document, context, tmp_path)
+    completed = run_check(document, context)
+
+    assert completed.returncode == 1, completed.stdout + completed.stderr
+    assert "GATE engagement-scope: FAIL" in completed.stdout
+    assert "pasta-not-declared" in completed.stdout
+    assert "run context" in completed.stdout
+
+
+def test_pasta_not_declared_fires_for_a_media_artifact_source(
+    tmp_path: Path,
+) -> None:
+    document = build_docx(
+        tmp_path / "doc.docx",
+        paragraphs=[paragraph("body")],
+    )
+    context = write_context(
+        tmp_path / "run.json",
+        {
+            "media": [
+                {
+                    "digest": "ab12",
+                    "origin": "gated",
+                    "label": "paleta",
+                    "source": "gated/115-2026/paleta.png",
+                }
+            ],
+        },
+    )
+
+    completed = run_check(document, context)
 
     assert completed.returncode == 1, completed.stdout + completed.stderr
     assert "GATE engagement-scope: FAIL" in completed.stdout

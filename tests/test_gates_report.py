@@ -1,46 +1,19 @@
 from __future__ import annotations
 
 import ast
-import hashlib
-import json
-import os
-import subprocess
 import sys
 from pathlib import Path
 
+from fixtures.check_cli import digest, run_check, write_context
 from fixtures.docx_builder import RelationshipSpec, build_docx, paragraph, png_bytes
 
 
-PACKAGE = Path(__file__).resolve().parent.parent / "report_generator9000"
+GATES = Path(__file__).resolve().parent.parent / "report_generator9000" / "gates"
 
 BOILERPLATE = png_bytes(8, 8, red=0x00, green=0x00, blue=0xFF)
 CAPTURE = png_bytes(16, 9, red=0x00, green=0xC0, blue=0x00)
 PLACEHOLDER = png_bytes(12, 4, red=0xF2, green=0xF2, blue=0xF2)
 FOREIGN = png_bytes(20, 10, red=0x77, green=0x71, blue=0x71)
-
-
-def digest(data: bytes) -> str:
-    return hashlib.sha256(data).hexdigest()
-
-
-def run_check(document: Path, context: Path | None) -> subprocess.CompletedProcess[str]:
-    command = [sys.executable, "-m", "report_generator9000.check", str(document)]
-    if context is not None:
-        command.extend(["--context", str(context)])
-    return subprocess.run(
-        command,
-        check=False,
-        stdin=subprocess.DEVNULL,
-        capture_output=True,
-        text=True,
-        encoding="utf-8",
-        env={**os.environ, "PYTHONIOENCODING": "utf-8"},
-    )
-
-
-def write_context(path: Path, document: dict) -> Path:
-    path.write_text(json.dumps(document), encoding="utf-8")
-    return path
 
 
 def clean_package(path: Path) -> Path:
@@ -105,7 +78,7 @@ def clean_context(path: Path) -> Path:
                 },
             ],
             "boilerplate_links": ["https://w3techs.example/cms"],
-            "input_urls": ["https://cliente.example/"],
+            "input_origins": ["https://cliente.example/"],
             "drop_folder": "gated/115-2026",
             "capture_folder": "outputs/115-2026_CLIENTE/capturas",
             "output_paths": ["outputs/115-2026_CLIENTE/RELATORIO_CLIENTE.docx"],
@@ -187,7 +160,7 @@ def test_every_gate_names_its_rule_and_the_offending_artifact(
                     "label": "paleta",
                 },
             ],
-            "input_urls": ["https://cliente.example/"],
+            "input_origins": ["https://cliente.example/"],
             "drop_folder": "gated/999-2026",
             "capture_folder": "outputs/115-2026_CLIENTE/capturas",
             "output_paths": ["outputs/115-2026_CLIENTE/RELATORIO_CLIENTE.docx"],
@@ -229,8 +202,9 @@ def test_a_package_is_reported_gate_by_gate_without_a_run_context(
 
 
 def test_the_gates_import_nothing_beyond_the_standard_library() -> None:
+    """A gate is an assertion: no model, no network, no third party."""
     imported: set[str] = set()
-    for module in sorted(PACKAGE.rglob("*.py")):
+    for module in sorted(GATES.glob("*.py")):
         tree = ast.parse(module.read_text(encoding="utf-8"))
         for node in ast.walk(tree):
             if isinstance(node, ast.Import):

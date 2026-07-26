@@ -1,50 +1,9 @@
 from __future__ import annotations
 
-import hashlib
-import json
-import subprocess
-import sys
 from pathlib import Path
 
+from fixtures.check_cli import digest, run_check, write_context
 from fixtures.docx_builder import RelationshipSpec, build_docx, paragraph, png_bytes
-
-
-def digest_of(data: bytes) -> str:
-    return hashlib.sha256(data).hexdigest()
-
-
-def write_context(path: Path, document: dict) -> Path:
-    path.write_text(json.dumps(document), encoding="utf-8")
-    return path
-
-
-def run_check(
-    document: Path, context: Path | None, tmp_path: Path
-) -> subprocess.CompletedProcess[str]:
-    stdout_path = tmp_path / "stdout.txt"
-    stderr_path = tmp_path / "stderr.txt"
-    command = [
-        sys.executable,
-        "-m",
-        "report_generator9000.check",
-        str(document),
-    ]
-    if context is not None:
-        command.extend(["--context", str(context)])
-    with stdout_path.open("w", encoding="utf-8") as stdout, stderr_path.open(
-        "w", encoding="utf-8"
-    ) as stderr:
-        completed = subprocess.run(
-            command,
-            check=False,
-            stdin=subprocess.DEVNULL,
-            stdout=stdout,
-            stderr=stderr,
-            text=True,
-        )
-    completed.stdout = stdout_path.read_text(encoding="utf-8")
-    completed.stderr = stderr_path.read_text(encoding="utf-8")
-    return completed
 
 
 def test_media_and_link_provenance_pass_on_a_fully_declared_document(
@@ -87,22 +46,22 @@ def test_media_and_link_provenance_pass_on_a_fully_declared_document(
             "pasta": "115-2026",
             "media": [
                 {
-                    "digest": digest_of(image1),
+                    "digest": digest(image1),
                     "origin": "boilerplate",
                     "label": "cabecalho SEBRAE",
                 },
                 {
-                    "digest": digest_of(image2),
+                    "digest": digest(image2),
                     "origin": "capture",
                     "label": "pagina inicial",
                 },
             ],
             "boilerplate_links": ["https://plugin.example.com/ref/"],
-            "input_urls": ["https://cliente.com.br/"],
+            "input_origins": ["https://cliente.com.br/"],
         },
     )
 
-    completed = run_check(document, context, tmp_path)
+    completed = run_check(document, context)
 
     assert completed.returncode == 0, completed.stdout + completed.stderr
     assert "GATE media-provenance: PASS" in completed.stdout
@@ -120,7 +79,7 @@ def test_media_without_provenance_is_reported(tmp_path: Path) -> None:
         ],
     )
 
-    completed = run_check(document, None, tmp_path)
+    completed = run_check(document, None)
 
     assert completed.returncode == 1, completed.stdout + completed.stderr
     assert "GATE media-provenance: FAIL" in completed.stdout
@@ -153,7 +112,7 @@ def test_capture_declared_for_this_run_passes_while_second_image_fails(
         {
             "media": [
                 {
-                    "digest": digest_of(image1),
+                    "digest": digest(image1),
                     "origin": "capture",
                     "label": "pagina inicial",
                 }
@@ -161,7 +120,7 @@ def test_capture_declared_for_this_run_passes_while_second_image_fails(
         },
     )
 
-    completed = run_check(document, context, tmp_path)
+    completed = run_check(document, context)
 
     assert completed.returncode == 1, completed.stdout + completed.stderr
     assert "GATE media-provenance: FAIL (1 violation)" in completed.stdout
@@ -180,18 +139,18 @@ def test_ambiguous_provenance_is_reported(tmp_path: Path) -> None:
             RelationshipSpec(id="rIdImage1", target="media/image1.png")
         ],
     )
-    digest = digest_of(image)
+    image_digest = digest(image)
     context = write_context(
         tmp_path / "run.json",
         {
             "media": [
                 {
-                    "digest": digest,
+                    "digest": image_digest,
                     "origin": "boilerplate",
                     "label": "cabecalho SEBRAE",
                 },
                 {
-                    "digest": digest,
+                    "digest": image_digest,
                     "origin": "capture",
                     "label": "pagina inicial",
                 },
@@ -199,7 +158,7 @@ def test_ambiguous_provenance_is_reported(tmp_path: Path) -> None:
         },
     )
 
-    completed = run_check(document, context, tmp_path)
+    completed = run_check(document, context)
 
     assert completed.returncode == 1, completed.stdout + completed.stderr
     assert "GATE media-provenance: FAIL" in completed.stdout
@@ -257,11 +216,11 @@ def test_link_without_provenance_third_party_wpadmin_among_boilerplate(
                 "https://plugin-b.example.com/",
                 "https://plugin-c.example.com/",
             ],
-            "input_urls": ["https://cliente.com.br/"],
+            "input_origins": ["https://cliente.com.br/"],
         },
     )
 
-    completed = run_check(document, context, tmp_path)
+    completed = run_check(document, context)
 
     assert completed.returncode == 1, completed.stdout + completed.stderr
     assert "GATE link-provenance: FAIL (1 violation)" in completed.stdout
@@ -288,10 +247,10 @@ def test_wpadmin_link_derived_from_input_host_passes(tmp_path: Path) -> None:
     )
     context = write_context(
         tmp_path / "run.json",
-        {"input_urls": ["https://cliente.com.br/"]},
+        {"input_origins": ["https://cliente.com.br/"]},
     )
 
-    completed = run_check(document, context, tmp_path)
+    completed = run_check(document, context)
 
     assert completed.returncode == 0, completed.stdout + completed.stderr
     assert "GATE link-provenance: PASS" in completed.stdout
@@ -314,11 +273,11 @@ def test_mailto_target_not_declared_fails(tmp_path: Path) -> None:
         tmp_path / "run.json",
         {
             "boilerplate_links": ["https://plugin.example.com/ref/"],
-            "input_urls": ["https://cliente.com.br/"],
+            "input_origins": ["https://cliente.com.br/"],
         },
     )
 
-    completed = run_check(document, context, tmp_path)
+    completed = run_check(document, context)
 
     assert completed.returncode == 1, completed.stdout + completed.stderr
     assert "GATE link-provenance: FAIL" in completed.stdout
