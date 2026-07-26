@@ -1,0 +1,19 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "report-generator9000"
+version = "0.1.0"
+description = "Deterministic SEBRAETEC final report generation toolkit"
+requires-python = ">=3.11"
+
+[project.scripts]
+inventory = "report_generator9000.cli:inventory_main"
+report-generator9000 = "report_generator9000.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["report_generator9000*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
