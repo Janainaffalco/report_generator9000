@@ -35,6 +35,7 @@ NAMESPACES = {
 class Part:
     name: str
     size: int
+    text: str | None = None
 
 
 @dataclass(frozen=True)
@@ -71,6 +72,13 @@ class Paragraph:
     source_part: str
     index: int
     runs: tuple[Run, ...]
+    keep_next: bool = False
+    has_image: bool = False
+    relationship_ids: tuple[str, ...] = ()
+
+    @property
+    def text(self) -> str:
+        return "".join(run.text for run in self.runs)
 
 
 @dataclass(frozen=True)
@@ -242,6 +250,42 @@ def _read_media(package: ZipFile, names: set[str]) -> tuple[Media, ...]:
     return tuple(media)
 
 
+def _keep_next(paragraph_element: ElementTree.Element) -> bool:
+    properties = paragraph_element.find(f"{{{WORD_NS}}}pPr")
+    if properties is None:
+        return False
+    element = properties.find(f"{{{WORD_NS}}}keepNext")
+    if element is None:
+        return False
+    value = element.get(f"{{{WORD_NS}}}val")
+    if value is None:
+        return True
+    return value not in ("false", "0", "off")
+
+
+def _has_image(paragraph_element: ElementTree.Element) -> bool:
+    for blip in paragraph_element.iter(f"{{{DRAWING_NS}}}blip"):
+        if (
+            blip.get(f"{{{OFFICE_REL_NS}}}embed") is not None
+            or blip.get(f"{{{OFFICE_REL_NS}}}link") is not None
+        ):
+            return True
+    return False
+
+
+def _relationship_ids(
+    paragraph_element: ElementTree.Element,
+) -> tuple[str, ...]:
+    return tuple(
+        dict.fromkeys(
+            value
+            for element in paragraph_element.iter()
+            for attribute, value in element.attrib.items()
+            if attribute.startswith(f"{{{OFFICE_REL_NS}}}")
+        )
+    )
+
+
 def _read_structure(
     package: ZipFile,
     names: set[str],
@@ -316,6 +360,9 @@ def _read_structure(
                     source_part=name,
                     index=paragraph_index,
                     runs=tuple(runs),
+                    keep_next=_keep_next(paragraph_element),
+                    has_image=_has_image(paragraph_element),
+                    relationship_ids=_relationship_ids(paragraph_element),
                 )
             )
     return tuple(paragraphs), tuple(slots)
@@ -340,7 +387,17 @@ def open_docx_package(path: str | Path) -> DocxPackage:
                 package, names, relationships
             )
             parts = tuple(
-                Part(name=item.filename, size=item.file_size)
+                Part(
+                    name=item.filename,
+                    size=item.file_size,
+                    text=(
+                        package.read(item.filename).decode(
+                            "utf-8", errors="replace"
+                        )
+                        if item.filename.endswith((".xml", ".rels"))
+                        else None
+                    ),
+                )
                 for item in sorted(
                     package.infolist(), key=lambda entry: entry.filename
                 )
