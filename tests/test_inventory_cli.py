@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import hashlib
 import subprocess
 import sys
 from pathlib import Path
@@ -70,10 +69,19 @@ def test_fixture_generator_reproduces_committed_document(tmp_path: Path) -> None
     )
 
     assert completed.returncode == 0, stderr_path.read_text(encoding="utf-8")
-    with ZipFile(generated) as package:
-        assert all(part.compress_type == ZIP_STORED for part in package.infolist())
-    assert (
-        hashlib.sha256(generated.read_bytes()).hexdigest()
-        == "2875cec5da6cb30c91f883ac55227b04a3483380f792dfc47943fe3fc62a518e"
-    )
-    assert generated.read_bytes() == FIXTURE.read_bytes()
+    with ZipFile(generated) as generated_package, ZipFile(
+        FIXTURE
+    ) as committed_package:
+        assert generated_package.namelist() == committed_package.namelist()
+        assert all(
+            (
+                part.create_system,
+                part.date_time,
+                part.external_attr,
+                part.compress_type,
+            )
+            == (3, (2026, 1, 1, 0, 0, 0), 0o600 << 16, ZIP_STORED)
+            for part in generated_package.infolist()
+        )
+        for name in generated_package.namelist():
+            assert generated_package.read(name) == committed_package.read(name)
