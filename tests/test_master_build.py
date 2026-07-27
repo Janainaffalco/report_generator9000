@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from pathlib import Path
+from zipfile import ZipFile
+from xml.etree import ElementTree
 
 from fixtures.docx_builder import RelationshipSpec, build_docx, paragraph, png_bytes
 
@@ -8,10 +10,17 @@ from report_generator9000.docx_package import open_docx_package
 from report_generator9000.master import EXPECTED_TOKENS, build_master
 
 
+W = "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}"
+
+
 def approved_source(path: Path) -> Path:
     return build_docx(
         path,
         paragraphs=[
+            paragraph("SUMÁRIO"),
+            paragraph("summary entry"),
+            paragraph("ETAPA 1"),
+            paragraph("BRIEFING INICIAL PARA DEFINIÇÃO DO ESCOPO"),
             paragraph("demanda 010028/2025"),
             paragraph("ARGEL RESISTENCIAS ELETRICAS LTDA"),
             paragraph("64.525.744/0001-02"),
@@ -86,3 +95,26 @@ def test_master_build_is_reproducible_and_auditable(tmp_path: Path) -> None:
     assert "rId2: Disponibilizamos links para download." in first.diff.read_text(encoding="utf-8")
     assert "2.10 Indicadores14" in first.diff.read_text(encoding="utf-8")
     assert "A portal web" in first.diff.read_text(encoding="utf-8")
+
+
+def test_master_contains_a_two_level_toc_embedded_font_and_named_headings(
+    tmp_path: Path,
+) -> None:
+    built = build_master(approved_source(tmp_path / "approved.docx"), tmp_path / "out")
+
+    with ZipFile(built.master) as package:
+        document = package.read("word/document.xml").decode("utf-8")
+        settings = package.read("word/settings.xml").decode("utf-8")
+        styles = ElementTree.fromstring(package.read("word/styles.xml"))
+        fonts = package.read("word/fonts/montserrat-0.odttf")
+        relationships = package.read("word/_rels/fontTable.xml.rels").decode("utf-8")
+
+    assert 'TOC \\o "1-2"' in document
+    assert "w:updateFields" in settings and 'w:val="true"' in settings
+    assert fonts and all(f"rIdMontserrat{index}" in relationships for index in range(5))
+    headings = {
+        style.get(f"{W}styleId"): style.find(f"{W}name").get(f"{W}val")
+        for style in styles.findall(f"{W}style")
+        if style.get(f"{W}styleId") in {"Heading1", "Heading2"}
+    }
+    assert headings == {"Heading1": "Título 1", "Heading2": "Título 2"}

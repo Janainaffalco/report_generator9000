@@ -8,6 +8,7 @@ import hashlib
 import posixpath
 import re
 import struct
+import uuid
 import zlib
 from copy import deepcopy
 from dataclasses import dataclass
@@ -30,10 +31,12 @@ from .gates.results import GateResult
 
 
 RELATIONSHIPS_NS = "http://schemas.openxmlformats.org/package/2006/relationships"
+CONTENT_TYPES_NS = "http://schemas.openxmlformats.org/package/2006/content-types"
 W = f"{{{WORD_NS}}}"
 R = f"{{{OFFICE_REL_NS}}}"
 XML = "{http://www.w3.org/XML/1998/namespace}"
 _TOKEN = re.compile(r"(\{\{[^{}<>]{1,64}\}\})")
+_FONT_KEY = "6D5E55E7-46BF-4B17-9DCE-422D31C5A72D"
 
 for _prefix, _namespace in (("w", WORD_NS), ("r", OFFICE_REL_NS)):
     ElementTree.register_namespace(_prefix, _namespace)
@@ -204,6 +207,133 @@ def _deterministic_zip(path: Path, parts: dict[str, bytes]) -> None:
             archive.writestr(info, parts[name], compress_type=ZIP_DEFLATED, compresslevel=9)
 
 
+def _paragraph_properties(paragraph: ElementTree.Element) -> ElementTree.Element:
+    properties = paragraph.find(f"{W}pPr")
+    if properties is None:
+        properties = ElementTree.Element(f"{W}pPr")
+        paragraph.insert(0, properties)
+    return properties
+
+
+def _set_heading(paragraph: ElementTree.Element, style_id: str) -> None:
+    properties = _paragraph_properties(paragraph)
+    style = properties.find(f"{W}pStyle")
+    if style is None:
+        style = ElementTree.SubElement(properties, f"{W}pStyle")
+    style.set(f"{W}val", style_id)
+
+
+def _toc_paragraph() -> ElementTree.Element:
+    paragraph = ElementTree.Element(f"{W}p")
+    for tag, value in (("begin", None), ("separate", None), ("end", None)):
+        run = ElementTree.SubElement(paragraph, f"{W}r")
+        field = ElementTree.SubElement(run, f"{W}fldChar")
+        field.set(f"{W}fldCharType", tag)
+        if tag == "begin":
+            instruction = ElementTree.SubElement(run, f"{W}instrText")
+            instruction.set(f"{XML}space", "preserve")
+            instruction.text = ' TOC \\o "1-2" \\h \\z \\u '
+        elif tag == "separate":
+            text = ElementTree.SubElement(run, f"{W}t")
+            text.text = "Atualize o sumário no Word."
+    return paragraph
+
+
+def _add_signoff_structure(parts: dict[str, bytes]) -> None:
+    document = ElementTree.fromstring(parts["word/document.xml"])
+    body = document.find(f"{W}body")
+    if body is not None:
+        children = list(body)
+        summary = next((item for item in children if item.tag == f"{W}p" and _paragraph_text(item) == "SUMÁRIO"), None)
+        first_body = next((item for item in children if item.tag == f"{W}p" and _paragraph_text(item) == "ETAPA 1"), None)
+        if summary is not None and first_body is not None:
+            start, end = children.index(summary), children.index(first_body)
+            for item in children[start + 1 : end]:
+                body.remove(item)
+            body.insert(start + 1, _toc_paragraph())
+        for paragraph in body.iter(f"{W}p"):
+            text = _paragraph_text(paragraph).strip().casefold()
+            if text in {"briefing inicial para definição do escopo", "desenvolvimento de website", "reuniões", "declaração de recebimento e finalização", "termo de cessão de direitos"}:
+                _set_heading(paragraph, "Heading1")
+            elif text in {"sobre a empresa", "briefing", "objetivo", "acessos e entregas", "hospedagem e dados técnicos", "plataforma | wordpress", "plugins", "identidade visual", "página home e seções", "painel de configuração wordpress", "seo", "orientações ao cliente"}:
+                _set_heading(paragraph, "Heading2")
+        parts["word/document.xml"] = ElementTree.tostring(document, encoding="utf-8", xml_declaration=True)
+
+    settings = ElementTree.fromstring(parts.get("word/settings.xml", f'<w:settings xmlns:w="{WORD_NS}"/>'.encode()))
+    update = settings.find(f"{W}updateFields")
+    if update is None:
+        update = ElementTree.SubElement(settings, f"{W}updateFields")
+    update.set(f"{W}val", "true")
+    parts["word/settings.xml"] = ElementTree.tostring(settings, encoding="utf-8", xml_declaration=True)
+
+    styles = ElementTree.fromstring(parts.get("word/styles.xml", f'<w:styles xmlns:w="{WORD_NS}"/>'.encode()))
+    for level, name in ((1, "Título 1"), (2, "Título 2")):
+        style_id = f"Heading{level}"
+        style = next((item for item in styles.findall(f"{W}style") if item.get(f"{W}styleId") == style_id), None)
+        if style is None:
+            style = ElementTree.SubElement(styles, f"{W}style", {f"{W}type": "paragraph", f"{W}styleId": style_id})
+        named = style.find(f"{W}name")
+        if named is None:
+            named = ElementTree.SubElement(style, f"{W}name")
+        named.set(f"{W}val", name)
+        properties = style.find(f"{W}pPr")
+        if properties is None:
+            properties = ElementTree.SubElement(style, f"{W}pPr")
+        outline = properties.find(f"{W}outlineLvl")
+        if outline is None:
+            outline = ElementTree.SubElement(properties, f"{W}outlineLvl")
+        outline.set(f"{W}val", str(level - 1))
+        run = style.find(f"{W}rPr")
+        if run is None:
+            run = ElementTree.SubElement(style, f"{W}rPr")
+        fonts = run.find(f"{W}rFonts")
+        if fonts is None:
+            fonts = ElementTree.SubElement(run, f"{W}rFonts")
+        for attribute in ("ascii", "hAnsi", "cs", "eastAsia"):
+            fonts.set(f"{W}{attribute}", "Montserrat")
+    parts["word/styles.xml"] = ElementTree.tostring(styles, encoding="utf-8", xml_declaration=True)
+
+
+def _embed_montserrat(parts: dict[str, bytes]) -> None:
+    font_path = Path(__file__).with_name("assets") / "Montserrat-wght.ttf"
+    font = font_path.read_bytes()
+    key = uuid.UUID(_FONT_KEY).bytes[::-1]
+    obfuscated = bytearray(font)
+    for index in range(min(32, len(obfuscated))):
+        obfuscated[index] ^= key[index % len(key)]
+    faces = ("Montserrat", "Montserrat Medium", "Montserrat Light", "Montserrat ExtraLight", "Montserrat Black")
+    font_table = ElementTree.fromstring(parts.get("word/fontTable.xml", f'<w:fonts xmlns:w="{WORD_NS}" xmlns:r="{OFFICE_REL_NS}"/>'.encode()))
+    for index, face in enumerate(faces):
+        relation_id = f"rIdMontserrat{index}"
+        target = f"fonts/montserrat-{index}.odttf"
+        parts[f"word/{target}"] = bytes(obfuscated)
+        entry = next((item for item in font_table.findall(f"{W}font") if item.get(f"{W}name") == face), None)
+        if entry is None:
+            entry = ElementTree.SubElement(font_table, f"{W}font", {f"{W}name": face})
+        embed = entry.find(f"{W}embedRegular")
+        if embed is None:
+            embed = ElementTree.SubElement(entry, f"{W}embedRegular")
+        embed.set(f"{R}id", relation_id)
+        embed.set(f"{W}fontKey", f"{{{_FONT_KEY}}}")
+    parts["word/fontTable.xml"] = ElementTree.tostring(font_table, encoding="utf-8", xml_declaration=True)
+    rels = ElementTree.fromstring(parts.get("word/_rels/fontTable.xml.rels", f'<Relationships xmlns="{RELATIONSHIPS_NS}"/>'.encode()))
+    for index, _face in enumerate(faces):
+        relation_id = f"rIdMontserrat{index}"
+        relation = next((item for item in rels if item.get("Id") == relation_id), None)
+        if relation is None:
+            relation = ElementTree.SubElement(rels, f"{{{RELATIONSHIPS_NS}}}Relationship")
+        relation.attrib.update({"Id": relation_id, "Type": f"{OFFICE_REL_NS}/font", "Target": f"fonts/montserrat-{index}.odttf"})
+    parts["word/_rels/fontTable.xml.rels"] = ElementTree.tostring(rels, encoding="utf-8", xml_declaration=True)
+    types = ElementTree.fromstring(parts["[Content_Types].xml"])
+    for index, _face in enumerate(faces):
+        part_name = f"/word/fonts/montserrat-{index}.odttf"
+        override = next((item for item in types if item.get("PartName") == part_name), None)
+        if override is None:
+            override = ElementTree.SubElement(types, f"{{{CONTENT_TYPES_NS}}}Override")
+        override.attrib.update({"PartName": part_name, "ContentType": "application/vnd.openxmlformats-officedocument.obfuscatedFont"})
+    parts["[Content_Types].xml"] = ElementTree.tostring(types, encoding="utf-8", xml_declaration=True)
+
+
 def _format_diff(
     source: Path, master: Path, changes: list[_Change]
 ) -> str:
@@ -335,6 +465,8 @@ def build_master(source: str | Path, destination: str | Path) -> MasterBuild:
         changes.append(
             _Change("media neutralized", name, media.sha256, "neutral stamp"))
 
+    _add_signoff_structure(parts)
+    _embed_montserrat(parts)
     master_path.parent.mkdir(parents=True, exist_ok=True)
     _deterministic_zip(master_path, parts)
     validation = check_master_build(open_docx_package(master_path), source_package)
