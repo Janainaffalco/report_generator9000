@@ -26,6 +26,7 @@ def approved_source(path: Path) -> Path:
             paragraph("Assinatura: PLANO SINGLE"),
             paragraph("Domínio: argelresistencia.com.br"),
             paragraph("https://onhttps://argelresistencia.com.br/wp-admin/", hyperlink="rId25"),
+            paragraph("Disponibilizamos links para download.", hyperlink="rId2"),
             paragraph("Ressaltamos a importância de alterar as senhas após entrega, Além de realizar o download no e-mail argelresistencias@hotmail.com."),
             paragraph("O código fonte do website desenvolvido para o cliente ARGEL RESISTENCIAS ELETRICAS LTDA| CNPJ: 64.525.744/0001-02 foi cedido por meio do link: https://drive.google.com/drive/folders/source"),
             paragraph("Guia Rápido -https://drive.google.com/drive/folders/guide"),
@@ -54,6 +55,12 @@ def approved_source(path: Path) -> Path:
                 kind="hyperlink",
                 external=True,
             ),
+            RelationshipSpec(
+                id="rId2",
+                target="https://drive.google.com/drive/folders/downloads",
+                kind="hyperlink",
+                external=True,
+            ),
         ],
     )
 
@@ -76,5 +83,6 @@ def test_master_build_is_reproducible_and_auditable(tmp_path: Path) -> None:
     assert all("argel" not in (part.text or "").casefold() for part in package.parts)
     assert all("ondviajar" not in relation.target for relation in package.relationships)
     assert "word/media/image2.png" in first.diff.read_text(encoding="utf-8")
+    assert "rId2: Disponibilizamos links para download." in first.diff.read_text(encoding="utf-8")
     assert "2.10 Indicadores14" in first.diff.read_text(encoding="utf-8")
     assert "A portal web" in first.diff.read_text(encoding="utf-8")

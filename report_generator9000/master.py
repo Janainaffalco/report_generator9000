@@ -273,19 +273,40 @@ def build_master(source: str | Path, destination: str | Path) -> MasterBuild:
     for paragraph_index, paragraph in enumerate(document.iter(f"{W}p")):
         before = _paragraph_text(paragraph)
         replacement = _source_replacement(before)
+        client_hyperlinks = [
+            hyperlink
+            for hyperlink in paragraph.findall(f"{W}hyperlink")
+            if hyperlink.get(f"{R}id") in removed_ids
+        ]
         if replacement is not None and replacement != before:
+            for hyperlink in client_hyperlinks:
+                changes.append(
+                    _Change(
+                        "hyperlink removed",
+                        f"word/document.xml p={paragraph_index}",
+                        f"{hyperlink.get(f'{R}id')}: {_paragraph_text(hyperlink)}",
+                        "plain Token or text run",
+                    )
+                )
             _replace_paragraph(paragraph, replacement)
             changes.append(
                 _Change("text", f"word/document.xml p={paragraph_index}", before, replacement)
             )
-        elif removed_ids:
-            for hyperlink in list(paragraph.findall(f"{W}hyperlink")):
-                if hyperlink.get(f"{R}id") in removed_ids:
-                    position = list(paragraph).index(hyperlink)
-                    for child in list(hyperlink):
-                        paragraph.insert(position, child)
-                        position += 1
-                    paragraph.remove(hyperlink)
+        else:
+            for hyperlink in client_hyperlinks:
+                position = list(paragraph).index(hyperlink)
+                for child in list(hyperlink):
+                    paragraph.insert(position, child)
+                    position += 1
+                paragraph.remove(hyperlink)
+                changes.append(
+                    _Change(
+                        "hyperlink removed",
+                        f"word/document.xml p={paragraph_index}",
+                        f"{hyperlink.get(f'{R}id')}: {_paragraph_text(hyperlink)}",
+                        "plain text run",
+                    )
+                )
 
     for relationship in list(relationships.findall(f"{{{RELATIONSHIPS_NS}}}Relationship")):
         if relationship.attrib.get("Id") in removed_ids:
