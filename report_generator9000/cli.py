@@ -7,6 +7,7 @@ from typing import Sequence
 
 from .docx_package import DocxPackage, open_docx_package
 from .gates import run_gates
+from .master import MasterBuildError, build_master
 from .run_context import RunContext, load_run_context
 
 
@@ -61,6 +62,17 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="JSON run context declaring this run's Provenance",
     )
+    master = commands.add_parser(
+        "master-build",
+        aliases=["build-master"],
+        help="build a client-neutral MASTER.docx from the approved source",
+    )
+    master.add_argument("source", type=Path, help="approved filled source DOCX")
+    master.add_argument(
+        "output",
+        type=Path,
+        help="output directory, or an explicit MASTER.docx path",
+    )
     return parser
 
 
@@ -87,6 +99,15 @@ def main(argv: Sequence[str] | None = None) -> int:
         report = run_gates(package, context)
         print(report.format())
         return 0 if report.passed else 1
+    if arguments.command in {"master-build", "build-master"}:
+        try:
+            built = build_master(arguments.source, arguments.output)
+        except (OSError, ValueError, MasterBuildError) as error:
+            parser.error(str(error))
+        print(f"MASTER\t{built.master}")
+        print(f"DIFF\t{built.diff}")
+        print(built.validation.format())
+        return 0
     return 0
 
 
