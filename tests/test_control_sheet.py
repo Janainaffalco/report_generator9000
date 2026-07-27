@@ -55,7 +55,9 @@ def test_committed_workbook_exercises_every_control_sheet_outcome() -> None:
         ),
         SkippedRow(7, "already complete"),
         StopCondition(8, "Pasta is absent"),
-        SkippedRow(9, "Tema is out of scope"),
+        SkippedRow(10, "Tema is out of scope"),
+        StopCondition(11, "CNPJ must contain 13 or 14 digits"),
+        StopCondition(13, "Kick off is not a date"),
     )
 
     first = outcomes[0]

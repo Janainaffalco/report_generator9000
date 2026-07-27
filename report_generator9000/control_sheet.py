@@ -14,6 +14,7 @@ from zipfile import ZipFile
 
 
 IN_SCOPE_TEMA = "Inserção digital - Desenvolvimento de WebSite"
+CONTROL_SHEET_NAME = "LV e Site"
 _MAIN = "{http://schemas.openxmlformats.org/spreadsheetml/2006/main}"
 _RELATIONSHIPS = "{http://schemas.openxmlformats.org/package/2006/relationships}"
 _WORKBOOK_RELATIONSHIPS = (
@@ -89,15 +90,16 @@ def _text(value: str | datetime | None) -> str:
     return "" if value is None else str(value).strip()
 
 
-def _cnpj(value: str | datetime | None, row_number: int) -> str:
+def _cnpj(value: str | datetime | None) -> str:
     digits = "".join(character for character in _text(value) if character.isdigit())
-    digits = digits.zfill(14)
-    if len(digits) != 14:
-        raise ValueError(f"row {row_number}: CNPJ must contain 14 digits")
+    if len(digits) not in (13, 14):
+        raise ValueError("CNPJ must contain 13 or 14 digits")
+    if len(digits) == 13:
+        digits = digits.zfill(14)
     return f"{digits[:2]}.{digits[2:5]}.{digits[5:8]}/{digits[8:12]}-{digits[12:]}"
 
 
-def _kick_off(value: str | datetime | None, row_number: int) -> datetime:
+def _kick_off(value: str | datetime | None) -> datetime:
     if isinstance(value, datetime):
         return value.replace(hour=0, minute=0, second=0, microsecond=0)
     text = _text(value)
@@ -106,7 +108,7 @@ def _kick_off(value: str | datetime | None, row_number: int) -> datetime:
             return datetime.strptime(text, pattern)
         except ValueError:
             continue
-    raise ValueError(f"row {row_number}: Kick off is not a date")
+    raise ValueError("Kick off is not a date")
 
 
 def _link(value: str | datetime | None) -> tuple[str, str | None] | str:
@@ -135,22 +137,39 @@ def _shared_strings(archive: ZipFile) -> tuple[str, ...]:
     )
 
 
-def _number_formats(archive: ZipFile) -> tuple[int, ...]:
+def _number_formats(archive: ZipFile) -> tuple[tuple[int, str | None], ...]:
     try:
         document = ElementTree.fromstring(archive.read("xl/styles.xml"))
     except KeyError:
         return ()
+    custom_formats = {
+        int(item.attrib["numFmtId"]): item.attrib["formatCode"]
+        for item in document.iter(f"{_MAIN}numFmt")
+    }
     cell_xfs = document.find(f"{_MAIN}cellXfs")
     if cell_xfs is None:
         return ()
-    return tuple(int(item.get("numFmtId", "0")) for item in cell_xfs)
+    return tuple(
+        (
+            int(item.get("numFmtId", "0")),
+            custom_formats.get(int(item.get("numFmtId", "0"))),
+        )
+        for item in cell_xfs
+    )
 
 
 def _worksheet_path(archive: ZipFile) -> str:
     workbook = ElementTree.fromstring(archive.read("xl/workbook.xml"))
-    sheet = workbook.find(f"{_MAIN}sheets/{_MAIN}sheet")
+    sheet = next(
+        (
+            item
+            for item in workbook.iter(f"{_MAIN}sheet")
+            if item.get("name") == CONTROL_SHEET_NAME
+        ),
+        None,
+    )
     if sheet is None:
-        raise ValueError("workbook has no worksheets")
+        raise ValueError(f"workbook has no {CONTROL_SHEET_NAME!r} worksheet")
     relationship_id = sheet.get(f"{_WORKBOOK_RELATIONSHIPS}id")
     relationships = ElementTree.fromstring(
         archive.read("xl/_rels/workbook.xml.rels")
@@ -164,7 +183,7 @@ def _worksheet_path(archive: ZipFile) -> str:
 def _cell_value(
     cell: ElementTree.Element,
     shared_strings: tuple[str, ...],
-    number_formats: tuple[int, ...],
+    number_formats: tuple[tuple[int, str | None], ...],
 ) -> str | datetime | None:
     cell_type = cell.get("t")
     if cell_type == "inlineStr":
@@ -178,19 +197,30 @@ def _cell_value(
     if cell_type == "s":
         return shared_strings[int(raw)]
     style = int(cell.get("s", "0"))
-    number_format = number_formats[style] if style < len(number_formats) else 0
-    if number_format in _DATE_NUMBER_FORMATS:
+    number_format, format_code = (
+        number_formats[style] if style < len(number_formats) else (0, None)
+    )
+    if _is_date_number_format(number_format, format_code):
         return datetime(1899, 12, 30) + timedelta(days=float(raw))
     return raw
 
 
-def _rows(path: str | Path) -> tuple[dict[str, _Cell], ...]:
+def _is_date_number_format(number_format: int, format_code: str | None) -> bool:
+    if number_format in _DATE_NUMBER_FORMATS:
+        return True
+    if number_format < 164 or format_code is None:
+        return False
+    unquoted = re.sub(r'"[^"]*"|\[[^]]*\]|\\.', "", format_code)
+    return bool(re.search(r"[dy]|a{2,4}", unquoted, re.IGNORECASE))
+
+
+def _rows(path: str | Path) -> tuple[tuple[int, dict[str, _Cell]], ...]:
     with ZipFile(path) as archive:
         shared_strings = _shared_strings(archive)
         number_formats = _number_formats(archive)
         sheet = ElementTree.fromstring(archive.read(_worksheet_path(archive)))
-    rows: list[dict[str, _Cell]] = []
-    for row in sheet.iter(f"{_MAIN}row"):
+    rows: list[tuple[int, dict[str, _Cell]]] = []
+    for position, row in enumerate(sheet.iter(f"{_MAIN}row"), start=1):
         values: dict[str, _Cell] = {}
         for cell in row.iter(f"{_MAIN}c"):
             reference = cell.get("r", "")
@@ -200,7 +230,7 @@ def _rows(path: str | Path) -> tuple[dict[str, _Cell], ...]:
             value = _cell_value(cell, shared_strings, number_formats)
             if value is not None:
                 values[column.group()] = _Cell(value)
-        rows.append(values)
+        rows.append((int(row.get("r", str(position))), values))
     return tuple(rows)
 
 
@@ -236,9 +266,9 @@ def read_control_sheet(path: str | Path) -> tuple[RowOutcome, ...]:
     rows = _rows(path)
     if not rows:
         raise ValueError("control sheet: no header row")
-    columns = _headers(rows[0])
+    columns = _headers(rows[0][1])
     outcomes: list[RowOutcome] = []
-    for row_number, row in enumerate(rows[1:], start=2):
+    for row_number, row in rows[1:]:
         tema = _text(_value(row, columns, "tema"))
         if _normalise(tema) != _normalise(IN_SCOPE_TEMA):
             outcomes.append(SkippedRow(row_number, "Tema is out of scope"))
@@ -254,14 +284,20 @@ def read_control_sheet(path: str | Path) -> tuple[RowOutcome, ...]:
         if isinstance(link, str):
             outcomes.append(StopCondition(row_number, link))
             continue
+        try:
+            cnpj = _cnpj(_value(row, columns, "cnpj"))
+            kick_off = _kick_off(_value(row, columns, "kick_off"))
+        except ValueError as error:
+            outcomes.append(StopCondition(row_number, str(error)))
+            continue
         outcomes.append(
             Engagement(
                 row_number=row_number,
                 demanda=_text(_value(row, columns, "demanda")),
                 pasta=pasta,
                 razao_social=_text(_value(row, columns, "razao_social")),
-                cnpj=_cnpj(_value(row, columns, "cnpj"), row_number),
-                kick_off=_kick_off(_value(row, columns, "kick_off"), row_number),
+                cnpj=cnpj,
+                kick_off=kick_off,
                 especialista=_text(_value(row, columns, "especialista")),
                 capture_origin=link[0],
                 published_domain=link[1],

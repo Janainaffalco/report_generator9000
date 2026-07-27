@@ -62,7 +62,18 @@ ROWS = (
         "CASA NOSSA", "Christian Albuquerque Alonso",
         datetime(2026, 4, 21), "https://out-of-scope.example/", "",
     ),
+    (
+        "012000/2026", "80-2026", IN_SCOPE, "1234",
+        "CNPJ INVALIDO", "Bruno Henrique Santana Leal",
+        datetime(2026, 5, 8), "https://invalid-cnpj.example/", "",
+    ),
+    (
+        "012001/2026", "81-2026", IN_SCOPE, "52999999000199",
+        "KICK OFF INVALIDO", "Bruno Henrique Santana Leal",
+        "amanha", "https://invalid-kickoff.example/", "",
+    ),
 )
+ROW_NUMBERS = (2, 3, 4, 5, 6, 7, 8, 10, 11, 13)
 
 
 def _xml_cell(column: str, row: int, value: object) -> str:
@@ -76,9 +87,9 @@ def _xml_cell(column: str, row: int, value: object) -> str:
 
 
 def _sheet_xml() -> str:
-    all_rows = (HEADERS, *ROWS)
+    all_rows = ((1, HEADERS), *zip(ROW_NUMBERS, ROWS))
     rows = []
-    for number, values in enumerate(all_rows, start=1):
+    for number, values in all_rows:
         cells = "".join(
             _xml_cell(chr(ord("A") + index), number, value)
             for index, value in enumerate(values)
@@ -99,6 +110,7 @@ PARTS = {
         '<Default Extension="xml" ContentType="application/xml"/>'
         '<Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>'
         '<Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>'
+        '<Override PartName="/xl/worksheets/sheet2.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>'
         '<Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/>'
         '</Types>'
     ),
@@ -112,21 +124,24 @@ PARTS = {
         '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
         '<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" '
         'xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">'
-        '<sheets><sheet name="Controle" sheetId="1" r:id="rId1"/></sheets></workbook>'
+        '<sheets><sheet name="Resumo" sheetId="1" r:id="rId1"/>'
+        '<sheet name="LV e Site" sheetId="2" r:id="rId2"/></sheets></workbook>'
     ),
     "xl/_rels/workbook.xml.rels": (
         '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
         '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
         '<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/>'
-        '<Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/>'
+        '<Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet2.xml"/>'
+        '<Relationship Id="rId3" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/>'
         '</Relationships>'
     ),
     "xl/styles.xml": (
         '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
         '<styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">'
         '<fonts count="1"><font/></fonts><fills count="1"><fill/></fills><borders count="1"><border/></borders>'
+        '<numFmts count="1"><numFmt numFmtId="164" formatCode="dd/mm/yyyy"/></numFmts>'
         '<cellStyleXfs count="1"><xf/></cellStyleXfs>'
-        '<cellXfs count="2"><xf numFmtId="0"/><xf numFmtId="14" applyNumberFormat="1"/></cellXfs>'
+        '<cellXfs count="2"><xf numFmtId="0"/><xf numFmtId="164" applyNumberFormat="1"/></cellXfs>'
         '</styleSheet>'
     ),
 }
@@ -134,7 +149,17 @@ PARTS = {
 
 def build(output: Path) -> Path:
     output.parent.mkdir(parents=True, exist_ok=True)
-    parts = {**PARTS, "xl/worksheets/sheet1.xml": _sheet_xml()}
+    summary = (
+        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+        '<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">'
+        '<sheetData><row r="1"><c r="A1" t="inlineStr"><is><t>Resumo</t></is></c></row></sheetData>'
+        '</worksheet>'
+    )
+    parts = {
+        **PARTS,
+        "xl/worksheets/sheet1.xml": summary,
+        "xl/worksheets/sheet2.xml": _sheet_xml(),
+    }
     with ZipFile(output, "w", compression=ZIP_STORED) as archive:
         for name, text in parts.items():
             info = ZipInfo(name, (2026, 1, 1, 0, 0, 0))
