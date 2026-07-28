@@ -12,6 +12,7 @@ requires-python = ">=3.11"
 check = "report_generator9000.cli:check_main"
 inventory = "report_generator9000.cli:inventory_main"
 report-generator9000 = "report_generator9000.cli:main"
+gerar-relatorio = "report_generator9000.generate_cli:main"
 
 [tool.setuptools.packages.find]
 include = ["report_generator9000*"]

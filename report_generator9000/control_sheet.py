@@ -304,3 +304,26 @@ def read_control_sheet(path: str | Path) -> tuple[RowOutcome, ...]:
             )
         )
     return tuple(outcomes)
+
+
+def read_control_sheet_for_pasta(
+    path: str | Path, pasta: str
+) -> tuple[RowOutcome, ...]:
+    """Read every row whose Pasta matches *pasta*, including Stop Conditions."""
+    rows = _rows(path)
+    if not rows:
+        raise ValueError("control sheet: no header row")
+    columns = _headers(rows[0][1])
+    requested = _normalise(pasta)
+    matching_rows = {
+        row_number
+        for row_number, row in rows[1:]
+        if _normalise(_text(_value(row, columns, "pasta"))) == requested
+    }
+    if not matching_rows:
+        raise ValueError(f"control sheet: Pasta {pasta!r} was not found")
+    return tuple(
+        outcome
+        for outcome in read_control_sheet(path)
+        if outcome.row_number in matching_rows
+    )

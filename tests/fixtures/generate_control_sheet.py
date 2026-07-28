@@ -72,8 +72,13 @@ ROWS = (
         "KICK OFF INVALIDO", "Bruno Henrique Santana Leal",
         "amanha", "https://invalid-kickoff.example/", "",
     ),
+    (
+        "012099/2026", "40-2026", IN_SCOPE, "11222333000181",
+        "EMPRESA GEMEA LTDA", "Christian Albuquerque Alonso",
+        datetime(2026, 6, 12), "https://gemea.example/", "",
+    ),
 )
-ROW_NUMBERS = (2, 3, 4, 5, 6, 7, 8, 10, 11, 13)
+ROW_NUMBERS = (2, 3, 4, 5, 6, 7, 8, 10, 11, 13, 14)
 
 
 def _xml_cell(column: str, row: int, value: object) -> str:

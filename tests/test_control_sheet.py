@@ -58,6 +58,17 @@ def test_committed_workbook_exercises_every_control_sheet_outcome() -> None:
         SkippedRow(10, "Tema is out of scope"),
         StopCondition(11, "CNPJ must contain 13 or 14 digits"),
         StopCondition(13, "Kick off is not a date"),
+        Engagement(
+            row_number=14,
+            demanda="012099/2026",
+            pasta="40-2026",
+            razao_social="EMPRESA GEMEA LTDA",
+            cnpj="11.222.333/0001-81",
+            kick_off=datetime(2026, 6, 12),
+            especialista="Christian Albuquerque Alonso",
+            capture_origin="https://gemea.example/",
+            published_domain=None,
+        ),
     )
 
     first = outcomes[0]
