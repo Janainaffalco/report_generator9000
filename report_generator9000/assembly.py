@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-import tempfile
 import hashlib
+import tempfile
 from io import BytesIO
 from dataclasses import dataclass, replace
 from pathlib import Path
@@ -14,12 +14,15 @@ from .artifact_paths import engagement_artifact_key
 from .block_stamping import BlockImage, stamp_blocks
 from .capture import CaptureRun, capture_site, extract_site_text
 from .control_sheet import Engagement
+from .docx_package import open_docx_package
 from .generate import (
     GeneratedReport,
+    StopCondition,
     _write_sidecars,
     generate_report,
 )
-from .gated_inputs import load_gated_inputs
+from .gates import run_gates
+from .gated_inputs import GatedInputError, load_gated_inputs
 from .lista_paginas import Pagina, derive_lista_paginas
 from .prose import ProseConfig, ProseProvider
 from .placeholders import render_placeholder
@@ -38,7 +41,7 @@ class OutputPackage:
     raw_captures: tuple[Path, ...]
 
 
-def assemble_output_package(
+def _assemble_staged_package(
     master: str | Path,
     output_root: str | Path,
     engagement: Engagement,
@@ -49,12 +52,15 @@ def assemble_output_package(
     no_llm: bool = False,
     preview_renderer: PreviewRenderer | None = None,
 ) -> OutputPackage:
-    """Run Lista, Capture, Blocks, prose, report, and sidecars once."""
+    """Build an engagement package below a disposable staging root."""
     directory = (
         Path(output_root) / engagement_artifact_key(engagement)
     ).resolve()
     directory.mkdir(parents=True, exist_ok=True)
-    gated = load_gated_inputs(gated_drop_root, engagement)
+    try:
+        gated = load_gated_inputs(gated_drop_root, engagement)
+    except GatedInputError as error:
+        raise StopCondition(f"STOP CONDITION: {error}") from error
     pages = derive_lista_paginas(
         engagement.capture_origin,
         gated.declared_pages,
@@ -202,6 +208,145 @@ def assemble_output_package(
         previews=previews,
         raw_captures=raw_captures,
     )
+
+
+def assemble_output_package(
+    master: str | Path,
+    output_root: str | Path,
+    engagement: Engagement,
+    gated_drop_root: str | Path,
+    *,
+    prose_provider: ProseProvider | None = None,
+    prose_config: ProseConfig | None = None,
+    no_llm: bool = False,
+    preview_renderer: PreviewRenderer | None = None,
+) -> OutputPackage:
+    """Build, certify, then promote one self-contained engagement package."""
+    output_root_path = Path(output_root).resolve()
+    output_root_path.mkdir(parents=True, exist_ok=True)
+    key = engagement_artifact_key(engagement)
+    final_directory = output_root_path / key
+
+    with tempfile.TemporaryDirectory(
+        prefix=f".{key}-assembly-",
+        dir=output_root_path,
+    ) as temporary:
+        staging_root = Path(temporary)
+        staged = _assemble_staged_package(
+            master,
+            staging_root,
+            engagement,
+            gated_drop_root,
+            prose_provider=prose_provider,
+            prose_config=prose_config,
+            no_llm=no_llm,
+            preview_renderer=preview_renderer,
+        )
+
+        def promoted(path: str | Path) -> Path:
+            relative = Path(path).resolve().relative_to(staged.directory)
+            return (final_directory / relative).resolve()
+
+        final_document = promoted(staged.report.document)
+        final_context_document = promoted(
+            staged.report.context_document
+        )
+        final_pendencias_document = promoted(
+            staged.report.pendencias_document
+        )
+        final_pendencias_json = promoted(staged.report.pendencias_json)
+        final_previews = tuple(promoted(path) for path in staged.previews)
+        final_raw_captures = tuple(
+            promoted(path) for path in staged.raw_captures
+        )
+        final_capture_folder = promoted(staged.capture_run.folder)
+        final_media = tuple(
+            replace(
+                artifact,
+                source=str(promoted(artifact.source)),
+            )
+            if artifact.origin == "capture" and artifact.source is not None
+            else artifact
+            for artifact in staged.report.context.media
+        )
+        final_context = replace(
+            staged.report.context,
+            media=final_media,
+            capture_folder=str(final_capture_folder),
+            output_paths=tuple(
+                str(path)
+                for path in (
+                    final_document,
+                    final_context_document,
+                    final_pendencias_document,
+                    final_pendencias_json,
+                    *final_previews,
+                    *final_raw_captures,
+                )
+            ),
+        )
+        package = open_docx_package(staged.report.document)
+        gate_report = run_gates(package, final_context)
+        if not gate_report.passed:
+            raise StopCondition(
+                "STOP CONDITION: correctness gates rejected the staged "
+                "output package:\n"
+                + gate_report.format()
+            )
+        _write_sidecars(staged.report.document, final_context)
+
+        previous_directory = staging_root / ".previous-output"
+        replaced_previous = final_directory.exists()
+        if replaced_previous:
+            final_directory.replace(previous_directory)
+        try:
+            staged.directory.replace(final_directory)
+        except OSError:
+            if replaced_previous and not final_directory.exists():
+                previous_directory.replace(final_directory)
+            raise
+
+        final_report = replace(
+            staged.report,
+            document=final_document,
+            context=final_context,
+            context_document=final_context_document,
+            pendencias_document=final_pendencias_document,
+            pendencias_json=final_pendencias_json,
+            gate_report=gate_report,
+        )
+        final_capture_run = replace(
+            staged.capture_run,
+            folder=final_capture_folder,
+            captures=tuple(
+                replace(
+                    capture,
+                    raw_path=promoted(capture.raw_path),
+                    embedding_path=promoted(capture.embedding_path),
+                )
+                for capture in staged.capture_run.captures
+            ),
+            failures=tuple(
+                replace(
+                    failure,
+                    raw_path=(
+                        None
+                        if failure.raw_path is None
+                        else promoted(failure.raw_path)
+                    ),
+                )
+                for failure in staged.capture_run.failures
+            ),
+        )
+        return OutputPackage(
+            engagement=engagement,
+            directory=final_directory,
+            report=final_report,
+            pages=staged.pages,
+            capture_run=final_capture_run,
+            previews=final_previews,
+            raw_captures=final_raw_captures,
+        )
 
 
 __all__ = [

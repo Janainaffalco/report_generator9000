@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import tempfile
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from xml.sax.saxutils import escape
@@ -12,6 +13,7 @@ from zipfile import BadZipFile, ZipFile
 from .artifact_paths import engagement_artifact_key
 from .control_sheet import Engagement
 from .docx_package import DocxPackage, open_docx_package
+from .gates import GateReport, run_gates
 from .gates.master import BOILERPLATE_MEDIA
 from .gated_inputs import (
     GATED_IMAGE_PARTS,
@@ -48,6 +50,7 @@ class GeneratedReport:
     context_document: Path
     pendencias_document: Path
     pendencias_json: Path
+    gate_report: GateReport
 
     @property
     def ready_to_send(self) -> bool:
@@ -69,6 +72,10 @@ class ReportGenerationError(ValueError):
     ) -> None:
         super().__init__(message)
         self.pendencia = pendencia
+
+
+class StopCondition(ReportGenerationError):
+    """A gate rejected the staged package, so the row produces nothing."""
 
 
 def _media_location(
@@ -258,8 +265,8 @@ def generate_report(
             no_llm=no_llm,
         )
     except ProseBudgetExceeded as error:
-        raise ReportGenerationError(
-            "TOOL_BLOCKED: prose provider exhausted its output budget",
+        raise StopCondition(
+            "STOP CONDITION: prose provider exhausted its output budget",
             pendencia=error.pendencia,
         ) from error
     except ValueError as error:
@@ -461,38 +468,52 @@ def generate_report(
         )
 
     output.parent.mkdir(parents=True, exist_ok=True)
-    with ZipFile(output, "w") as generated:
-        for item, _content in entries:
-            generated.writestr(item, parts[item.filename])
-    try:
-        package = open_docx_package(output)
-    except (OSError, ValueError) as error:
-        output.unlink(missing_ok=True)
-        raise ReportGenerationError(
-            f"generated DOCX package is invalid: {error}"
-        ) from error
-    boilerplate_links = frozenset(
-        relationship.target
-        for relationship in package.relationships
-        if relationship.external
-    )
-    context = RunContext(
-        pasta=engagement.pasta,
-        media=tuple(artifacts),
-        boilerplate_links=boilerplate_links,
-        drop_folder=(
-            None if gated.folder is None else str(gated.folder.resolve())
-        ),
-        capture_folder=(
-            None
-            if capture_folder is None
-            else str(Path(capture_folder).resolve())
-        ),
-        output_paths=(str(output.resolve()),),
-        blocks=blocks,
-        pendencias=tuple(pendencias),
-        prose_grounding=drafted.grounding,
-    )
+    with tempfile.TemporaryDirectory(
+        prefix=".report-gates-",
+        dir=output.parent,
+    ) as staging_directory:
+        staged_output = Path(staging_directory) / output.name
+        with ZipFile(staged_output, "w") as generated:
+            for item, _content in entries:
+                generated.writestr(item, parts[item.filename])
+        try:
+            package = open_docx_package(staged_output)
+        except (OSError, ValueError) as error:
+            raise ReportGenerationError(
+                f"generated DOCX package is invalid: {error}"
+            ) from error
+        boilerplate_links = frozenset(
+            relationship.target
+            for relationship in package.relationships
+            if relationship.external
+        )
+        context = RunContext(
+            pasta=engagement.pasta,
+            media=tuple(artifacts),
+            boilerplate_links=boilerplate_links,
+            drop_folder=(
+                None
+                if gated.folder is None
+                else str(gated.folder.resolve())
+            ),
+            capture_folder=(
+                None
+                if capture_folder is None
+                else str(Path(capture_folder).resolve())
+            ),
+            output_paths=(str(output.resolve()),),
+            blocks=blocks,
+            pendencias=tuple(pendencias),
+            prose_grounding=drafted.grounding,
+        )
+        gate_report = run_gates(package, context)
+        if not gate_report.passed:
+            raise StopCondition(
+                "STOP CONDITION: correctness gates rejected the staged "
+                "package:\n"
+                + gate_report.format()
+            )
+        staged_output.replace(output)
     context_path, pendencias_document, pendencias_json = _write_sidecars(
         output, context
     )
@@ -503,12 +524,14 @@ def generate_report(
         context_document=context_path,
         pendencias_document=pendencias_document,
         pendencias_json=pendencias_json,
+        gate_report=gate_report,
     )
 
 
 __all__ = [
     "GeneratedReport",
     "ReportGenerationError",
+    "StopCondition",
     "SPREADSHEET_TOKENS",
     "generate_report",
     "report_output_path",
