@@ -38,7 +38,9 @@ def _block_image(
         green=180 - 20 * index,
         blue=60 + 10 * index,
     )
-    path = tmp_path / f"capture-{index}.png"
+    folder = tmp_path / ("gated" if origin == "gated" else "captures")
+    folder.mkdir(exist_ok=True)
+    path = folder / f"capture-{index}.png"
     path.write_bytes(content)
     return BlockImage(
         pagina=pagina,
@@ -91,6 +93,8 @@ def test_blocks_are_stamped_from_lista_with_bound_provenant_images(
         tmp_path / "stamped.docx",
         pages,
         images,
+        capture_folder=tmp_path / "captures",
+        drop_folder=tmp_path / "gated",
     )
 
     package = open_docx_package(result.document)
@@ -150,4 +154,31 @@ def test_blocks_are_stamped_from_lista_with_bound_provenant_images(
         width, height = images[offset].pixel_size
         assert int(extent.get("cy")) == round(
             int(extent.get("cx")) * height / width
+        )
+
+
+def test_block_image_must_belong_to_the_declared_run_folder(
+    tmp_path: Path,
+) -> None:
+    page = Pagina(
+        PAGINA_PRINCIPAL,
+        "Home",
+        "https://example.test/",
+        "PÁGINA HOME",
+    )
+    image = _block_image(tmp_path, page, 1)
+    master = build_master(
+        approved_source(tmp_path / "approved.docx"),
+        tmp_path / "master",
+    ).master
+
+    from pytest import raises
+
+    with raises(ValueError, match="outside this run's Capture folder"):
+        stamp_blocks(
+            master,
+            tmp_path / "stamped.docx",
+            (page,),
+            (image,),
+            capture_folder=tmp_path / "some-other-run",
         )

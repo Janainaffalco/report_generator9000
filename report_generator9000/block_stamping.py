@@ -20,7 +20,7 @@ from .master import (
     W,
     clone_block_stamp,
 )
-from .run_context import Artifact
+from .run_context import Artifact, is_within
 
 
 WP = "{http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing}"
@@ -150,6 +150,8 @@ def _removed_relationship_media(
 def _validate_inputs(
     pages: tuple[Pagina, ...],
     images: tuple[BlockImage, ...],
+    capture_folder: str | Path | None,
+    drop_folder: str | Path | None,
 ) -> tuple[bytes, ...]:
     if len(pages) != len(images):
         raise BlockStampingError(
@@ -167,6 +169,21 @@ def _validate_inputs(
         if image.origin not in {"capture", "gated"}:
             raise BlockStampingError(
                 f"Block image {index} origin must be capture or gated"
+            )
+        source_root = (
+            capture_folder if image.origin == "capture" else drop_folder
+        )
+        source_name = (
+            "Capture folder"
+            if image.origin == "capture"
+            else "Gated Drop Folder"
+        )
+        if source_root is None or not is_within(
+            str(image.path.resolve()),
+            str(Path(source_root).resolve()),
+        ):
+            raise BlockStampingError(
+                f"Block image {index} is outside this run's {source_name}"
             )
         try:
             content = image.path.read_bytes()
@@ -194,9 +211,17 @@ def stamp_blocks(
     output: str | Path,
     pages: tuple[Pagina, ...],
     images: tuple[BlockImage, ...],
+    *,
+    capture_folder: str | Path | None = None,
+    drop_folder: str | Path | None = None,
 ) -> StampedBlocks:
     """Stamp exactly one bound Block for each ordered Lista entry."""
-    contents = _validate_inputs(pages, images)
+    contents = _validate_inputs(
+        pages,
+        images,
+        capture_folder,
+        drop_folder,
+    )
     master_path = Path(master)
     destination = Path(output)
     try:
