@@ -30,6 +30,9 @@ class Pendencia:
     classification: str
     reason: str
     evidence: str
+    name: str = ""
+    page: str = ""
+    required_action: str = ""
 
 
 @dataclass(frozen=True)
@@ -43,6 +46,14 @@ class RunContext:
     output_paths: tuple[str, ...] = ()
     blocks: tuple[str, ...] = ()
     pendencias: tuple[Pendencia, ...] = ()
+
+    @property
+    def ready_to_send(self) -> bool:
+        return not self.pendencias
+
+    @property
+    def status(self) -> str:
+        return "complete" if self.ready_to_send else "draft"
 
     @property
     def declares_a_location(self) -> bool:
@@ -89,6 +100,13 @@ def _require_str(value: Mapping[str, Any], key: str, where: str) -> str:
     return item
 
 
+def _optional_str(value: Mapping[str, Any], key: str, where: str) -> str:
+    item = value.get(key, "")
+    if not isinstance(item, str):
+        raise ValueError(f"{where}.{key}: expected a string")
+    return item
+
+
 def _string_tuple(value: Any, where: str) -> tuple[str, ...]:
     if not isinstance(value, list) or not all(
         isinstance(item, str) for item in value
@@ -119,7 +137,17 @@ def _artifact(value: Any, where: str) -> Artifact:
 def _pendencia(value: Any, where: str) -> Pendencia:
     mapping = _require_mapping(value, where)
     _reject_unknown(
-        mapping, ("slot", "classification", "reason", "evidence"), where
+        mapping,
+        (
+            "slot",
+            "classification",
+            "reason",
+            "evidence",
+            "name",
+            "page",
+            "required_action",
+        ),
+        where,
     )
     classification = _require_str(mapping, "classification", where)
     if classification not in CLASSIFICATIONS:
@@ -132,6 +160,9 @@ def _pendencia(value: Any, where: str) -> Pendencia:
         classification=classification,
         reason=_require_str(mapping, "reason", where),
         evidence=_require_str(mapping, "evidence", where),
+        name=_optional_str(mapping, "name", where),
+        page=_optional_str(mapping, "page", where),
+        required_action=_optional_str(mapping, "required_action", where),
     )
 
 

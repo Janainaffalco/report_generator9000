@@ -7,6 +7,7 @@ from pathlib import Path
 from zipfile import ZipFile
 
 from report_generator9000.docx_package import open_docx_package
+from report_generator9000.gates.master import BOILERPLATE_MEDIA
 from report_generator9000.gates.tokens import check_token_residue
 from report_generator9000.gated_inputs import GATED_VALUE_SLOTS
 from report_generator9000.master import build_master
@@ -135,6 +136,23 @@ def test_cli_clones_master_and_fills_each_shared_pasta_engagement(
         )
         with ZipFile(output) as generated:
             assert generated.namelist() == list(source_parts)
+            assert {
+                (
+                    item.source_part,
+                    item.paragraph_index,
+                    item.width_emu,
+                    item.height_emu,
+                )
+                for item in package.slots
+            } == {
+                (
+                    item.source_part,
+                    item.paragraph_index,
+                    item.width_emu,
+                    item.height_emu,
+                )
+                for item in open_docx_package(master).slots
+            }
             for item in generated.infolist():
                 source_info, source_content = source_parts[item.filename]
                 assert (
@@ -159,7 +177,13 @@ def test_cli_clones_master_and_fills_each_shared_pasta_engagement(
                         expected_content = expected_content.replace(
                             token.encode(), evidence
                         )
-                assert generated.read(item.filename) == expected_content
+                generated_content = generated.read(item.filename)
+                if "/media/" not in f"/{item.filename}":
+                    assert generated_content == expected_content
+                elif item.filename in BOILERPLATE_MEDIA:
+                    assert generated_content == source_content
+                else:
+                    assert generated_content != source_content
 
 
 def test_cli_stop_condition_produces_no_document(tmp_path: Path) -> None:

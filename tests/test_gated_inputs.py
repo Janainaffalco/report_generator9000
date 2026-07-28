@@ -2,10 +2,12 @@ from __future__ import annotations
 
 import json
 from datetime import datetime
+from io import BytesIO
 from pathlib import Path
 from zipfile import ZipFile
 
 import pytest
+from PIL import Image
 
 from fixtures.check_cli import run_check
 from fixtures.docx_builder import (
@@ -58,7 +60,7 @@ GATED_TOKENS = {
 }
 
 
-def gated_master(path: Path) -> Path:
+def gated_master(path: Path, *, with_capture: bool = False) -> Path:
     paragraphs = [
         paragraph("{{DEMANDA}}"),
         paragraph("{{RAZAO_SOCIAL}}"),
@@ -78,6 +80,19 @@ def gated_master(path: Path) -> Path:
             RelationshipSpec(id=relationship_id, target=name)
         )
         media[name] = png_bytes(6 + index, 4 + index, blue=index * 13)
+    if with_capture:
+        paragraphs.extend(
+            (
+                paragraph("PÁGINA HOME", keep_next=True),
+                paragraph(image="rIdCapture"),
+            )
+        )
+        relationships.append(
+            RelationshipSpec(id="rIdCapture", target="media/capture.png")
+        )
+        media["media/capture.png"] = png_bytes(
+            180, 100, red=0x30, green=0x80, blue=0xD0
+        )
     return build_docx(
         path,
         paragraphs=paragraphs,
@@ -166,10 +181,15 @@ def test_complete_gated_folder_fills_values_images_and_provenance(
             assert generated.read(part_name) == (
                 GATED_FIXTURES / "complete" / ENGAGEMENT_FOLDER / filename
             ).read_bytes()
-    pendencias = json.loads(
+    pendencias_report = json.loads(
         output.with_name("pendencias.json").read_text(encoding="utf-8")
     )
-    assert pendencias == []
+    assert pendencias_report == {
+        "status": "complete",
+        "ready_to_send": True,
+        "pendencias": [],
+    }
+    assert "STATUS\tCOMPLETE" in completed.stdout
     context = json.loads(
         output.with_name("run.json").read_text(encoding="utf-8")
     )
@@ -193,6 +213,7 @@ def test_absent_gated_folder_is_a_normal_draft_with_explicit_pendencias(
             part_name: source.read(part_name)
             for part_name in IMAGE_PARTS.values()
         }
+    original_package = open_docx_package(master)
 
     completed = run_generator(
         master,
@@ -209,20 +230,79 @@ def test_absent_gated_folder_is_a_normal_draft_with_explicit_pendencias(
     assert not any(token in text for token in GATED_TOKENS)
     assert "PENDÊNCIA GATED: dominio_publicado" in text
     assert "https://teal-duck-363012.hostingersite.com/" not in text
+    generated_package = open_docx_package(output)
+    original_dimensions = {
+        item.part_name: (item.width, item.height)
+        for item in original_package.media
+    }
+    generated_dimensions = {
+        item.part_name: (item.width, item.height)
+        for item in generated_package.media
+    }
+    assert set(generated_dimensions) == set(original_dimensions)
+    assert set(generated_dimensions.values()) == {(886, 591)}
+    original_slot_dimensions = {
+        item.media_part: (item.width_emu, item.height_emu)
+        for item in original_package.slots
+        if item.media_part is not None
+    }
+    generated_slot_dimensions = {
+        item.media_part: (item.width_emu, item.height_emu)
+        for item in generated_package.slots
+        if item.media_part is not None
+    }
+    assert generated_slot_dimensions == original_slot_dimensions
     with ZipFile(output) as generated:
-        assert all(
-            generated.read(part_name) == content
-            for part_name, content in original_images.items()
-        )
-    pendencias = json.loads(
+        for part_name, original in original_images.items():
+            rendered = generated.read(part_name)
+            assert rendered != original
+            with Image.open(BytesIO(rendered)) as placeholder:
+                assert "GATED" in str(placeholder.info.get("Description", ""))
+                assert len(placeholder.getcolors(maxcolors=1_000_000) or ()) > 2
+    pendencias_report = json.loads(
         output.with_name("pendencias.json").read_text(encoding="utf-8")
     )
+    assert pendencias_report["status"] == "draft"
+    assert pendencias_report["ready_to_send"] is False
+    pendencias = pendencias_report["pendencias"]
     assert len(pendencias) == 18
-    assert {item["classification"] for item in pendencias} == {"GATED"}
-    assert "GATED" in output.with_name("PENDENCIAS.md").read_text(
+    assert {item["class"] for item in pendencias} == {"GATED"}
+    assert all(
+        {
+            "slot",
+            "name",
+            "page",
+            "class",
+            "reason",
+            "required_action",
+        }
+        <= item.keys()
+        for item in pendencias
+    )
+    readable_report = output.with_name("PENDENCIAS.md").read_text(
         encoding="utf-8"
     )
+    assert "Estado: **RASCUNHO**" in readable_report
+    assert "GATED" in readable_report
+    assert "completo" not in readable_report.casefold()
+    assert "pronto para envio" not in readable_report.casefold()
+    assert "STATUS\tDRAFT" in completed.stdout
     run_context = load_run_context(output.with_name("run.json"))
+    placeholder_digests = {
+        item.digest for item in run_context.artifacts_of("placeholder")
+    }
+    listed_evidence = {item["evidence"] for item in pendencias}
+    document_text = "\n".join(
+        part.text or "" for part in generated_package.parts
+    )
+    assert placeholder_digests <= listed_evidence
+    assert all(
+        evidence in placeholder_digests or evidence in document_text
+        for evidence in listed_evidence
+    )
+    assert all(
+        f"| {item['slot']} |" in readable_report for item in pendencias
+    )
     assert check_media_provenance(package, run_context).passed
     assert check_engagement_scope(package, run_context).passed
     assert check_pendencias_agreement(package, run_context).passed
@@ -253,15 +333,77 @@ def test_partial_gated_folder_fills_only_what_is_present(
         assert generated.read("word/media/image3.png") == (
             GATED_FIXTURES / "partial" / ENGAGEMENT_FOLDER / "paleta.png"
         ).read_bytes()
-    pendencias = json.loads(
+    pendencias_report = json.loads(
         output.with_name("pendencias.json").read_text(encoding="utf-8")
     )
+    pendencias = pendencias_report["pendencias"]
     missing_slots = {item["slot"] for item in pendencias}
     assert "paleta" not in missing_slots
     assert "email_cliente" not in missing_slots
     assert "dominio_publicado" not in missing_slots
     assert "plano_hospedagem" in missing_slots
     assert "login" in missing_slots
+
+
+def test_failed_capture_renders_a_tool_blocked_placeholder_and_draft(
+    tmp_path: Path,
+) -> None:
+    master = gated_master(tmp_path / "MASTER.docx", with_capture=True)
+
+    completed = run_generator(
+        master,
+        tmp_path / "reports",
+        "50-2026",
+        control_sheet=CONTROL_SHEET,
+        gated_drop_root=GATED_FIXTURES / "absent",
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    output = generated_document(completed.stdout)
+    package = open_docx_package(output)
+    rendered_capture = next(
+        item
+        for item in package.media
+        if item.part_name == "word/media/capture.png"
+    )
+    assert (rendered_capture.width, rendered_capture.height) == (
+        886,
+        591,
+    )
+    with ZipFile(output) as generated:
+        with Image.open(
+            BytesIO(generated.read("word/media/capture.png"))
+        ) as placeholder:
+            assert "TOOL_BLOCKED" in str(
+                placeholder.info.get("Description", "")
+            )
+            assert len(placeholder.getcolors(maxcolors=1_000_000) or ()) > 2
+
+    report = json.loads(
+        output.with_name("pendencias.json").read_text(encoding="utf-8")
+    )
+    assert report["status"] == "draft"
+    assert report["ready_to_send"] is False
+    assert {item["class"] for item in report["pendencias"]} == {
+        "GATED",
+        "TOOL_BLOCKED",
+    }
+    pendencia = next(
+        item
+        for item in report["pendencias"]
+        if item["class"] == "TOOL_BLOCKED"
+    )
+    assert pendencia["class"] == "TOOL_BLOCKED"
+    assert pendencia["name"] == "PÁGINA HOME"
+    assert pendencia["page"] == "PÁGINA HOME"
+    assert pendencia["required_action"]
+    readable = output.with_name("PENDENCIAS.md").read_text(encoding="utf-8")
+    assert "TOOL_BLOCKED" in readable
+    assert "GATED" in readable
+    assert "STATUS\tDRAFT" in completed.stdout
+    assert check_pendencias_agreement(
+        package, load_run_context(output.with_name("run.json"))
+    ).passed
 
 
 def test_wrong_engagement_gated_folder_fails_without_output(

@@ -7,6 +7,7 @@ name = "report-generator9000"
 version = "0.1.0"
 description = "Deterministic SEBRAETEC final report generation toolkit"
 requires-python = ">=3.11"
+dependencies = ["Pillow>=11"]
 
 [project.scripts]
 check = "report_generator9000.cli:check_main"

@@ -11,7 +11,7 @@ from zipfile import BadZipFile, ZipFile
 
 from .artifact_paths import engagement_artifact_key
 from .control_sheet import Engagement
-from .docx_package import open_docx_package
+from .docx_package import DocxPackage, open_docx_package
 from .gates.master import BOILERPLATE_MEDIA
 from .gated_inputs import (
     GATED_IMAGE_PARTS,
@@ -19,6 +19,7 @@ from .gated_inputs import (
     GatedInputError,
     load_gated_inputs,
 )
+from .placeholders import render_placeholder, slot_pixel_dimensions
 from .run_context import Artifact, Pendencia, RunContext
 
 
@@ -40,9 +41,66 @@ class GeneratedReport:
     pendencias_document: Path
     pendencias_json: Path
 
+    @property
+    def ready_to_send(self) -> bool:
+        return self.context.ready_to_send
+
+    @property
+    def status(self) -> str:
+        return self.context.status
+
 
 class ReportGenerationError(ValueError):
     """The Master cannot safely produce the requested report."""
+
+
+def _media_location(
+    package: DocxPackage, part_name: str
+) -> tuple[str, str]:
+    """Return the structural Slot and nearest human-readable page heading."""
+    media_slots = [
+        slot for slot in package.slots if slot.media_part == part_name
+    ]
+    if not media_slots:
+        return f"capture:{part_name}", part_name
+    media_slot = media_slots[0]
+    preceding = [
+        paragraph
+        for paragraph in package.paragraphs
+        if paragraph.source_part == media_slot.source_part
+        and paragraph.index < media_slot.paragraph_index
+        and paragraph.keep_next
+        and paragraph.text.strip()
+    ]
+    page = preceding[-1].text.strip() if preceding else part_name
+    slot = (
+        f"{media_slot.source_part}:p={media_slot.paragraph_index}:"
+        f"r={media_slot.run_index}"
+    )
+    return slot, page
+
+
+def _placeholder_pixel_dimensions(
+    package: DocxPackage, part_name: str
+) -> tuple[int, int]:
+    media_slot = next(
+        (
+            slot
+            for slot in package.slots
+            if slot.media_part == part_name
+            and slot.width_emu is not None
+            and slot.height_emu is not None
+        ),
+        None,
+    )
+    if media_slot is not None:
+        return slot_pixel_dimensions(
+            media_slot.width_emu, media_slot.height_emu
+        )
+    media = next(
+        item for item in package.media if item.part_name == part_name
+    )
+    return media.width, media.height
 
 
 def report_output_path(output_root: str | Path, engagement: Engagement) -> Path:
@@ -82,9 +140,25 @@ def _write_sidecars(
         + "\n",
         encoding="utf-8",
     )
+    public_pendencias = [
+        {
+            "slot": item.slot,
+            "name": item.name,
+            "page": item.page,
+            "class": item.classification,
+            "reason": item.reason,
+            "required_action": item.required_action,
+            "evidence": item.evidence,
+        }
+        for item in context.pendencias
+    ]
     pendencias_json.write_text(
         json.dumps(
-            [asdict(item) for item in context.pendencias],
+            {
+                "status": context.status,
+                "ready_to_send": context.ready_to_send,
+                "pendencias": public_pendencias,
+            },
             ensure_ascii=False,
             indent=2,
         )
@@ -94,23 +168,26 @@ def _write_sidecars(
     lines = [
         "# PEND\u00caNCIAS",
         "",
-        "Insumos ausentes, classificados por origem da Pend\u00eancia.",
+        (
+            "Estado: **COMPLETO** — nenhuma Pendência registrada."
+            if context.ready_to_send
+            else "Estado: **RASCUNHO** — existem Pendências a resolver."
+        ),
         "",
     ]
-    if context.pendencias:
+    if public_pendencias:
         lines.extend(
             (
-                "| Slot | Classifica\u00e7\u00e3o | Motivo | Evid\u00eancia |",
-                "| --- | --- | --- | --- |",
+                "| Slot | Nome | Página | Classe | Motivo | Ação necessária |",
+                "| --- | --- | --- | --- | --- | --- |",
             )
         )
         lines.extend(
-            f"| {item.slot} | {item.classification} | {item.reason} | "
-            f"`{item.evidence}` |"
+            f"| {item.slot} | {item.name} | {item.page} | "
+            f"{item.classification} | {item.reason} | "
+            f"{item.required_action} |"
             for item in context.pendencias
         )
-    else:
-        lines.append("Nenhuma Pend\u00eancia registrada.")
     pendencias_document.write_text(
         "\n".join(lines) + "\n", encoding="utf-8"
     )
@@ -152,6 +229,11 @@ def generate_report(
                 classification="GATED",
                 reason="valor nao fornecido no Gated Drop Folder",
                 evidence=evidence,
+                name=slot.replace("_", " "),
+                page="documento",
+                required_action=(
+                    f"Fornecer {slot.replace('_', ' ')} no valores.json"
+                ),
             )
         )
     values = {
@@ -161,10 +243,10 @@ def generate_report(
     token_bytes = {token: token.encode("ascii") for token in values}
 
     try:
-        with ZipFile(master_path) as source:
+        with ZipFile(master_path) as archive:
             entries = [
-                (item, source.read(item.filename))
-                for item in source.infolist()
+                (item, archive.read(item.filename))
+                for item in archive.infolist()
             ]
     except (BadZipFile, OSError, ValueError) as error:
         raise ReportGenerationError(
@@ -172,6 +254,12 @@ def generate_report(
         ) from error
 
     parts = {item.filename: content for item, content in entries}
+    try:
+        master_package = open_docx_package(master_path)
+    except (OSError, ValueError) as error:
+        raise ReportGenerationError(
+            f"{master_path}: invalid Master package: {error}"
+        ) from error
     artifacts: list[Artifact] = []
     claimed_media_parts: set[str] = set()
     supplied_images = gated.images_by_part()
@@ -185,19 +273,29 @@ def generate_report(
             continue
         claimed_media_parts.add(part_name)
         if supplied is not None:
-            _source_slot, source = supplied
-            content = source.read_bytes()
+            _source_slot, source_path = supplied
+            content = source_path.read_bytes()
             parts[part_name] = content
             artifacts.append(
                 Artifact(
                     digest=hashlib.sha256(content).hexdigest(),
                     origin="gated",
                     label=slot,
-                    source=str(source.resolve()),
+                    source=str(source_path.resolve()),
                 )
             )
         else:
-            content = parts[part_name]
+            required_action = f"Fornecer {slot} no Gated Drop Folder"
+            _document_slot, page = _media_location(
+                master_package, part_name
+            )
+            width, height = _placeholder_pixel_dimensions(
+                master_package, part_name
+            )
+            content = render_placeholder(
+                parts[part_name], "GATED", slot, width, height
+            )
+            parts[part_name] = content
             digest = hashlib.sha256(content).hexdigest()
             artifacts.append(
                 Artifact(
@@ -212,8 +310,56 @@ def generate_report(
                     classification="GATED",
                     reason="imagem nao fornecida no Gated Drop Folder",
                     evidence=digest,
+                    name=slot,
+                    page=page,
+                    required_action=required_action,
                 )
             )
+
+    for media in master_package.media:
+        if media.part_name in claimed_media_parts:
+            continue
+        if media.part_name in BOILERPLATE_MEDIA:
+            artifacts.append(
+                Artifact(
+                    digest=media.sha256,
+                    origin="boilerplate",
+                    label=media.part_name,
+                )
+            )
+            continue
+        slot, page = _media_location(master_package, media.part_name)
+        required_action = f"Investigar a falha e refazer a Capture de {page}"
+        width, height = _placeholder_pixel_dimensions(
+            master_package, media.part_name
+        )
+        content = render_placeholder(
+            parts[media.part_name],
+            "TOOL_BLOCKED",
+            page,
+            width,
+            height,
+        )
+        parts[media.part_name] = content
+        digest = hashlib.sha256(content).hexdigest()
+        artifacts.append(
+            Artifact(
+                digest=digest,
+                origin="placeholder",
+                label=slot,
+            )
+        )
+        pendencias.append(
+            Pendencia(
+                slot=slot,
+                classification="TOOL_BLOCKED",
+                reason="Capture nao produzida nesta etapa",
+                evidence=digest,
+                name=page,
+                page=page,
+                required_action=required_action,
+            )
+        )
 
     counts = {token: 0 for token in values}
     for item, _content in entries:
@@ -251,33 +397,6 @@ def generate_report(
         raise ReportGenerationError(
             f"generated DOCX package is invalid: {error}"
         ) from error
-    for media in package.media:
-        if media.part_name in claimed_media_parts:
-            continue
-        if media.part_name in BOILERPLATE_MEDIA:
-            artifacts.append(
-                Artifact(
-                    digest=media.sha256,
-                    origin="boilerplate",
-                    label=media.part_name,
-                )
-            )
-            continue
-        artifacts.append(
-            Artifact(
-                digest=media.sha256,
-                origin="placeholder",
-                label=media.part_name,
-            )
-        )
-        pendencias.append(
-            Pendencia(
-                slot=f"capture:{media.part_name}",
-                classification="TOOL_BLOCKED",
-                reason="Capture ainda nao produzida nesta etapa",
-                evidence=media.sha256,
-            )
-        )
     boilerplate_links = frozenset(
         relationship.target
         for relationship in package.relationships

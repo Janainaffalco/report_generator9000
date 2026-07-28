@@ -70,6 +70,10 @@ def main(argv: Sequence[str] | None = None) -> int:
                     arguments.gated_drop_root,
                 )
                 print(f"DOCX\t{generated.document.resolve()}")
+                print(
+                    f"STATUS\t{generated.status.upper()}\t"
+                    f"{generated.document.resolve()}"
+                )
             elif isinstance(outcome, StopCondition):
                 print(
                     f"STOP CONDITION\t{arguments.linha}\t{outcome.cause}"
