@@ -20,6 +20,14 @@ from .gated_inputs import (
     load_gated_inputs,
 )
 from .placeholders import render_placeholder, slot_pixel_dimensions
+from .prose import (
+    ExtractedPageText,
+    ProseBudgetExceeded,
+    ProseConfig,
+    ProseProvider,
+    draft_prose,
+)
+from .lista_paginas import Pagina, derive_lista_paginas
 from .run_context import Artifact, Pendencia, RunContext
 
 
@@ -52,6 +60,15 @@ class GeneratedReport:
 
 class ReportGenerationError(ValueError):
     """The Master cannot safely produce the requested report."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        pendencia: Pendencia | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.pendencia = pendencia
 
 
 def _media_location(
@@ -124,6 +141,9 @@ def _context_document(context: RunContext) -> dict[str, object]:
         "output_paths": list(context.output_paths),
         "blocks": list(context.blocks),
         "pendencias": [asdict(item) for item in context.pendencias],
+        "prose_grounding": [
+            asdict(item) for item in context.prose_grounding
+        ],
     }
 
 
@@ -199,6 +219,12 @@ def generate_report(
     output_root: str | Path,
     engagement: Engagement,
     gated_drop_root: str | Path | None = None,
+    *,
+    pages: tuple[Pagina, ...] | None = None,
+    site_text: tuple[ExtractedPageText, ...] = (),
+    prose_provider: ProseProvider | None = None,
+    prose_config: ProseConfig | None = None,
+    no_llm: bool = False,
 ) -> GeneratedReport:
     """Clone *master* and fill spreadsheet and available Gated Inputs."""
     master_path = Path(master)
@@ -211,13 +237,41 @@ def generate_report(
     except GatedInputError as error:
         raise ReportGenerationError(str(error)) from error
 
+    drafted = None
+    if no_llm or prose_provider is not None or prose_config is not None:
+        selected_pages = (
+            derive_lista_paginas(
+                engagement.capture_origin,
+                gated.declared_pages,
+            )
+            if pages is None
+            else pages
+        )
+        try:
+            drafted = draft_prose(
+                selected_pages,
+                site_text,
+                prose_provider,
+                prose_config,
+                no_llm=no_llm,
+            )
+        except ProseBudgetExceeded as error:
+            raise ReportGenerationError(
+                "TOOL_BLOCKED: prose provider exhausted its output budget",
+                pendencia=error.pendencia,
+            ) from error
+
     replacement_text = {
         token: str(getattr(engagement, field))
         for token, field in SPREADSHEET_TOKENS.items()
     }
     supplied_gated_values = gated.values_by_token()
     replacement_text.update(supplied_gated_values)
-    pendencias: list[Pendencia] = []
+    pendencias: list[Pendencia] = (
+        [] if drafted is None else list(drafted.pendencias)
+    )
+    if drafted is not None:
+        replacement_text.update(drafted.token_values)
     for slot, tokens in GATED_VALUE_SLOTS:
         if all(token in supplied_gated_values for token in tokens):
             continue
@@ -411,6 +465,9 @@ def generate_report(
         ),
         output_paths=(str(output.resolve()),),
         pendencias=tuple(pendencias),
+        prose_grounding=(
+            () if drafted is None else drafted.grounding
+        ),
     )
     context_path, pendencias_document, pendencias_json = _write_sidecars(
         output, context

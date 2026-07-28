@@ -119,6 +119,11 @@ it. Expected; not a defect.
 Placeholder class meaning the content should have been captured automatically but the
 attempt failed. Always a defect requiring investigation.
 
+**REVIEW**:
+Pendência class meaning content was generated from observed facts but still requires a
+human approval before the report can be sent. The content is present and source-grounded;
+it is neither a Placeholder nor a Gated Input.
+
 **Provenance**:
 The record of where each artifact in a finished report came from — Boilerplate, a Capture from
 this run, or a Gated Input from this run's drop folder. Anything present in an output without

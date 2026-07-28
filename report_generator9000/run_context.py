@@ -9,7 +9,7 @@ from typing import Any, Mapping
 
 
 ORIGINS = ("boilerplate", "capture", "gated", "placeholder")
-CLASSIFICATIONS = ("GATED", "TOOL_BLOCKED")
+CLASSIFICATIONS = ("GATED", "TOOL_BLOCKED", "REVIEW")
 
 
 @dataclass(frozen=True)
@@ -36,6 +36,15 @@ class Pendencia:
 
 
 @dataclass(frozen=True)
+class Grounding:
+    """One generated field's exact evidence from a Capture Origin."""
+
+    field: str
+    capture_origin: str
+    excerpt: str
+
+
+@dataclass(frozen=True)
 class RunContext:
     pasta: str = ""
     media: tuple[Artifact, ...] = ()
@@ -46,6 +55,7 @@ class RunContext:
     output_paths: tuple[str, ...] = ()
     blocks: tuple[str, ...] = ()
     pendencias: tuple[Pendencia, ...] = ()
+    prose_grounding: tuple[Grounding, ...] = ()
 
     @property
     def ready_to_send(self) -> bool:
@@ -166,6 +176,20 @@ def _pendencia(value: Any, where: str) -> Pendencia:
     )
 
 
+def _grounding(value: Any, where: str) -> Grounding:
+    mapping = _require_mapping(value, where)
+    _reject_unknown(
+        mapping,
+        ("field", "capture_origin", "excerpt"),
+        where,
+    )
+    return Grounding(
+        field=_require_str(mapping, "field", where),
+        capture_origin=_require_str(mapping, "capture_origin", where),
+        excerpt=_require_str(mapping, "excerpt", where),
+    )
+
+
 def parse_run_context(document: Any) -> RunContext:
     """Build a RunContext from decoded JSON, rejecting anything unknown."""
     mapping = _require_mapping(document, "run context")
@@ -181,6 +205,7 @@ def parse_run_context(document: Any) -> RunContext:
             "output_paths",
             "blocks",
             "pendencias",
+            "prose_grounding",
         ),
         "run context",
     )
@@ -197,6 +222,10 @@ def parse_run_context(document: Any) -> RunContext:
     pendencias = tuple(
         _pendencia(item, f"run context.pendencias[{index}]")
         for index, item in enumerate(mapping.get("pendencias", []))
+    )
+    prose_grounding = tuple(
+        _grounding(item, f"run context.prose_grounding[{index}]")
+        for index, item in enumerate(mapping.get("prose_grounding", []))
     )
     return RunContext(
         pasta=pasta,
@@ -219,6 +248,7 @@ def parse_run_context(document: Any) -> RunContext:
         ),
         blocks=_string_tuple(mapping.get("blocks", []), "run context.blocks"),
         pendencias=pendencias,
+        prose_grounding=prose_grounding,
     )
 
 

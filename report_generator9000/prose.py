@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from typing import Protocol
 
 from .lista_paginas import Pagina
-from .run_context import Pendencia
+from .run_context import Grounding, Pendencia
 
 
 _RAW_MARKUP = re.compile(r"<[A-Za-z][^>]*>")
@@ -17,12 +17,12 @@ _RAW_MARKUP = re.compile(r"<[A-Za-z][^>]*>")
 class ExtractedPageText:
     """Visible page text extracted by script, never raw markup."""
 
-    url: str
+    capture_origin: str
     text: str
 
     def __post_init__(self) -> None:
-        if not self.url.strip():
-            raise ValueError("extracted page URL must be non-empty")
+        if not self.capture_origin.strip():
+            raise ValueError("Capture Origin must be non-empty")
         if not self.text.strip():
             raise ValueError("extracted page text must be non-empty")
         if _RAW_MARKUP.search(self.text):
@@ -49,13 +49,30 @@ class ProseConfig:
 class ProseRequest:
     """The complete grounding surface visible to a provider."""
 
-    site_text: tuple[ExtractedPageText, ...]
+    site_text: tuple[ProviderPageText, ...]
+
+
+@dataclass(frozen=True)
+class ProviderPageText:
+    """Opaque source identity plus text; it cannot be used for research."""
+
+    source_id: str
+    text: str
+
+
+@dataclass(frozen=True)
+class GroundingCitation:
+    """An exact excerpt from one opaque provider input."""
+
+    source_id: str
+    excerpt: str
 
 
 @dataclass(frozen=True)
 class GroundedField:
     value: str | None
     grounded: bool
+    citations: tuple[GroundingCitation, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -81,6 +98,7 @@ class ProseProvider(Protocol):
 class DraftedProse:
     token_values: dict[str, str]
     pendencias: tuple[Pendencia, ...]
+    grounding: tuple[Grounding, ...] = ()
 
 
 class ProseBudgetExceeded(RuntimeError):
@@ -138,34 +156,56 @@ def _field_value(
     slot: str,
     name: str,
     gap_reason: str,
-) -> tuple[str, Pendencia]:
+    provider_pages: dict[str, ProviderPageText],
+    extracted_pages: dict[str, ExtractedPageText],
+) -> tuple[str, Pendencia, tuple[Grounding, ...]]:
+    citations_are_exact = bool(field.citations) and all(
+        citation.source_id in provider_pages
+        and citation.excerpt.strip()
+        and citation.excerpt in provider_pages[citation.source_id].text
+        for citation in field.citations
+    )
     if (
         not field.grounded
         or field.value is None
         or not field.value.strip()
+        or not citations_are_exact
     ):
-        return _gap(
+        marker, pendencia = _gap(
             slot=slot,
             name=name,
             classification="TOOL_BLOCKED",
             reason=gap_reason,
         )
+        return marker, pendencia, ()
     text = field.value.strip()
-    return text, Pendencia(
-        slot=slot,
-        classification="GATED",
-        reason="texto gerado requer revisão humana antes da entrega",
-        evidence=text,
-        name=name,
-        page="BRIEFING INICIAL PARA DEFINIÇÃO DO ESCOPO",
-        required_action=f"Revisar {name} contra o texto do site",
+    grounding = tuple(
+        Grounding(
+            field=slot,
+            capture_origin=extracted_pages[citation.source_id].capture_origin,
+            excerpt=citation.excerpt,
+        )
+        for citation in field.citations
+    )
+    return (
+        text,
+        Pendencia(
+            slot=slot,
+            classification="REVIEW",
+            reason="texto gerado requer revisão humana antes da entrega",
+            evidence=text,
+            name=name,
+            page="BRIEFING INICIAL PARA DEFINIÇÃO DO ESCOPO",
+            required_action=f"Revisar {name} contra o texto do site",
+        ),
+        grounding,
     )
 
 
 def draft_prose(
     pages: tuple[Pagina, ...],
     site_text: tuple[ExtractedPageText, ...],
-    provider: ProseProvider,
+    provider: ProseProvider | None,
     config: ProseConfig | None,
     *,
     no_llm: bool = False,
@@ -195,8 +235,19 @@ def draft_prose(
         )
     if config is None:
         raise ValueError("prose configuration is required unless --no-llm")
+    if provider is None:
+        raise ValueError("prose provider is required unless --no-llm")
+    provider_text = tuple(
+        ProviderPageText(source_id=f"page-{index}", text=page.text)
+        for index, page in enumerate(site_text, start=1)
+    )
+    provider_pages = {page.source_id: page for page in provider_text}
+    extracted_pages = {
+        f"page-{index}": page
+        for index, page in enumerate(site_text, start=1)
+    }
     response = provider.generate(
-        ProseRequest(site_text=site_text),
+        ProseRequest(site_text=provider_text),
         config,
     )
     if response.output_budget_exhausted:
@@ -213,17 +264,21 @@ def draft_prose(
                 ),
             )
         )
-    company, company_review = _field_value(
+    company, company_review, company_grounding = _field_value(
         response.company_description,
         slot="descricao_empresa",
         name="descrição da empresa",
         gap_reason="descrição da empresa sem base no site",
+        provider_pages=provider_pages,
+        extracted_pages=extracted_pages,
     )
-    objective, objective_review = _field_value(
+    objective, objective_review, objective_grounding = _field_value(
         response.briefing_objective,
         slot="objetivo_briefing",
         name="objetivo do briefing",
         gap_reason="objetivo do briefing sem base no site",
+        provider_pages=provider_pages,
+        extracted_pages=extracted_pages,
     )
     return DraftedProse(
         token_values={
@@ -232,16 +287,19 @@ def draft_prose(
             "{{LISTA_DE_PAGINAS}}": deterministic,
         },
         pendencias=(company_review, objective_review),
+        grounding=(*company_grounding, *objective_grounding),
     )
 
 
 __all__ = [
     "DraftedProse",
     "ExtractedPageText",
+    "GroundingCitation",
     "GroundedField",
     "ProseBudgetExceeded",
     "ProseConfig",
     "ProseProvider",
+    "ProviderPageText",
     "ProseRequest",
     "ProseResponse",
     "deterministic_page_paragraph",

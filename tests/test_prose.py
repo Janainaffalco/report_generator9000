@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+from datetime import datetime
+import json
+from pathlib import Path
+
 import pytest
 
 from report_generator9000.lista_paginas import (
@@ -8,8 +12,16 @@ from report_generator9000.lista_paginas import (
     PAGINA_PRINCIPAL,
     Pagina,
 )
+from report_generator9000.control_sheet import Engagement
+from report_generator9000.generate import (
+    ReportGenerationError,
+    generate_report,
+)
+from report_generator9000.generate_cli import build_parser
+from report_generator9000.master import build_master
 from report_generator9000.prose import (
     ExtractedPageText,
+    GroundingCitation,
     GroundedField,
     ProseBudgetExceeded,
     ProseConfig,
@@ -17,6 +29,8 @@ from report_generator9000.prose import (
     ProseResponse,
     draft_prose,
 )
+from report_generator9000.docx_package import open_docx_package
+from tests.test_master_build import approved_source
 
 
 PAGES = (
@@ -48,13 +62,21 @@ PAGES = (
 )
 SITE_TEXT = (
     ExtractedPageText(
-        url="https://example.test/",
+        capture_origin="https://example.test/",
         text="A Acme fabrica componentes industriais desde 1998.",
     ),
     ExtractedPageText(
-        url="https://example.test/servicos",
+        capture_origin="https://example.test/servicos",
         text="Projetamos componentes sob medida para linhas de produção.",
     ),
+)
+COMPANY_CITATION = GroundingCitation(
+    source_id="page-1",
+    excerpt="A Acme fabrica componentes industriais desde 1998.",
+)
+OBJECTIVE_CITATION = GroundingCitation(
+    source_id="page-2",
+    excerpt="Projetamos componentes sob medida para linhas de produção.",
 )
 
 
@@ -78,10 +100,12 @@ def test_grounded_provider_authors_only_two_fields_and_pages_are_deterministic()
             company_description=GroundedField(
                 "A Acme fabrica componentes industriais.",
                 grounded=True,
+                citations=(COMPANY_CITATION,),
             ),
             briefing_objective=GroundedField(
                 "O projeto tem como objetivo apresentar os componentes da Acme.",
                 grounded=True,
+                citations=(OBJECTIVE_CITATION,),
             ),
         )
     )
@@ -101,19 +125,46 @@ def test_grounded_provider_authors_only_two_fields_and_pages_are_deterministic()
     }
     assert len(provider.calls) == 1
     request, received_config = provider.calls[0]
-    assert request.site_text == SITE_TEXT
+    assert [item.source_id for item in request.site_text] == [
+        "page-1",
+        "page-2",
+    ]
+    assert [item.text for item in request.site_text] == [
+        item.text for item in SITE_TEXT
+    ]
+    assert not hasattr(request.site_text[0], "capture_origin")
     assert received_config is config
     assert len(drafted.pendencias) == 2
+    assert all(
+        item.classification == "REVIEW" for item in drafted.pendencias
+    )
     assert all("Revisar" in item.required_action for item in drafted.pendencias)
     assert all(item.evidence in drafted.token_values.values() for item in drafted.pendencias)
+    assert [item.capture_origin for item in drafted.grounding] == [
+        "https://example.test/",
+        "https://example.test/servicos",
+    ]
+    assert [item.excerpt for item in drafted.grounding] == [
+        COMPANY_CITATION.excerpt,
+        OBJECTIVE_CITATION.excerpt,
+    ]
 
 
 @pytest.mark.parametrize(
     ("company", "objective"),
     [
-        (GroundedField(None, grounded=True), GroundedField("Objetivo", True)),
-        (GroundedField("Empresa", grounded=False), GroundedField("Objetivo", True)),
-        (GroundedField("Empresa", grounded=True), GroundedField(None, False)),
+        (
+            GroundedField(None, grounded=True),
+            GroundedField("Objetivo", True, (OBJECTIVE_CITATION,)),
+        ),
+        (
+            GroundedField("Empresa", grounded=False),
+            GroundedField("Objetivo", True, (OBJECTIVE_CITATION,)),
+        ),
+        (
+            GroundedField("Empresa", True, (COMPANY_CITATION,)),
+            GroundedField(None, False),
+        ),
     ],
 )
 def test_null_or_ungrounded_fields_become_marked_gaps(
@@ -199,6 +250,137 @@ def test_no_llm_completes_with_marked_gaps_without_calling_provider() -> None:
 def test_provider_input_type_rejects_raw_markup() -> None:
     with pytest.raises(ValueError, match="raw markup"):
         ExtractedPageText(
-            url="https://example.test/",
+            capture_origin="https://example.test/",
             text="<main>Texto do site</main>",
         )
+
+
+def test_grounded_claim_without_exact_site_excerpt_becomes_a_gap() -> None:
+    provider = CannedProvider(
+        ProseResponse(
+            company_description=GroundedField(
+                "A Acme é líder mundial.",
+                True,
+                (
+                    GroundingCitation(
+                        source_id="page-1",
+                        excerpt="líder mundial",
+                    ),
+                ),
+            ),
+            briefing_objective=GroundedField(
+                "Objetivo",
+                True,
+                (OBJECTIVE_CITATION,),
+            ),
+        )
+    )
+
+    drafted = draft_prose(
+        PAGES,
+        SITE_TEXT,
+        provider,
+        ProseConfig(model="m", output_budget=500),
+    )
+
+    assert drafted.token_values["{{SOBRE_A_EMPRESA}}"].startswith(
+        "[PENDÊNCIA TOOL_BLOCKED:"
+    )
+
+
+def _engagement() -> Engagement:
+    return Engagement(
+        row_number=2,
+        demanda="011616/2026",
+        pasta="40-2026",
+        razao_social="CLIENTE",
+        cnpj="52.052.612/0001-21",
+        kick_off=datetime(2026, 4, 15),
+        especialista="Especialista",
+        capture_origin="https://example.test/",
+        published_domain=None,
+    )
+
+
+def test_no_llm_reaches_the_report_and_pendencias_sidecars(
+    tmp_path: Path,
+) -> None:
+    master = build_master(
+        approved_source(tmp_path / "approved.docx"),
+        tmp_path / "master",
+    ).master
+
+    generated = generate_report(
+        master,
+        tmp_path / "reports",
+        _engagement(),
+        tmp_path / "absent-gated",
+        pages=PAGES,
+        no_llm=True,
+    )
+
+    package = open_docx_package(generated.document)
+    text = "\n".join(part.text or "" for part in package.parts)
+    assert "{{SOBRE_A_EMPRESA}}" not in text
+    assert "{{BRIEFING_INICIAL}}" not in text
+    assert "{{LISTA_DE_PAGINAS}}" not in text
+    assert "[PENDÊNCIA GATED: descrição da empresa não gerada (--no-llm)]" in text
+    assert "Home, Serviços e Política de Privacidade" in text
+    assert {
+        item.slot
+        for item in generated.context.pendencias
+    }.issuperset({"descricao_empresa", "objetivo_briefing"})
+    sidecar = json.loads(generated.context_document.read_text(encoding="utf-8"))
+    assert sidecar["prose_grounding"] == []
+
+
+def test_budget_failure_stops_report_generation_with_tool_classification(
+    tmp_path: Path,
+) -> None:
+    master = build_master(
+        approved_source(tmp_path / "approved.docx"),
+        tmp_path / "master",
+    ).master
+    provider = CannedProvider(
+        ProseResponse(
+            company_description=GroundedField("Parcial", True),
+            briefing_objective=GroundedField("Parcial", True),
+            output_budget_exhausted=True,
+        )
+    )
+
+    with pytest.raises(ReportGenerationError) as raised:
+        generate_report(
+            master,
+            tmp_path / "reports",
+            _engagement(),
+            tmp_path / "absent-gated",
+            pages=PAGES,
+            site_text=SITE_TEXT,
+            prose_provider=provider,
+            prose_config=ProseConfig("configured", 17),
+        )
+
+    assert raised.value.pendencia is not None
+    assert raised.value.pendencia.classification == "TOOL_BLOCKED"
+    assert not list((tmp_path / "reports").rglob("*.docx"))
+
+
+def test_cli_exposes_no_llm_model_and_budget_configuration() -> None:
+    parser = build_parser()
+
+    no_llm = parser.parse_args(["--linha", "40-2026", "--no-llm"])
+    configured = parser.parse_args(
+        [
+            "--linha",
+            "40-2026",
+            "--prose-model",
+            "configured-model",
+            "--prose-output-budget",
+            "730",
+        ]
+    )
+
+    assert no_llm.no_llm is True
+    assert configured.prose_model == "configured-model"
+    assert configured.prose_output_budget == 730

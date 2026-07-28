@@ -14,6 +14,7 @@ from .control_sheet import (
 )
 from .generate import generate_report
 from .gated_inputs import load_gated_inputs
+from .prose import ProseConfig, ProseProvider
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -48,12 +49,56 @@ def build_parser() -> argparse.ArgumentParser:
         default=Path("gated"),
         help="root containing one Pasta + Razao Social Gated Drop Folder",
     )
+    parser.add_argument(
+        "--no-llm",
+        action="store_true",
+        help="skip the prose provider and insert marked prose gaps",
+    )
+    parser.add_argument(
+        "--prose-model",
+        help="configured model identifier for the injected prose provider",
+    )
+    parser.add_argument(
+        "--prose-output-budget",
+        type=int,
+        help="measured maximum output tokens for the prose provider",
+    )
     return parser
 
 
-def main(argv: Sequence[str] | None = None) -> int:
+def main(
+    argv: Sequence[str] | None = None,
+    *,
+    prose_provider: ProseProvider | None = None,
+) -> int:
     parser = build_parser()
     arguments = parser.parse_args(argv)
+    if arguments.no_llm and (
+        arguments.prose_model is not None
+        or arguments.prose_output_budget is not None
+    ):
+        parser.error("--no-llm cannot be combined with prose model settings")
+    configured = (
+        arguments.prose_model is not None
+        or arguments.prose_output_budget is not None
+    )
+    if configured and (
+        arguments.prose_model is None
+        or arguments.prose_output_budget is None
+    ):
+        parser.error(
+            "--prose-model and --prose-output-budget must be set together"
+        )
+    prose_config = (
+        None
+        if not configured
+        else ProseConfig(
+            model=arguments.prose_model,
+            output_budget=arguments.prose_output_budget,
+        )
+    )
+    if prose_config is not None and prose_provider is None:
+        parser.error("a prose provider must be injected for model mode")
     try:
         outcomes = read_control_sheet_for_pasta(
             arguments.planilha, arguments.linha
@@ -68,6 +113,9 @@ def main(argv: Sequence[str] | None = None) -> int:
                     arguments.saida,
                     outcome,
                     arguments.gated_drop_root,
+                    prose_provider=prose_provider,
+                    prose_config=prose_config,
+                    no_llm=arguments.no_llm,
                 )
                 print(f"DOCX\t{generated.document.resolve()}")
                 print(
