@@ -105,6 +105,14 @@ _Avoid_: manual input, missing data
 The per-engagement directory a consultant fills with Gated Inputs before a run. Its contents
 are consumed if present; absence is normal and never an error.
 
+**Derived**:
+An artifact the pipeline generates from declarations it observed at the Capture Origin,
+rather than photographing or being handed — today, the colour palette. Every Derived
+artifact carries a Grounding citation naming the exact declaration it came from, so it is
+auditable the same way generated prose is. Never a Capture, because nothing was
+photographed; never Boilerplate, because it differs per client.
+_Avoid_: computed, inferred, generated image
+
 ### Gaps
 
 **Placeholder**:
@@ -119,6 +127,15 @@ it. Expected; not a defect.
 Placeholder class meaning the content should have been captured automatically but the
 attempt failed. Always a defect requiring investigation.
 
+**UNDECLARED**:
+Placeholder class meaning the site declares the content nowhere machine-readable, so the
+pipeline cannot derive it without guessing. The content is public and a human can obtain it
+in seconds — it is neither behind authentication nor a failure of the automation. Distinct
+from GATED, which is about access, and from TOOL_BLOCKED, which is always a defect;
+UNDECLARED is expected on a meaningful minority of sites and must never be investigated as
+a bug.
+_Avoid_: missing, not found, unavailable
+
 **REVIEW**:
 Pendência class meaning content was generated from observed facts but still requires a
 human approval before the report can be sent. The content is present and source-grounded;
@@ -126,7 +143,8 @@ it is neither a Placeholder nor a Gated Input.
 
 **Provenance**:
 The record of where each artifact in a finished report came from — Boilerplate, a Capture from
-this run, or a Gated Input from this run's drop folder. Anything present in an output without
+this run, a Gated Input from this run's drop folder, or a Derived artifact built from
+declarations observed at this run's Capture Origin. Anything present in an output without
 Provenance is contamination by definition, regardless of what it contains.
 _Avoid_: audit trail, source tracking
 
