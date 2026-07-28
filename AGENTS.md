@@ -15,7 +15,10 @@ runs **unattended to completion**, review the rendered preview, download `.docx`
 There are no interactive steps inside generation — no prompts, no confirmations, no
 consultant-in-the-loop cropping or selection. Anything a consultant might want to adjust is
 adjusted in Word afterwards, during review, which is where they are already working.
-Finished runs stay on the machine.
+
+It is **VPS-deployed**, not local. Finished runs are retained for **7 days**, to enable
+caching and reruns rather than as an archive — treat anything older as gone and
+re-derivable from the spreadsheet and the site.
 
 The consequence for design decisions: when a step is ambiguous, the pipeline must **decide
 or stop**, never ask. A Stop Condition, a Placeholder with its class, or a Pendência are the
