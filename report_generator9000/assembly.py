@@ -3,20 +3,17 @@
 from __future__ import annotations
 
 import tempfile
-import textwrap
 import hashlib
 from io import BytesIO
 from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import Protocol
 
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image
 
 from .artifact_paths import engagement_artifact_key
 from .block_stamping import BlockImage, stamp_blocks
 from .capture import CaptureRun, capture_site, extract_site_text
 from .control_sheet import Engagement
-from .docx_package import open_docx_package
 from .generate import (
     GeneratedReport,
     _write_sidecars,
@@ -26,67 +23,8 @@ from .gated_inputs import load_gated_inputs
 from .lista_paginas import Pagina, derive_lista_paginas
 from .prose import ProseConfig, ProseProvider
 from .placeholders import render_placeholder
+from .previews import DocumentPreviewRenderer, PreviewRenderer
 from .run_context import Pendencia
-
-
-class PreviewRenderer(Protocol):
-    """Optional QA renderer; delivery never depends on headless office."""
-
-    def render(
-        self,
-        document: Path,
-        output_folder: Path,
-    ) -> tuple[Path, ...]: ...
-
-
-class TextPreviewRenderer:
-    """Built-in PNG content previews requiring no office installation."""
-
-    page_size = (1240, 1754)
-    margin = 80
-
-    def render(
-        self,
-        document: Path,
-        output_folder: Path,
-    ) -> tuple[Path, ...]:
-        package = open_docx_package(document)
-        lines = ["QA PREVIEW — confirme o layout final no Word", ""]
-        for paragraph in package.paragraphs:
-            text = paragraph.text.strip()
-            if text:
-                lines.extend(textwrap.wrap(text, width=82) or [""])
-                lines.append("")
-        output_folder.mkdir(parents=True, exist_ok=True)
-        font = ImageFont.truetype(
-            str(
-                Path(__file__).parent
-                / "assets"
-                / "Montserrat-wght.ttf"
-            ),
-            25,
-        )
-        line_height = 36
-        capacity = max(
-            1,
-            (self.page_size[1] - 2 * self.margin) // line_height,
-        )
-        pages = [
-            lines[index : index + capacity]
-            for index in range(0, len(lines), capacity)
-        ] or [[]]
-        rendered = []
-        for index, page_lines in enumerate(pages, start=1):
-            image = Image.new("RGB", self.page_size, "white")
-            draw = ImageDraw.Draw(image)
-            y = self.margin
-            for line in page_lines:
-                draw.text((self.margin, y), line, fill="black", font=font)
-                y += line_height
-            path = output_folder / f"preview-{index:03d}.png"
-            image.save(path, format="PNG", optimize=True)
-            rendered.append(path.resolve())
-        return tuple(rendered)
 
 
 @dataclass(frozen=True)
@@ -213,7 +151,7 @@ def assemble_output_package(
         )
 
     renderer = (
-        TextPreviewRenderer()
+        DocumentPreviewRenderer()
         if preview_renderer is None
         else preview_renderer
     )
@@ -269,6 +207,5 @@ def assemble_output_package(
 __all__ = [
     "OutputPackage",
     "PreviewRenderer",
-    "TextPreviewRenderer",
     "assemble_output_package",
 ]

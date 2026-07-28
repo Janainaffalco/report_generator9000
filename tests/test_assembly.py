@@ -61,6 +61,17 @@ def test_one_engagement_directory_contains_the_complete_handoff_package(
         ),
         encoding="utf-8",
     )
+    stale_directory = tmp_path / "outputs" / "40-2026_CLIENTE"
+    stale_preview = stale_directory / "previews" / "preview-999.png"
+    stale_raw = stale_directory / "capturas" / "99-stale.png"
+    stale_embedding = (
+        stale_directory / "capturas" / "embutir" / "99-stale.png"
+    )
+    stale_preview.parent.mkdir(parents=True)
+    stale_embedding.parent.mkdir(parents=True)
+    stale_preview.write_bytes(b"stale preview")
+    stale_raw.write_bytes(b"stale raw capture")
+    stale_embedding.write_bytes(b"stale embedding")
 
     with serve_fixture_site() as origin:
         package = assemble_output_package(
@@ -83,10 +94,23 @@ def test_one_engagement_directory_contains_the_complete_handoff_package(
     assert package.raw_captures
     assert all(path.parent.name == "capturas" for path in package.raw_captures)
     assert all(path.exists() for path in package.previews + package.raw_captures)
+    assert not stale_preview.exists()
+    assert not stale_raw.exists()
+    assert not stale_embedding.exists()
 
+    preview_has_site_color = False
     for preview in package.previews:
         with Image.open(preview) as image:
             assert image.size == (1240, 1754)
+            colors = image.convert("RGB").resize((200, 200)).getcolors(
+                maxcolors=1_000_000
+            )
+            assert colors is not None
+            preview_has_site_color = preview_has_site_color or any(
+                green > 110 and red < 170
+                for _count, (red, green, _blue) in colors
+            )
+    assert preview_has_site_color
     assert any(
         capture.raw_width > capture.embedding_width
         for capture in package.capture_run.captures
