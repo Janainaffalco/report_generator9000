@@ -12,7 +12,15 @@ node_modules/
 dist/
 *.generated.py
 
-# only index src/, ignore everything else
+# only index source and test trees; ignore everything else
 *
 !src/
 !src/**
+!report_generator9000/
+!report_generator9000/**
+!tests/
+!tests/**
+!.github/
+!.github/**
+__pycache__/
+*.py[cod]

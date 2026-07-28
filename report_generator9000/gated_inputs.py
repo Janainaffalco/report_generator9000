@@ -11,7 +11,7 @@ from urllib.parse import urlparse
 
 from .artifact_paths import engagement_artifact_key
 from .control_sheet import Engagement
-
+from .lista_paginas import DeclaredPage
 
 VALUES_FILE = "valores.json"
 GATED_VALUE_SLOTS = (
@@ -42,6 +42,7 @@ GATED_IMAGE_PARTS = (
 _VALUE_KEYS = frozenset(
     {"pasta", "razao_social"}
     | {slot for slot, _tokens in GATED_VALUE_SLOTS}
+    | {"lista_paginas"}
 )
 _IGNORED_FILES = frozenset({".gitkeep", "README.md"})
 _DOMAIN = re.compile(
@@ -58,6 +59,7 @@ class GatedInputs:
     folder: Path | None
     token_values: tuple[tuple[str, str], ...] = ()
     images: tuple[tuple[str, Path, str], ...] = ()
+    declared_pages: tuple[DeclaredPage, ...] | None = None
 
     def values_by_token(self) -> dict[str, str]:
         return dict(self.token_values)
@@ -146,6 +148,36 @@ def _token_values(document: dict[str, object]) -> tuple[tuple[str, str], ...]:
     return tuple(values)
 
 
+def _declared_pages(
+    document: dict[str, object],
+) -> tuple[DeclaredPage, ...] | None:
+    if "lista_paginas" not in document:
+        return None
+    supplied = document["lista_paginas"]
+    if not isinstance(supplied, list) or not supplied:
+        raise GatedInputError(
+            f"{VALUES_FILE}.lista_paginas must be a non-empty list"
+        )
+    pages: list[DeclaredPage] = []
+    for index, value in enumerate(supplied):
+        where = f"{VALUES_FILE}.lista_paginas[{index}]"
+        if not isinstance(value, dict):
+            raise GatedInputError(f"{where} must be an object")
+        unknown = sorted(set(value) - {"tipo", "rotulo", "url"})
+        if unknown:
+            raise GatedInputError(
+                f"{where} has unknown field(s): {', '.join(unknown)}"
+            )
+        try:
+            tipo = _required_text(value, "tipo")
+            rotulo = _required_text(value, "rotulo")
+            url = _required_text(value, "url")
+            pages.append(DeclaredPage(tipo=tipo, rotulo=rotulo, url=url))
+        except (GatedInputError, ValueError) as error:
+            raise GatedInputError(f"{where}: {error}") from error
+    return tuple(pages)
+
+
 def load_gated_inputs(
     gated_drop_root: str | Path, engagement: Engagement
 ) -> GatedInputs:
@@ -226,6 +258,7 @@ def load_gated_inputs(
         folder=folder,
         token_values=_token_values(document),
         images=images,
+        declared_pages=_declared_pages(document),
     )
 
 
