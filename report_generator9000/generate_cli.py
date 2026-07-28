@@ -16,6 +16,11 @@ from .control_sheet import (
 )
 from .gated_inputs import load_gated_inputs
 from .generate import generate_report
+from .gemini_provider import (
+    GeminiProseProvider,
+    GeminiProviderError,
+    GeminiSettings,
+)
 from .lista_paginas import derive_lista_paginas
 from .prose import ProseConfig, ProseProvider
 
@@ -59,19 +64,25 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--prose-model",
-        help="configured model identifier for the injected prose provider",
+        help=(
+            "model identifier (defaults to GEMINI_MODEL for the built-in "
+            "Gemini provider)"
+        ),
     )
     parser.add_argument(
         "--prose-output-budget",
         type=int,
-        help="measured maximum output tokens for the prose provider",
+        help=(
+            "maximum output tokens (defaults to GEMINI_OUTPUT_BUDGET for "
+            "the built-in Gemini provider)"
+        ),
     )
     parser.add_argument(
         "--prose-provider",
         metavar="MODULE:ATTRIBUTE",
         help=(
-            "load a ProseProvider instance or zero-argument factory for "
-            "grounded model mode"
+            "override Gemini by loading a ProseProvider instance or "
+            "zero-argument factory"
         ),
     )
     parser.add_argument(
@@ -112,41 +123,39 @@ def main(
         or arguments.prose_provider is not None
     ):
         parser.error("--no-llm cannot be combined with prose model settings")
-    configured = (
-        arguments.prose_model is not None
-        or arguments.prose_output_budget is not None
-        or arguments.prose_provider is not None
-    )
-    if configured and (
-        arguments.prose_model is None
-        or arguments.prose_output_budget is None
-    ):
-        parser.error(
-            "--prose-model and --prose-output-budget must be set together"
-        )
-    prose_config = (
-        None
-        if not configured
-        else ProseConfig(
-            model=arguments.prose_model,
-            output_budget=arguments.prose_output_budget,
-        )
-    )
-    if not arguments.no_llm and not configured and prose_provider is None:
-        parser.error(
-            "choose --no-llm or configure prose provider, model, and budget"
-        )
+    prose_config: ProseConfig | None = None
+    managed_gemini_provider: GeminiProseProvider | None = None
     if prose_provider is None and arguments.prose_provider is not None:
         try:
             prose_provider = load_prose_provider(arguments.prose_provider)
         except (ImportError, AttributeError, TypeError, ValueError) as error:
             parser.error(str(error))
     if not arguments.no_llm and prose_provider is None:
-        parser.error("a prose provider is required for model mode")
-    if not arguments.no_llm and prose_config is None:
-        parser.error(
-            "--prose-model and --prose-output-budget are required "
-            "for model mode"
+        try:
+            settings = GeminiSettings.from_environment()
+            managed_gemini_provider = GeminiProseProvider(settings)
+            prose_provider = managed_gemini_provider
+            prose_config = ProseConfig(
+                model=arguments.prose_model or settings.model,
+                output_budget=(
+                    arguments.prose_output_budget
+                    or settings.output_budget
+                ),
+            )
+        except GeminiProviderError as error:
+            parser.error(str(error))
+    elif not arguments.no_llm:
+        if (
+            arguments.prose_model is None
+            or arguments.prose_output_budget is None
+        ):
+            parser.error(
+                "--prose-model and --prose-output-budget are required "
+                "with a custom prose provider"
+            )
+        prose_config = ProseConfig(
+            model=arguments.prose_model,
+            output_budget=arguments.prose_output_budget,
         )
     try:
         outcomes = read_control_sheet_for_pasta(
@@ -206,6 +215,9 @@ def main(
                 print(f"SKIPPED\t{arguments.linha}\t{outcome.reason}")
     except (OSError, ValueError) as error:
         parser.error(str(error))
+    finally:
+        if managed_gemini_provider is not None:
+            managed_gemini_provider.close()
     return 0
 
 

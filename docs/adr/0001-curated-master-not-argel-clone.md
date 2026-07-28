@@ -23,8 +23,10 @@ client from the site's Lista de Páginas, and the accepted page-count range is 1
 summary carrying ARGEL's hand-typed page numbers (`Objetivo 3`, `REUNIÕES 16`, with
 hand-typed dot leaders and zero tab stops) is **wrong for essentially every client**. The
 summary is the one region that cannot be cloned, because its content is a function of
-pagination, which is a function of content we generate. A real `TOC` field with
-`updateFields` recomputes it when the consultant opens the file in Word.
+pagination, which is a function of content we generate. A real `TOC` field marked
+`w:dirty="true"` recomputes it silently when the consultant opens the file in Word,
+without the "this document contains fields that may refer to other files" prompt a
+document-wide `updateFields` setting forces on every open.
 
 Three further things follow from owning the Master, none of which were available while
 cloning a filled instance:

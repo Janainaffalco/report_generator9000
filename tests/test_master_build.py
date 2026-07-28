@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import dataclasses
 from pathlib import Path
 from zipfile import ZipFile
 from xml.etree import ElementTree
@@ -71,17 +72,15 @@ def numbered_headings(
     return numbered
 
 
-def approved_source(path: Path) -> Path:
-    return build_docx(
-        path,
-        paragraphs=[
+def _base_paragraphs() -> list:
+    return [
             paragraph(image="rIdImage1", bookmark=(9000, "ExistingBookmark")),
             paragraph("SUMÁRIO"),
             paragraph("summary entry"),
             paragraph("ETAPA 1"),
             paragraph("BRIEFING INICIAL PARA DEFINIÇÃO DO ESCOPO"),
-            paragraph("SOBRE A EMPRESA"),
-            paragraph("BRIEFING"),
+            paragraph("SOBRE A EMPRESA", font="Montserrat Medium"),
+            paragraph("BRIEFING", font="Montserrat"),
             paragraph("DESENVOLVIMENTO DE WEBSITE"),
             paragraph("OBJETIVO"),
             paragraph("ACESSOS E ENTREGAS"),
@@ -157,27 +156,75 @@ def approved_source(path: Path) -> Path:
             paragraph('No menu "Plugins", verifique as atualizações disponíveis. ".'),
             paragraph("2.10 Indicadores14"),
             paragraph("A portal web é o principal canal e funcionam como um hub."),
-        ],
-        media={
-            "media/image1.png": png_bytes(8, 8, blue=0xFF),
-            "media/image2.png": png_bytes(16, 9, green=0xC0),
-        },
-        relationships=[
-            RelationshipSpec(id="rIdImage1", target="media/image1.png"),
-            RelationshipSpec(id="rIdImage2", target="media/image2.png"),
-            RelationshipSpec(
-                id="rId25",
-                target="https://ondviajar.com.br/wp-admin/",
-                kind="hyperlink",
-                external=True,
-            ),
-            RelationshipSpec(
-                id="rId2",
-                target="https://drive.google.com/drive/folders/downloads",
-                kind="hyperlink",
-                external=True,
-            ),
-        ],
+    ]
+
+
+def _base_media() -> dict:
+    return {
+        "media/image1.png": png_bytes(8, 8, blue=0xFF),
+        "media/image2.png": png_bytes(16, 9, green=0xC0),
+    }
+
+
+def _base_relationships() -> list:
+    return [
+        RelationshipSpec(id="rIdImage1", target="media/image1.png"),
+        RelationshipSpec(id="rIdImage2", target="media/image2.png"),
+        RelationshipSpec(
+            id="rId25",
+            target="https://ondviajar.com.br/wp-admin/",
+            kind="hyperlink",
+            external=True,
+        ),
+        RelationshipSpec(
+            id="rId2",
+            target="https://drive.google.com/drive/folders/downloads",
+            kind="hyperlink",
+            external=True,
+        ),
+    ]
+
+
+def approved_source(path: Path) -> Path:
+    return build_docx(
+        path,
+        paragraphs=_base_paragraphs(),
+        media=_base_media(),
+        relationships=_base_relationships(),
+    )
+
+
+def approved_source_with_defects(path: Path) -> Path:
+    """A variant carrying the specific source defects C1, C4, E1 and E2 fix."""
+    paragraphs = _base_paragraphs()
+    for index, spec in enumerate(paragraphs):
+        if spec.runs == ("SOBRE A EMPRESA",):
+            paragraphs[index] = dataclasses.replace(
+                spec, direct_numbering=(1, 3), dot_leader_tab=True
+            )
+            break
+    else:
+        raise AssertionError("SOBRE A EMPRESA paragraph not found")
+
+    heading_index = next(
+        index for index, spec in enumerate(paragraphs) if spec.runs == ("CABEÇALHO",)
+    )
+    image_index = next(
+        index
+        for index, spec in enumerate(paragraphs[heading_index:], heading_index)
+        if spec.image is not None
+    )
+    paragraphs[image_index] = dataclasses.replace(
+        paragraphs[image_index], extent=(6483096, 548640)
+    )
+
+    paragraphs.append(paragraph("Ficha Técnica SEBRAETEC 4.0 – Pág. 3"))
+
+    return build_docx(
+        path,
+        paragraphs=paragraphs,
+        media=_base_media(),
+        relationships=_base_relationships(),
     )
 
 
@@ -253,10 +300,15 @@ def test_master_contains_a_two_level_toc_embedded_font_and_named_headings(
     ]
     assert field_types == ["begin", "separate", "end"]
     assert instructions == [' TOC \\o "1-2" \\h \\z \\u ']
-    assert settings.find(f"{W}updateFields").get(f"{W}val") == "true"
+    begin_field = next(
+        item for item in document.iter(f"{W}fldChar")
+        if item.get(f"{W}fldCharType") == "begin"
+    )
+    assert begin_field.get(f"{W}dirty") == "true"
+    assert settings.find(f"{W}updateFields") is None
     assert fonts and all(
         any(item.get("Id") == f"rIdMontserrat{index}" for item in font_relationships)
-        for index in range(5)
+        for index in range(2)
     )
     headings = {
         style.get(f"{W}styleId"): style.find(f"{W}name").get(f"{W}val")
@@ -307,7 +359,6 @@ def test_master_contains_a_two_level_toc_embedded_font_and_named_headings(
         "TOC field added",
         "heading assigned",
         "numbering",
-        "setting",
         "style updated",
         "Boilerplate font embedded",
         "Boilerplate provenance added",
@@ -463,4 +514,131 @@ def test_master_gate_rejects_a_stamp_without_its_matching_end(
 
     assert any(
         item.rule == "invalid-master-blocks" for item in result.violations
+    )
+
+
+def test_direct_heading_numbering_and_dot_leader_tabs_are_stripped(
+    tmp_path: Path,
+) -> None:
+    """C1/C4: a direct numPr and a leftover dot-leader tab never survive onto
+    a canonical Heading1/Heading2 paragraph, so numId 900 actually applies."""
+    built = build_master(
+        approved_source_with_defects(tmp_path / "approved.docx"), tmp_path / "out"
+    )
+    with ZipFile(built.master) as archive:
+        document = ElementTree.fromstring(archive.read("word/document.xml"))
+    heading = next(
+        paragraph
+        for paragraph in document.iter(f"{W}p")
+        if "".join(node.text or "" for node in paragraph.iter(f"{W}t")).strip()
+        == "SOBRE A EMPRESA"
+    )
+    style = heading.find(f"{W}pPr/{W}pStyle")
+    assert style is not None and style.get(f"{W}val") == "Heading2"
+    assert heading.find(f"{W}pPr/{W}numPr") is None
+    assert not [
+        tab
+        for tab in heading.findall(f"{W}pPr/{W}tabs/{W}tab")
+        if tab.get(f"{W}leader")
+    ]
+    assert built.validation.passed
+
+
+def test_oversized_block_image_is_scaled_to_the_text_column(
+    tmp_path: Path,
+) -> None:
+    """E2: a Block image wider than the section's text column is scaled down,
+    preserving aspect ratio, on both wp:extent and the sibling a:ext."""
+    built = build_master(
+        approved_source_with_defects(tmp_path / "approved.docx"), tmp_path / "out"
+    )
+    with ZipFile(built.master) as archive:
+        document = ElementTree.fromstring(archive.read("word/document.xml"))
+    paragraphs = list(document.iter(f"{W}p"))
+    heading_index = next(
+        index
+        for index, paragraph in enumerate(paragraphs)
+        if "".join(node.text or "" for node in paragraph.iter(f"{W}t")).strip()
+        == "CABEÇALHO"
+    )
+    image = paragraphs[heading_index + 1]
+    extent = image.find(f".//{{{'http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing'}}}extent")
+    section_properties = document.find(f"{W}body/{W}sectPr")
+    page_width = int(section_properties.find(f"{W}pgSz").get(f"{W}w"))
+    margins = section_properties.find(f"{W}pgMar")
+    column_width_emu = (
+        page_width
+        - int(margins.get(f"{W}left"))
+        - int(margins.get(f"{W}right"))
+    ) * 635
+    original_cx, original_cy = 6483096, 548640
+    expected_cx = column_width_emu
+    expected_cy = round(original_cy * (column_width_emu / original_cx))
+    assert int(extent.get("cx")) == expected_cx
+    assert int(extent.get("cy")) == expected_cy
+    assert int(extent.get("cx")) <= column_width_emu
+    drawing_ns_ext = image.find(
+        f".//{{{'http://schemas.openxmlformats.org/drawingml/2006/main'}}}ext"
+    )
+    assert int(drawing_ns_ext.get("cx")) == expected_cx
+    assert int(drawing_ns_ext.get("cy")) == expected_cy
+    assert built.validation.passed
+
+
+def test_ficha_tecnica_citation_is_restyled_not_removed(tmp_path: Path) -> None:
+    """E1: the Ficha Técnica citation is kept (it cites the SEBRAETEC spec, not
+    this document's pagination) but restyled so it cannot be misread as a
+    page counter, per owner ruling."""
+    built = build_master(
+        approved_source_with_defects(tmp_path / "approved.docx"), tmp_path / "out"
+    )
+    with ZipFile(built.master) as archive:
+        document = ElementTree.fromstring(archive.read("word/document.xml"))
+    citation = next(
+        paragraph
+        for paragraph in document.iter(f"{W}p")
+        if "".join(node.text or "" for node in paragraph.iter(f"{W}t")).strip()
+        == "Fonte: Ficha Técnica SEBRAETEC 4.0, p. 3"
+    )
+    assert "– Pág. 3" not in "".join(
+        node.text or "" for node in citation.iter(f"{W}t")
+    )
+    run_properties = citation.find(f"{W}r/{W}rPr")
+    assert run_properties.find(f"{W}i") is not None
+    size = run_properties.find(f"{W}sz")
+    assert size is not None and int(size.get(f"{W}val")) < 22
+    assert built.validation.passed
+
+
+def test_gate_rejects_an_unresolvable_ignorable_prefix(tmp_path: Path) -> None:
+    """A0: an mc:Ignorable token whose prefix has no matching xmlns declaration
+    is the exact defect that made LibreOffice and Word refuse the Master."""
+    relationships_ns = "http://schemas.openxmlformats.org/package/2006/relationships"
+    content_types_ns = "http://schemas.openxmlformats.org/package/2006/content-types"
+    document_xml = (
+        '<?xml version="1.0" encoding="UTF-8"?>'
+        f'<w:document xmlns:w="{W[1:-1]}" '
+        'xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006" '
+        'mc:Ignorable="w15"><w:body><w:p/></w:body></w:document>'
+    ).encode("utf-8")
+    broken = tmp_path / "broken.docx"
+    with ZipFile(broken, "w") as archive:
+        archive.writestr("word/document.xml", document_xml)
+        archive.writestr(
+            "word/_rels/document.xml.rels",
+            f'<?xml version="1.0"?><Relationships xmlns="{relationships_ns}"/>',
+        )
+        archive.writestr(
+            "_rels/.rels",
+            f'<?xml version="1.0"?><Relationships xmlns="{relationships_ns}"/>',
+        )
+        archive.writestr(
+            "[Content_Types].xml",
+            f'<?xml version="1.0"?><Types xmlns="{content_types_ns}"/>',
+        )
+
+    result = check_master_build(open_docx_package(broken))
+
+    assert any(
+        item.rule == "unresolvable-ignorable-prefix" for item in result.violations
     )

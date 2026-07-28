@@ -1,0 +1,244 @@
+from __future__ import annotations
+
+import json
+from types import SimpleNamespace
+
+import pytest
+
+from report_generator9000.gemini_provider import (
+    DEFAULT_GEMINI_FALLBACK_MODEL,
+    DEFAULT_GEMINI_MODEL,
+    GeminiProseProvider,
+    GeminiProviderError,
+    GeminiSettings,
+)
+from report_generator9000.prose import (
+    ProseConfig,
+    ProseRequest,
+    ProviderPageText,
+)
+
+
+class _Models:
+    def __init__(self, response: object) -> None:
+        self.response = response
+        self.calls: list[dict[str, object]] = []
+
+    def generate_content(self, **kwargs: object) -> object:
+        self.calls.append(kwargs)
+        return self.response
+
+
+class _Client:
+    def __init__(self, response: object) -> None:
+        self.models = _Models(response)
+
+
+class _FallbackModels:
+    def __init__(self, fallback_response: object) -> None:
+        self.fallback_response = fallback_response
+        self.calls: list[dict[str, object]] = []
+
+    def generate_content(self, **kwargs: object) -> object:
+        self.calls.append(kwargs)
+        if len(self.calls) == 1:
+            error = RuntimeError("overloaded")
+            error.code = 503
+            error.status = "UNAVAILABLE"
+            raise error
+        return self.fallback_response
+
+
+def _request() -> ProseRequest:
+    return ProseRequest(
+        site_text=(
+            ProviderPageText(
+                source_id="page-1",
+                text="A Acme fabrica componentes industriais.",
+            ),
+            ProviderPageText(
+                source_id="page-2",
+                text="O site apresenta serviços de engenharia.",
+            ),
+        )
+    )
+
+
+def _settings() -> GeminiSettings:
+    return GeminiSettings(api_key="test-key")
+
+
+def test_provider_uses_structured_output_and_preserves_exact_citations() -> None:
+    response = SimpleNamespace(
+        candidates=[
+            SimpleNamespace(finish_reason=SimpleNamespace(value="STOP"))
+        ],
+        parsed=None,
+        text=json.dumps(
+            {
+                "company_description": {
+                    "value": "A Acme fabrica componentes industriais.",
+                    "citations": [
+                        {
+                            "source_id": "page-1",
+                            "excerpt": (
+                                "A Acme fabrica componentes industriais."
+                            ),
+                        }
+                    ],
+                },
+                "briefing_objective": {
+                    "value": (
+                        "O site apresenta os serviços de engenharia."
+                    ),
+                    "citations": [
+                        {
+                            "source_id": "page-2",
+                            "excerpt": (
+                                "O site apresenta serviços de engenharia."
+                            ),
+                        }
+                    ],
+                },
+            },
+            ensure_ascii=False,
+        ),
+    )
+    client = _Client(response)
+    provider = GeminiProseProvider(_settings(), client=client)
+
+    result = provider.generate(
+        _request(),
+        ProseConfig(model=DEFAULT_GEMINI_MODEL, output_budget=700),
+    )
+
+    assert result.company_description.grounded is True
+    assert result.company_description.citations[0].source_id == "page-1"
+    assert result.briefing_objective.citations[0].excerpt == (
+        "O site apresenta serviços de engenharia."
+    )
+    call = client.models.calls[0]
+    assert call["model"] == DEFAULT_GEMINI_MODEL
+    assert "FONTE page-1" in str(call["contents"])
+    assert "FONTE page-2" in str(call["contents"])
+    config = call["config"]
+    assert config.max_output_tokens == 700
+    assert config.response_mime_type == "application/json"
+    assert config.response_json_schema["additionalProperties"] is False
+    assert config.thinking_config.thinking_level.value == "LOW"
+    assert config.tools is None
+
+
+@pytest.mark.parametrize("reason", ["MAX_TOKENS", "BUDGET_EXCEEDED"])
+def test_provider_marks_budget_exhaustion(reason: str) -> None:
+    response = SimpleNamespace(
+        candidates=[
+            SimpleNamespace(finish_reason=SimpleNamespace(value=reason))
+        ],
+        parsed=None,
+        text=None,
+    )
+    provider = GeminiProseProvider(_settings(), client=_Client(response))
+
+    result = provider.generate(
+        _request(),
+        ProseConfig(model=DEFAULT_GEMINI_MODEL, output_budget=10),
+    )
+
+    assert result.output_budget_exhausted is True
+
+
+def test_provider_falls_back_only_after_primary_overload() -> None:
+    response = SimpleNamespace(
+        candidates=[],
+        parsed=None,
+        text=json.dumps(
+            {
+                "company_description": {
+                    "value": "A Acme fabrica componentes.",
+                    "citations": [
+                        {
+                            "source_id": "page-1",
+                            "excerpt": "A Acme fabrica componentes",
+                        }
+                    ],
+                },
+                "briefing_objective": {
+                    "value": None,
+                    "citations": [],
+                },
+            }
+        ),
+    )
+    client = SimpleNamespace(models=_FallbackModels(response))
+    provider = GeminiProseProvider(_settings(), client=client)
+
+    result = provider.generate(
+        _request(),
+        ProseConfig(model=DEFAULT_GEMINI_MODEL, output_budget=700),
+    )
+
+    assert result.company_description.grounded is True
+    assert [call["model"] for call in client.models.calls] == [
+        DEFAULT_GEMINI_MODEL,
+        DEFAULT_GEMINI_FALLBACK_MODEL,
+    ]
+    assert provider.last_model_used == DEFAULT_GEMINI_FALLBACK_MODEL
+
+
+def test_invalid_structured_response_fails_closed() -> None:
+    response = SimpleNamespace(
+        candidates=[],
+        parsed=None,
+        text='{"company_description": "not a field"}',
+    )
+    provider = GeminiProseProvider(_settings(), client=_Client(response))
+
+    with pytest.raises(
+        GeminiProviderError, match="invalid structured response"
+    ):
+        provider.generate(
+            _request(),
+            ProseConfig(model=DEFAULT_GEMINI_MODEL, output_budget=700),
+        )
+
+
+def test_settings_load_dotenv_and_prefer_google_api_key(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / ".env").write_text(
+        "\n".join(
+            (
+                "GEMINI_API_KEY=gemini-key",
+                "GEMINI_MODEL=gemini-3.5-flash",
+                "GEMINI_FALLBACK_MODEL=gemini-3.5-flash-lite",
+                "GEMINI_OUTPUT_BUDGET=900",
+                "GEMINI_TIMEOUT_SECONDS=45",
+                "GEMINI_MAX_ATTEMPTS=4",
+            )
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("GOOGLE_API_KEY", "deployment-key")
+
+    settings = GeminiSettings.from_environment()
+
+    assert settings.api_key == "deployment-key"
+    assert settings.fallback_model == "gemini-3.5-flash-lite"
+    assert settings.output_budget == 900
+    assert settings.timeout_seconds == 45
+    assert settings.max_attempts == 4
+
+
+def test_missing_key_has_deployment_help(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("GOOGLE_API_KEY", raising=False)
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+
+    with pytest.raises(GeminiProviderError, match=r"\.env\.example"):
+        GeminiSettings.from_environment()

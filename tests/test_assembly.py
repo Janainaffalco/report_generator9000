@@ -171,9 +171,13 @@ def test_one_engagement_directory_contains_the_complete_handoff_package(
         document = ElementTree.fromstring(
             archive.read("word/document.xml")
         )
-    update_fields = settings.find(f"{W}updateFields")
-    assert update_fields is not None
-    assert update_fields.get(f"{W}val") == "true"
+    assert settings.find(f"{W}updateFields") is None
+    begin_field = next(
+        item
+        for item in document.iter(f"{W}fldChar")
+        if item.get(f"{W}fldCharType") == "begin"
+    )
+    assert begin_field.get(f"{W}dirty") == "true"
     assert any(
         'TOC \\o "1-2"' in (item.text or "")
         for item in document.iter(f"{W}instrText")

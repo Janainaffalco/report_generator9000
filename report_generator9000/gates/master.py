@@ -2,14 +2,185 @@
 
 from __future__ import annotations
 
+import hashlib
+import posixpath
 import re
+import struct
+import uuid
 from xml.etree import ElementTree
 
-from ..docx_package import WORD_NS, DocxPackage
+from ..docx_package import (
+    MARKUP_COMPATIBILITY_NS,
+    OFFICE_REL_NS,
+    RELATIONSHIPS_NS,
+    WORD_DRAWING_NS,
+    WORD_NS,
+    DocxPackage,
+    text_column_width_emu,
+)
 from .results import GateResult, result, violation
 
 
 GATE = "master-build"
+
+_LEVEL_CHILD_ORDER = (
+    "start",
+    "numFmt",
+    "lvlRestart",
+    "pStyle",
+    "isLgl",
+    "suff",
+    "lvlText",
+    "lvlPicBulletId",
+    "legacy",
+    "lvlJc",
+    "pPr",
+    "rPr",
+)
+_PARAGRAPH_PROPERTIES_CHILD_ORDER = (
+    "pStyle",
+    "keepNext",
+    "keepLines",
+    "pageBreakBefore",
+    "framePr",
+    "widowControl",
+    "numPr",
+    "suppressLineNumbers",
+    "pBdr",
+    "shd",
+    "tabs",
+    "suppressAutoHyphens",
+    "kinsoku",
+    "wordWrap",
+    "overflowPunct",
+    "topLinePunct",
+    "autoSpaceDE",
+    "autoSpaceDN",
+    "bidi",
+    "adjustRightInd",
+    "snapToGrid",
+    "spacing",
+    "ind",
+    "contextualSpacing",
+    "mirrorIndents",
+    "suppressOverlap",
+    "jc",
+    "textDirection",
+    "textAlignment",
+    "textboxTightWrap",
+    "outlineLvl",
+    "divId",
+    "cnfStyle",
+    "rPr",
+    "sectPr",
+    "pPrChange",
+)
+_STYLE_CHILD_ORDER = (
+    "name",
+    "aliases",
+    "basedOn",
+    "next",
+    "link",
+    "autoRedefine",
+    "hidden",
+    "uiPriority",
+    "semiHidden",
+    "unhideWhenUsed",
+    "qFormat",
+    "locked",
+    "personal",
+    "personalCompose",
+    "personalReply",
+    "rsid",
+    "pPr",
+    "rPr",
+    "tblPr",
+    "trPr",
+    "tcPr",
+    "tblStylePr",
+)
+_NUMBERING_CHILD_ORDER = ("numPicBullet", "abstractNum", "num", "numIdMacAtCleanup")
+
+_THEME_FONT_ATTRIBUTES = ("asciiTheme", "hAnsiTheme", "eastAsiaTheme", "cstheme")
+_NAMESPACE_DECLARATION = re.compile(r'xmlns:([A-Za-z0-9_.\-]+)="([^"]*)"')
+_PAGE_COUNTER_SUFFIX = re.compile(r"[–-]\s*P[aá]g\.\s*\d+", re.IGNORECASE)
+
+
+def _child_local_names(element: ElementTree.Element) -> list[str]:
+    return [child.tag.rsplit("}", 1)[-1] for child in element]
+
+
+def _is_in_schema_order(element: ElementTree.Element, order: tuple[str, ...]) -> bool:
+    positions = [
+        order.index(name) for name in _child_local_names(element) if name in order
+    ]
+    return positions == sorted(positions)
+
+
+def _deobfuscate_font(data: bytes, font_key: str) -> bytes:
+    key = uuid.UUID(font_key).bytes[::-1]
+    result_bytes = bytearray(data)
+    for index in range(min(32, len(result_bytes))):
+        result_bytes[index] ^= key[index % len(key)]
+    return bytes(result_bytes)
+
+
+def _sfnt_table_directory(data: bytes) -> dict[bytes, tuple[int, int]]:
+    """Return an sfnt font's table directory as {tag: (offset, length)}.
+
+    Hand-rolled against the OpenType spec (no third-party font library):
+    a gate may not import beyond the standard library.
+    """
+    if len(data) < 12:
+        raise ValueError("font data too short for an sfnt header")
+    (table_count,) = struct.unpack(">H", data[4:6])
+    tables: dict[bytes, tuple[int, int]] = {}
+    for index in range(table_count):
+        entry_offset = 12 + index * 16
+        tag, _checksum, table_offset, length = struct.unpack(
+            ">4sIII", data[entry_offset : entry_offset + 16]
+        )
+        tables[tag] = (table_offset, length)
+    return tables
+
+
+def _sfnt_name_id_one(data: bytes, tables: dict[bytes, tuple[int, int]]) -> str | None:
+    """Return the sfnt `name` table's ID-1 (family name) record, if any."""
+    location = tables.get(b"name")
+    if location is None:
+        return None
+    name_offset, _length = location
+    _format_selector, count, string_offset = struct.unpack(
+        ">HHH", data[name_offset : name_offset + 6]
+    )
+    candidates: dict[tuple[int, int], str] = {}
+    for index in range(count):
+        record_offset = name_offset + 6 + index * 12
+        platform_id, encoding_id, _language_id, name_id, length, offset = (
+            struct.unpack(">HHHHHH", data[record_offset : record_offset + 12])
+        )
+        if name_id != 1:
+            continue
+        start = name_offset + string_offset + offset
+        raw = data[start : start + length]
+        try:
+            text = raw.decode(
+                "mac-roman" if platform_id == 1 else "utf-16-be"
+            )
+        except UnicodeDecodeError:
+            continue
+        candidates[(platform_id, encoding_id)] = text
+    return (
+        candidates.get((3, 1))
+        or candidates.get((1, 0))
+        or next(iter(candidates.values()), None)
+    )
+
+
+def _font_identity(data: bytes) -> tuple[str | None, bool]:
+    """Return (name ID 1, has a `fvar` table) for a static-vs-variable sfnt font."""
+    tables = _sfnt_table_directory(data)
+    return _sfnt_name_id_one(data, tables), b"fvar" in tables
 
 EXPECTED_TOKENS = frozenset(
     {
@@ -128,6 +299,32 @@ def check_master_build(
                     violation(GATE, "source-client-residue", part.name, marker)
                 )
 
+    for part in package.parts:
+        text = part.text or ""
+        if not text:
+            continue
+        declared = dict(_NAMESPACE_DECLARATION.findall(text))
+        markup_compatibility_prefix = next(
+            (
+                prefix
+                for prefix, uri in declared.items()
+                if uri == MARKUP_COMPATIBILITY_NS
+            ),
+            None,
+        )
+        if markup_compatibility_prefix is None:
+            continue
+        ignorable = re.search(
+            rf'{re.escape(markup_compatibility_prefix)}:Ignorable="([^"]*)"', text
+        )
+        if ignorable is None:
+            continue
+        for prefix in ignorable.group(1).split():
+            if prefix not in declared:
+                violations.append(
+                    violation(GATE, "unresolvable-ignorable-prefix", part.name, prefix)
+                )
+
     for relationship in package.relationships:
         if relationship.external and not _is_boilerplate_link(relationship.target):
             violations.append(
@@ -206,6 +403,23 @@ def check_master_build(
                     f"field-types={field_types!r}",
                 )
             )
+        begin_field = next(
+            (
+                item
+                for item in document.iter(f"{w}fldChar")
+                if item.get(f"{w}fldCharType") == "begin"
+            ),
+            None,
+        )
+        if begin_field is None or begin_field.get(f"{w}dirty") != "true":
+            violations.append(
+                violation(
+                    GATE,
+                    "toc-field-not-dirty",
+                    "word/document.xml",
+                    'begin fldChar must carry w:dirty="true"',
+                )
+            )
         headings = []
         for paragraph in document.iter(f"{w}p"):
             style = paragraph.find(f"{w}pPr/{w}pStyle")
@@ -218,6 +432,71 @@ def check_master_build(
                 node.text or "" for node in paragraph.iter(f"{w}t")
             )
             headings.append((int(style_id[-1]), text))
+            properties = paragraph.find(f"{w}pPr")
+            if properties is not None and properties.find(f"{w}numPr") is not None:
+                violations.append(
+                    violation(
+                        GATE,
+                        "heading-has-direct-numbering",
+                        f"word/document.xml {style_id}",
+                        text,
+                    )
+                )
+            for tab in (
+                []
+                if properties is None
+                else properties.findall(f"{w}tabs/{w}tab")
+            ):
+                if tab.get(f"{w}leader"):
+                    violations.append(
+                        violation(
+                            GATE,
+                            "heading-has-dot-leader-tab",
+                            f"word/document.xml {style_id}",
+                            text,
+                        )
+                    )
+
+        for paragraph in document.iter(f"{w}p"):
+            text = "".join(node.text or "" for node in paragraph.iter(f"{w}t"))
+            if _PAGE_COUNTER_SUFFIX.search(text):
+                violations.append(
+                    violation(
+                        GATE,
+                        "page-counter-suffix-retained",
+                        "word/document.xml",
+                        text,
+                    )
+                )
+
+        try:
+            column_width_emu = text_column_width_emu(document)
+        except ValueError:
+            column_width_emu = None
+        if column_width_emu is not None:
+            wp = f"{{{WORD_DRAWING_NS}}}"
+            for extent in document.iter(f"{wp}extent"):
+                cx = extent.get("cx")
+                if cx is not None and int(cx) > column_width_emu:
+                    violations.append(
+                        violation(
+                            GATE,
+                            "media-extent-exceeds-column",
+                            "word/document.xml",
+                            f"cx={cx} column={column_width_emu}",
+                        )
+                    )
+
+        for pPr in document.iter(f"{w}pPr"):
+            if not _is_in_schema_order(pPr, _PARAGRAPH_PROPERTIES_CHILD_ORDER):
+                violations.append(
+                    violation(
+                        GATE,
+                        "schema-order-violation",
+                        "word/document.xml",
+                        f"pPr children out of CT_PPrBase order: {_child_local_names(pPr)!r}",
+                    )
+                )
         if tuple(headings) != CANONICAL_HEADINGS:
             violations.append(
                 violation(
@@ -352,17 +631,38 @@ def check_master_build(
             )
 
         settings = ElementTree.fromstring(part_text["word/settings.xml"] or "")
-        update = settings.find(f"{w}updateFields")
-        if update is None or update.get(f"{w}val") != "true":
+        if settings.find(f"{w}updateFields") is not None:
             violations.append(
                 violation(
                     GATE,
-                    "field-update-disabled",
+                    "field-update-globally-forced",
                     "word/settings.xml",
-                    "updateFields must be true",
+                    "updateFields must not be present; the TOC field carries w:dirty instead",
                 )
             )
         styles = ElementTree.fromstring(part_text["word/styles.xml"] or "")
+        for style in styles.findall(f"{w}style"):
+            if not _is_in_schema_order(style, _STYLE_CHILD_ORDER):
+                violations.append(
+                    violation(
+                        GATE,
+                        "schema-order-violation",
+                        f"word/styles.xml {style.get(f'{w}styleId')}",
+                        f"style children out of CT_Style order: {_child_local_names(style)!r}",
+                    )
+                )
+            style_pPr = style.find(f"{w}pPr")
+            if style_pPr is not None and not _is_in_schema_order(
+                style_pPr, _PARAGRAPH_PROPERTIES_CHILD_ORDER
+            ):
+                violations.append(
+                    violation(
+                        GATE,
+                        "schema-order-violation",
+                        f"word/styles.xml {style.get(f'{w}styleId')}",
+                        f"pPr children out of CT_PPrBase order: {_child_local_names(style_pPr)!r}",
+                    )
+                )
         for level in (1, 2):
             style = next(
                 (
@@ -394,9 +694,29 @@ def check_master_build(
                         "Montserrat and numbering 900 required",
                     )
                 )
+            if fonts is not None and any(
+                fonts.get(f"{w}{attribute}") for attribute in _THEME_FONT_ATTRIBUTES
+            ):
+                violations.append(
+                    violation(
+                        GATE,
+                        "heading-style-uses-theme-font",
+                        f"word/styles.xml Heading{level}",
+                        "rFonts must not carry *Theme attributes",
+                    )
+                )
         numbering = ElementTree.fromstring(
             part_text["word/numbering.xml"] or ""
         )
+        if not _is_in_schema_order(numbering, _NUMBERING_CHILD_ORDER):
+            violations.append(
+                violation(
+                    GATE,
+                    "schema-order-violation",
+                    "word/numbering.xml",
+                    f"root children out of CT_Numbering order: {_child_local_names(numbering)!r}",
+                )
+            )
         abstract = next(
             (
                 item
@@ -405,14 +725,8 @@ def check_master_build(
             ),
             None,
         )
-        formats = (
-            []
-            if abstract is None
-            else [
-                item.find(f"{w}lvlText").get(f"{w}val")
-                for item in abstract.findall(f"{w}lvl")
-            ]
-        )
+        levels = [] if abstract is None else abstract.findall(f"{w}lvl")
+        formats = [item.find(f"{w}lvlText").get(f"{w}val") for item in levels]
         if formats != ["%1", "%1.%2"]:
             violations.append(
                 violation(
@@ -422,20 +736,118 @@ def check_master_build(
                     repr(formats),
                 )
             )
-        font_parts = [
-            item.name
-            for item in package.parts
-            if item.name.startswith("word/fonts/montserrat-")
-        ]
-        if len(font_parts) != 5:
+        for item in levels:
+            if not _is_in_schema_order(item, _LEVEL_CHILD_ORDER):
+                violations.append(
+                    violation(
+                        GATE,
+                        "schema-order-violation",
+                        f"word/numbering.xml ilvl={item.get(f'{w}ilvl')}",
+                        f"lvl children out of CT_Lvl order: {_child_local_names(item)!r}",
+                    )
+                )
+            if (
+                item.find(f"{w}suff") is None
+                or item.find(f"{w}lvlJc") is None
+                or item.find(f"{w}pPr/{w}ind") is None
+            ):
+                violations.append(
+                    violation(
+                        GATE,
+                        "incomplete-heading-level-properties",
+                        f"word/numbering.xml ilvl={item.get(f'{w}ilvl')}",
+                        "suff, lvlJc and pPr/ind are all required",
+                    )
+                )
+
+        font_table = ElementTree.fromstring(part_text["word/fontTable.xml"] or "")
+        font_relationships_text = (
+            part_text.get("word/_rels/fontTable.xml.rels") or ""
+        )
+        font_relationships = (
+            None
+            if not font_relationships_text
+            else ElementTree.fromstring(font_relationships_text)
+        )
+        relationship_targets = (
+            {}
+            if font_relationships is None
+            else {
+                item.get("Id"): item.get("Target")
+                for item in font_relationships.findall(
+                    f"{{{RELATIONSHIPS_NS}}}Relationship"
+                )
+            }
+        )
+        declared_faces: dict[str, tuple[str, str]] = {}
+        for entry in font_table.findall(f"{w}font"):
+            embed = entry.find(f"{w}embedRegular")
+            if embed is None:
+                continue
+            target = relationship_targets.get(embed.get(f"{{{OFFICE_REL_NS}}}id"))
+            if target is None:
+                continue
+            resolved = posixpath.normpath(posixpath.join("word", target))
+            declared_faces[resolved] = (
+                entry.get(f"{w}name", ""),
+                embed.get(f"{w}fontKey", "").strip("{}"),
+            )
+
+        embedded_fonts = {item.part_name: item.data for item in package.fonts}
+        if set(embedded_fonts) != set(declared_faces):
             violations.append(
                 violation(
                     GATE,
                     "embedded-font-set-incomplete",
                     "word/fonts",
-                    repr(font_parts),
+                    f"embedded={sorted(embedded_fonts)!r} declared={sorted(declared_faces)!r}",
                 )
             )
+        digests = [
+            hashlib.sha256(data).hexdigest() for data in embedded_fonts.values()
+        ]
+        if len(digests) != len(set(digests)):
+            violations.append(
+                violation(
+                    GATE,
+                    "embedded-font-duplicate-content",
+                    "word/fonts",
+                    "embedded font parts must not share identical bytes",
+                )
+            )
+        for part_name, data in embedded_fonts.items():
+            declared = declared_faces.get(part_name)
+            if declared is None:
+                continue
+            face_name, font_key = declared
+            try:
+                internal_name, has_fvar = _font_identity(
+                    _deobfuscate_font(data, font_key)
+                )
+            except (struct.error, ValueError) as error:
+                violations.append(
+                    violation(GATE, "embedded-font-unreadable", part_name, str(error))
+                )
+                continue
+            if has_fvar:
+                violations.append(
+                    violation(
+                        GATE,
+                        "embedded-font-is-variable",
+                        part_name,
+                        "must be a static instance, not a variable font",
+                    )
+                )
+            if internal_name != face_name:
+                violations.append(
+                    violation(
+                        GATE,
+                        "embedded-font-name-mismatch",
+                        part_name,
+                        f"internal name {internal_name!r} != declared {face_name!r}",
+                    )
+                )
+
         provenance = part_text.get(
             "customXml/montserrat-provenance.xml", ""
         ) or ""

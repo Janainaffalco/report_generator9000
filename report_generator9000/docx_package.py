@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import hashlib
 import posixpath
+import re
 import struct
 from dataclasses import dataclass
+from io import BytesIO
 from pathlib import Path
 from zipfile import BadZipFile, ZipFile
 from xml.etree import ElementTree
@@ -13,6 +15,9 @@ from xml.etree import ElementTree
 
 RELATIONSHIPS_NS = (
     "http://schemas.openxmlformats.org/package/2006/relationships"
+)
+CONTENT_TYPES_NS = (
+    "http://schemas.openxmlformats.org/package/2006/content-types"
 )
 WORD_NS = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
 OFFICE_REL_NS = (
@@ -22,6 +27,10 @@ DRAWING_NS = "http://schemas.openxmlformats.org/drawingml/2006/main"
 WORD_DRAWING_NS = (
     "http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing"
 )
+MARKUP_COMPATIBILITY_NS = (
+    "http://schemas.openxmlformats.org/markup-compatibility/2006"
+)
+PICTURE_NS = "http://schemas.openxmlformats.org/drawingml/2006/picture"
 
 NAMESPACES = {
     "a": DRAWING_NS,
@@ -29,6 +38,132 @@ NAMESPACES = {
     "w": WORD_NS,
     "wp": WORD_DRAWING_NS,
 }
+
+_NAMESPACE_PREFIXES = (
+    ("mc", MARKUP_COMPATIBILITY_NS),
+    ("o", "urn:schemas-microsoft-com:office:office"),
+    ("r", OFFICE_REL_NS),
+    ("v", "urn:schemas-microsoft-com:vml"),
+    ("w", WORD_NS),
+    ("w10", "urn:schemas-microsoft-com:office:word"),
+    ("w14", "http://schemas.microsoft.com/office/word/2010/wordml"),
+    ("w15", "http://schemas.microsoft.com/office/word/2012/wordml"),
+    ("wp", WORD_DRAWING_NS),
+    ("wp14", "http://schemas.microsoft.com/office/word/2010/wordprocessingDrawing"),
+    ("wpg", "http://schemas.microsoft.com/office/word/2010/wordprocessingGroup"),
+    ("wps", "http://schemas.microsoft.com/office/word/2010/wordprocessingShape"),
+    ("a", DRAWING_NS),
+    ("pic", PICTURE_NS),
+)
+
+for _prefix, _namespace_uri in _NAMESPACE_PREFIXES:
+    ElementTree.register_namespace(_prefix, _namespace_uri)
+
+# Deliberately not registered here: `ElementTree.register_namespace("", uri)`
+# only ever holds one URI under the empty prefix -- registering a second
+# default-namespace URI silently evicts the first (its own docstring: "any
+# existing mapping for either the given prefix or the namespace URI will be
+# removed"). `[Content_Types].xml` and every `.rels` part each want the bare
+# `xmlns="..."` form for a *different* URI, so `serialize_xml` flattens
+# whichever auto-assigned `nsN` prefix ElementTree chose back to the bare
+# default per part instead, driven by what the original part declared.
+
+
+def _root_namespace_declarations(data: bytes) -> tuple[tuple[str, str], ...]:
+    declarations: list[tuple[str, str]] = []
+    for event, value in ElementTree.iterparse(
+        BytesIO(data), events=("start-ns", "start")
+    ):
+        if event == "start-ns":
+            declarations.append(value)
+        else:
+            break
+    return tuple(declarations)
+
+
+def _flatten_to_default_namespace(text: str, uri: str) -> str:
+    """Rewrite whichever auto-assigned `nsN` prefix ElementTree gave *uri*.
+
+    `ElementTree.register_namespace("", uri)` can only ever hold one URI
+    under the empty prefix at a time (registering a second evicts the
+    first), so a part whose original root used a bare `xmlns="uri"` with no
+    surviving global registration serializes with an auto-assigned `nsN`
+    prefix instead. This restores the bare default form the part actually
+    had, driven by what its own original bytes declared rather than by a
+    single global mapping.
+    """
+    if f'xmlns="{uri}"' in text:
+        return text
+    match = re.search(rf'xmlns:(ns\d+)="{re.escape(uri)}"', text)
+    if match is None:
+        return text
+    prefix = match.group(1)
+    text = text.replace(f'xmlns:{prefix}="{uri}"', f'xmlns="{uri}"')
+    return re.sub(rf"(?<=[<\s/]){re.escape(prefix)}:", "", text)
+
+
+def preserve_namespace_declarations(serialized: bytes, original: bytes) -> bytes:
+    """Reinject any xmlns declaration *original*'s root carried that *serialized* lost.
+
+    ``ElementTree.tostring`` only emits a namespace declaration for a URI some
+    surviving element or attribute in the tree still uses. A declaration that
+    exists solely so an ``mc:Ignorable`` token (or any other out-of-band
+    reference) resolves is silently dropped on re-serialization -- the exact
+    defect that made ``xmlns:w15`` vanish from a rebuilt ``word/document.xml``
+    while its value stayed listed in ``mc:Ignorable``. Restoring the original
+    declarations keeps every such reference resolvable. This also restores
+    any bare default namespace ElementTree could not honor (see
+    `_flatten_to_default_namespace`).
+    """
+    declared = _root_namespace_declarations(original)
+    if not declared:
+        return serialized
+    text = serialized.decode("utf-8")
+    for prefix, uri in declared:
+        if not prefix:
+            text = _flatten_to_default_namespace(text, uri)
+    root_start = text.index("<", text.index("?>") + 2 if text.startswith("<?") else 0)
+    tag_end = text.index(">", root_start)
+    self_closing = text[tag_end - 1] == "/"
+    insertion_point = tag_end - 1 if self_closing else tag_end
+    root_tag = text[:insertion_point]
+    additions = "".join(
+        f' {attribute}="{uri}"'
+        for prefix, uri in declared
+        for attribute in (f"xmlns:{prefix}" if prefix else "xmlns",)
+        if f'{attribute}="{uri}"' not in root_tag
+    )
+    if not additions:
+        return text.encode("utf-8")
+    return (
+        text[:insertion_point] + additions + text[insertion_point:]
+    ).encode("utf-8")
+
+
+def serialize_xml(element: ElementTree.Element, original: bytes) -> bytes:
+    """Serialize *element*, keeping *original*'s namespace declarations intact."""
+    serialized = ElementTree.tostring(
+        element, encoding="utf-8", xml_declaration=True
+    )
+    return preserve_namespace_declarations(serialized, original)
+
+
+def text_column_width_emu(document: ElementTree.Element) -> int:
+    """Return the body text column width, in EMU, from the document's sectPr."""
+    w = f"{{{WORD_NS}}}"
+    section_properties = document.find(f"{w}body/{w}sectPr")
+    if section_properties is None:
+        section_properties = next(document.iter(f"{w}sectPr"), None)
+    if section_properties is None:
+        raise ValueError("document has no sectPr")
+    page_size = section_properties.find(f"{w}pgSz")
+    margins = section_properties.find(f"{w}pgMar")
+    if page_size is None or margins is None:
+        raise ValueError("sectPr lacks pgSz or pgMar")
+    page_width = int(page_size.get(f"{w}w"))
+    left_margin = int(margins.get(f"{w}left"))
+    right_margin = int(margins.get(f"{w}right"))
+    return (page_width - left_margin - right_margin) * 635
 
 
 @dataclass(frozen=True)
@@ -45,6 +180,12 @@ class Media:
     width: int
     height: int
     image_format: str
+
+
+@dataclass(frozen=True)
+class FontPart:
+    part_name: str
+    data: bytes
 
 
 @dataclass(frozen=True)
@@ -99,6 +240,7 @@ class DocxPackage:
     relationships: tuple[Relationship, ...]
     paragraphs: tuple[Paragraph, ...]
     slots: tuple[Slot, ...]
+    fonts: tuple[FontPart, ...] = ()
 
 
 def _relationship_source(relationship_part: str) -> str:
@@ -250,6 +392,13 @@ def _read_media(package: ZipFile, names: set[str]) -> tuple[Media, ...]:
     return tuple(media)
 
 
+def _read_fonts(package: ZipFile, names: set[str]) -> tuple[FontPart, ...]:
+    return tuple(
+        FontPart(part_name=name, data=package.read(name))
+        for name in sorted(item for item in names if "/fonts/" in f"/{item}")
+    )
+
+
 def _keep_next(paragraph_element: ElementTree.Element) -> bool:
     properties = paragraph_element.find(f"{{{WORD_NS}}}pPr")
     if properties is None:
@@ -383,6 +532,7 @@ def open_docx_package(path: str | Path) -> DocxPackage:
             }
             relationships = _read_relationships(package, names)
             media = _read_media(package, names)
+            fonts = _read_fonts(package, names)
             paragraphs, slots = _read_structure(
                 package, names, relationships
             )
@@ -411,4 +561,5 @@ def open_docx_package(path: str | Path) -> DocxPackage:
         relationships=relationships,
         paragraphs=paragraphs,
         slots=slots,
+        fonts=fonts,
     )

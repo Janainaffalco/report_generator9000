@@ -17,10 +17,17 @@ from xml.etree import ElementTree
 from zipfile import ZIP_DEFLATED, ZipFile, ZipInfo
 
 from .docx_package import (
+    CONTENT_TYPES_NS,
+    DRAWING_NS,
     OFFICE_REL_NS,
+    PICTURE_NS,
+    RELATIONSHIPS_NS,
+    WORD_DRAWING_NS,
     WORD_NS,
     DocxPackage,
     open_docx_package,
+    serialize_xml,
+    text_column_width_emu,
 )
 from .gates.master import (
     BOILERPLATE_MEDIA,
@@ -32,18 +39,189 @@ from .gates.master import (
 from .gates.results import GateResult
 
 
-RELATIONSHIPS_NS = "http://schemas.openxmlformats.org/package/2006/relationships"
-CONTENT_TYPES_NS = "http://schemas.openxmlformats.org/package/2006/content-types"
 W = f"{{{WORD_NS}}}"
 R = f"{{{OFFICE_REL_NS}}}"
-WP = "{http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing}"
-PIC = "{http://schemas.openxmlformats.org/drawingml/2006/picture}"
+WP = f"{{{WORD_DRAWING_NS}}}"
+PIC = f"{{{PICTURE_NS}}}"
+A = f"{{{DRAWING_NS}}}"
 XML = "{http://www.w3.org/XML/1998/namespace}"
 _TOKEN = re.compile(r"(\{\{[^{}<>]{1,64}\}\})")
 _FONT_KEY = "6D5E55E7-46BF-4B17-9DCE-422D31C5A72D"
+_FONT_UPSTREAM_REVISION = "76fca9fd0bb4ea46583f92e978660f3984ab9442"
+_FICHA_TECNICA_CITATION = "Fonte: Ficha Técnica SEBRAETEC 4.0, p. 3"
+_SOURCE_CITATION_SIZE = "16"
 
-for _prefix, _namespace in (("w", WORD_NS), ("r", OFFICE_REL_NS)):
-    ElementTree.register_namespace(_prefix, _namespace)
+_FONT_FACE_ORDER = (
+    "Montserrat",
+    "Montserrat Medium",
+    "Montserrat Light",
+    "Montserrat ExtraLight",
+    "Montserrat Black",
+)
+_FONT_FACE_ASSETS = {
+    "Montserrat": "Montserrat-Regular.ttf",
+    "Montserrat Medium": "Montserrat-Medium.ttf",
+    "Montserrat Light": "Montserrat-Light.ttf",
+    "Montserrat ExtraLight": "Montserrat-ExtraLight.ttf",
+    "Montserrat Black": "Montserrat-Black.ttf",
+}
+
+_NUMBERING_CHILD_ORDER = ("numPicBullet", "abstractNum", "num", "numIdMacAtCleanup")
+_LEVEL_CHILD_ORDER = (
+    "start",
+    "numFmt",
+    "lvlRestart",
+    "pStyle",
+    "isLgl",
+    "suff",
+    "lvlText",
+    "lvlPicBulletId",
+    "legacy",
+    "lvlJc",
+    "pPr",
+    "rPr",
+)
+_PARAGRAPH_PROPERTIES_CHILD_ORDER = (
+    "pStyle",
+    "keepNext",
+    "keepLines",
+    "pageBreakBefore",
+    "framePr",
+    "widowControl",
+    "numPr",
+    "suppressLineNumbers",
+    "pBdr",
+    "shd",
+    "tabs",
+    "suppressAutoHyphens",
+    "kinsoku",
+    "wordWrap",
+    "overflowPunct",
+    "topLinePunct",
+    "autoSpaceDE",
+    "autoSpaceDN",
+    "bidi",
+    "adjustRightInd",
+    "snapToGrid",
+    "spacing",
+    "ind",
+    "contextualSpacing",
+    "mirrorIndents",
+    "suppressOverlap",
+    "jc",
+    "textDirection",
+    "textAlignment",
+    "textboxTightWrap",
+    "outlineLvl",
+    "divId",
+    "cnfStyle",
+    "rPr",
+    "sectPr",
+    "pPrChange",
+)
+_RUN_PROPERTIES_CHILD_ORDER = (
+    "rStyle",
+    "rFonts",
+    "b",
+    "bCs",
+    "i",
+    "iCs",
+    "caps",
+    "smallCaps",
+    "strike",
+    "dstrike",
+    "outline",
+    "shadow",
+    "emboss",
+    "imprint",
+    "noProof",
+    "snapToGrid",
+    "vanish",
+    "webHidden",
+    "color",
+    "spacing",
+    "w",
+    "kern",
+    "position",
+    "sz",
+    "szCs",
+    "highlight",
+    "u",
+    "effect",
+    "bdr",
+    "shd",
+    "fitText",
+    "vertAlign",
+    "rtl",
+    "cs",
+    "em",
+    "lang",
+    "eastAsianLayout",
+    "specVanish",
+    "oMath",
+)
+_STYLE_CHILD_ORDER = (
+    "name",
+    "aliases",
+    "basedOn",
+    "next",
+    "link",
+    "autoRedefine",
+    "hidden",
+    "uiPriority",
+    "semiHidden",
+    "unhideWhenUsed",
+    "qFormat",
+    "locked",
+    "personal",
+    "personalCompose",
+    "personalReply",
+    "rsid",
+    "pPr",
+    "rPr",
+    "tblPr",
+    "trPr",
+    "tcPr",
+    "tblStylePr",
+)
+
+
+def _insertion_index(
+    parent: ElementTree.Element, tag: str, order: tuple[str, ...]
+) -> int:
+    """Return the index at which a schema-ordered *tag* child belongs in *parent*."""
+    local_name = tag.rsplit("}", 1)[-1]
+    position = order.index(local_name)
+    for index, child in enumerate(parent):
+        child_local_name = child.tag.rsplit("}", 1)[-1]
+        if child_local_name in order and order.index(child_local_name) > position:
+            return index
+    return len(parent)
+
+
+def _ordered_child(
+    parent: ElementTree.Element, tag: str, order: tuple[str, ...]
+) -> ElementTree.Element:
+    """Return parent's `tag` child, inserting it at its schema position if absent.
+
+    `order` is the local-name sequence for the parent's complex type
+    (ECMA-376 Part 1, Section 17). `ElementTree.SubElement` always appends,
+    which is invalid for the ordered `xsd:sequence` every OOXML complex type
+    uses.
+    """
+    existing = parent.find(tag)
+    if existing is not None:
+        return existing
+    element = ElementTree.Element(tag)
+    parent.insert(_insertion_index(parent, tag, order), element)
+    return element
+
+
+def _ordered_insert(
+    parent: ElementTree.Element, element: ElementTree.Element, order: tuple[str, ...]
+) -> None:
+    """Insert a new, repeatable *element* into *parent* at its schema position."""
+    parent.insert(_insertion_index(parent, element.tag, order), element)
 
 
 @dataclass(frozen=True)
@@ -99,6 +277,34 @@ def _replace_paragraph(
         paragraph.insert(index + offset, _run_with_text(template, segment))
 
 
+def _restyle_source_citations(
+    document: ElementTree.Element, changes: list[_Change]
+) -> None:
+    for paragraph in document.iter(f"{W}p"):
+        if _paragraph_text(paragraph) != _FICHA_TECNICA_CITATION:
+            continue
+        for run in paragraph.findall(f"{W}r"):
+            properties = run.find(f"{W}rPr")
+            if properties is None:
+                properties = ElementTree.Element(f"{W}rPr")
+                run.insert(0, properties)
+            _ordered_child(properties, f"{W}i", _RUN_PROPERTIES_CHILD_ORDER)
+            size = _ordered_child(properties, f"{W}sz", _RUN_PROPERTIES_CHILD_ORDER)
+            size.set(f"{W}val", _SOURCE_CITATION_SIZE)
+            size_complex_script = _ordered_child(
+                properties, f"{W}szCs", _RUN_PROPERTIES_CHILD_ORDER
+            )
+            size_complex_script.set(f"{W}val", _SOURCE_CITATION_SIZE)
+        changes.append(
+            _Change(
+                "source citation restyled",
+                "word/document.xml",
+                "Ficha Técnica SEBRAETEC 4.0 – Pág. 3",
+                f"{_FICHA_TECNICA_CITATION}; smaller italic right-aligned citation",
+            )
+        )
+
+
 def _source_replacement(text: str) -> str | None:
     exact = {
         "demanda 010028/2025": "demanda {{DEMANDA}}",
@@ -144,6 +350,8 @@ def _source_replacement(text: str) -> str | None:
         return "ID Visual - {{LINK_IDENTIDADE_VISUAL}}"
     if text.startswith("Usuários e Senhas - https://drive.google.com/"):
         return "Usuários e Senhas - {{LINK_USUARIOS_SENHAS}}"
+    if text == "Ficha Técnica SEBRAETEC 4.0 – Pág. 3":
+        return _FICHA_TECNICA_CITATION
 
     defects = (
         ("Protocolo de envoi de e-mail", "Protocolo de envio de e-mail"),
@@ -221,9 +429,9 @@ def _paragraph_properties(paragraph: ElementTree.Element) -> ElementTree.Element
 
 def _set_heading(paragraph: ElementTree.Element, style_id: str) -> None:
     properties = _paragraph_properties(paragraph)
-    style = properties.find(f"{W}pStyle")
-    if style is None:
-        style = ElementTree.SubElement(properties, f"{W}pStyle")
+    style = _ordered_child(
+        properties, f"{W}pStyle", _PARAGRAPH_PROPERTIES_CHILD_ORDER
+    )
     style.set(f"{W}val", style_id)
 
 
@@ -231,17 +439,63 @@ def _set_spacing(
     paragraph: ElementTree.Element, *, before: int, after: int
 ) -> None:
     properties = _paragraph_properties(paragraph)
-    spacing = properties.find(f"{W}spacing")
-    if spacing is None:
-        spacing = ElementTree.SubElement(properties, f"{W}spacing")
+    spacing = _ordered_child(
+        properties, f"{W}spacing", _PARAGRAPH_PROPERTIES_CHILD_ORDER
+    )
     spacing.set(f"{W}before", str(before))
     spacing.set(f"{W}after", str(after))
+
+
+def _strip_dot_leader_tabs(properties: ElementTree.Element) -> bool:
+    tabs = properties.find(f"{W}tabs")
+    if tabs is None:
+        return False
+    leaders = [tab for tab in tabs.findall(f"{W}tab") if tab.get(f"{W}leader")]
+    for tab in leaders:
+        tabs.remove(tab)
+    if not list(tabs):
+        properties.remove(tabs)
+    return bool(leaders)
+
+
+def _scale_block_image(
+    image: ElementTree.Element, column_width_emu: int, changes: list[_Change]
+) -> None:
+    extent = image.find(f".//{WP}extent")
+    if extent is None or extent.get("cx") is None:
+        return
+    width = int(extent.get("cx"))
+    height = int(extent.get("cy"))
+    if width <= column_width_emu:
+        return
+    scale = column_width_emu / width
+    scaled_width = column_width_emu
+    scaled_height = round(height * scale)
+    extent.set("cx", str(scaled_width))
+    extent.set("cy", str(scaled_height))
+    for sibling_extent in image.iter(f"{A}ext"):
+        if "cx" in sibling_extent.attrib and "cy" in sibling_extent.attrib:
+            sibling_extent.set("cx", str(scaled_width))
+            sibling_extent.set("cy", str(scaled_height))
+    changes.append(
+        _Change(
+            "Block image scaled to column",
+            "word/document.xml",
+            f"{width}x{height} EMU",
+            f"{scaled_width}x{scaled_height} EMU",
+        )
+    )
 
 
 def _canonicalize_blocks(
     parts: dict[str, bytes], changes: list[_Change]
 ) -> None:
-    document = ElementTree.fromstring(parts["word/document.xml"])
+    original_document = parts["word/document.xml"]
+    document = ElementTree.fromstring(original_document)
+    try:
+        column_width_emu = text_column_width_emu(document)
+    except ValueError as error:
+        raise MasterBuildError(str(error)) from error
     body = document.find(f"{W}body")
     if body is None:
         raise MasterBuildError("word/document.xml has no body")
@@ -310,9 +564,9 @@ def _canonicalize_blocks(
         if image.find(f".//{W}drawing") is None:
             raise MasterBuildError(f"Block image does not follow heading: {expected}")
         properties = _paragraph_properties(heading)
-        keep = properties.find(f"{W}keepNext")
-        if keep is None:
-            keep = ElementTree.SubElement(properties, f"{W}keepNext")
+        keep = _ordered_child(
+            properties, f"{W}keepNext", _PARAGRAPH_PROPERTIES_CHILD_ORDER
+        )
         keep.set(f"{W}val", "true")
         style = properties.find(f"{W}pStyle")
         if style is not None and style.get(f"{W}val") in {
@@ -320,8 +574,18 @@ def _canonicalize_blocks(
             "Heading2",
         }:
             style.set(f"{W}val", "Normal")
+        if _strip_dot_leader_tabs(properties):
+            changes.append(
+                _Change(
+                    "dot-leader tab stop removed",
+                    "word/document.xml",
+                    expected,
+                    "leftover summary tab stop removed",
+                )
+            )
         _set_spacing(heading, before=240, after=80)
         _set_spacing(image, before=0, after=240)
+        _scale_block_image(image, column_width_emu, changes)
         block_pairs.append((heading, image))
         changes.append(
             _Change(
@@ -364,9 +628,7 @@ def _canonicalize_blocks(
             "MASTER_BLOCK_STAMP",
         )
     )
-    parts["word/document.xml"] = ElementTree.tostring(
-        document, encoding="utf-8", xml_declaration=True
-    )
+    parts["word/document.xml"] = serialize_xml(document, original_document)
 
 
 def clone_block_stamp(
@@ -474,7 +736,9 @@ def _toc_paragraph() -> ElementTree.Element:
     paragraph = ElementTree.Element(f"{W}p")
     begin_run = ElementTree.SubElement(paragraph, f"{W}r")
     ElementTree.SubElement(
-        begin_run, f"{W}fldChar", {f"{W}fldCharType": "begin"}
+        begin_run,
+        f"{W}fldChar",
+        {f"{W}fldCharType": "begin", f"{W}dirty": "true"},
     )
     instruction_run = ElementTree.SubElement(paragraph, f"{W}r")
     instruction = ElementTree.SubElement(instruction_run, f"{W}instrText")
@@ -520,35 +784,42 @@ def _canonical_heading_paragraphs(
 
 
 def _ensure_numbering(parts: dict[str, bytes], changes: list[_Change]) -> None:
-    numbering = ElementTree.fromstring(
-        parts.get("word/numbering.xml", f'<w:numbering xmlns:w="{WORD_NS}"/>'.encode())
+    original_numbering = parts.get(
+        "word/numbering.xml", f'<w:numbering xmlns:w="{WORD_NS}"/>'.encode()
     )
+    numbering = ElementTree.fromstring(original_numbering)
     for item in list(numbering):
         if item.tag == f"{W}abstractNum" and item.get(f"{W}abstractNumId") == "900":
             numbering.remove(item)
         if item.tag == f"{W}num" and item.get(f"{W}numId") == "900":
             numbering.remove(item)
-    abstract = ElementTree.SubElement(
-        numbering, f"{W}abstractNum", {f"{W}abstractNumId": "900"}
-    )
+    abstract = ElementTree.Element(f"{W}abstractNum", {f"{W}abstractNumId": "900"})
+    _ordered_insert(numbering, abstract, _NUMBERING_CHILD_ORDER)
     ElementTree.SubElement(
         abstract, f"{W}multiLevelType", {f"{W}val": "multilevel"}
     )
-    for level, text in ((0, "%1"), (1, "%1.%2")):
+    for level, text, hanging in ((0, "%1", "432"), (1, "%1.%2", "576")):
         item = ElementTree.SubElement(
             abstract, f"{W}lvl", {f"{W}ilvl": str(level)}
         )
         ElementTree.SubElement(item, f"{W}start", {f"{W}val": "1"})
         ElementTree.SubElement(item, f"{W}numFmt", {f"{W}val": "decimal"})
-        ElementTree.SubElement(item, f"{W}lvlText", {f"{W}val": text})
         ElementTree.SubElement(
             item, f"{W}pStyle", {f"{W}val": f"Heading{level + 1}"}
         )
-    number = ElementTree.SubElement(numbering, f"{W}num", {f"{W}numId": "900"})
+        ElementTree.SubElement(item, f"{W}suff", {f"{W}val": "space"})
+        ElementTree.SubElement(item, f"{W}lvlText", {f"{W}val": text})
+        ElementTree.SubElement(item, f"{W}lvlJc", {f"{W}val": "left"})
+        level_properties = ElementTree.SubElement(item, f"{W}pPr")
+        ElementTree.SubElement(
+            level_properties,
+            f"{W}ind",
+            {f"{W}start": hanging, f"{W}hanging": hanging},
+        )
+    number = ElementTree.Element(f"{W}num", {f"{W}numId": "900"})
+    _ordered_insert(numbering, number, _NUMBERING_CHILD_ORDER)
     ElementTree.SubElement(number, f"{W}abstractNumId", {f"{W}val": "900"})
-    parts["word/numbering.xml"] = ElementTree.tostring(
-        numbering, encoding="utf-8", xml_declaration=True
-    )
+    parts["word/numbering.xml"] = serialize_xml(numbering, original_numbering)
     changes.append(
         _Change(
             "numbering",
@@ -562,14 +833,16 @@ def _ensure_numbering(parts: dict[str, bytes], changes: list[_Change]) -> None:
 def _ensure_discoverable_parts(
     parts: dict[str, bytes], changes: list[_Change]
 ) -> None:
-    relations = ElementTree.fromstring(parts["word/_rels/document.xml.rels"])
+    original_relations = parts["word/_rels/document.xml.rels"]
+    relations = ElementTree.fromstring(original_relations)
     specifications = (
         ("settings", "settings.xml", "application/vnd.openxmlformats-officedocument.wordprocessingml.settings+xml"),
         ("styles", "styles.xml", "application/vnd.openxmlformats-officedocument.wordprocessingml.styles+xml"),
         ("numbering", "numbering.xml", "application/vnd.openxmlformats-officedocument.wordprocessingml.numbering+xml"),
         ("fontTable", "fontTable.xml", "application/vnd.openxmlformats-officedocument.wordprocessingml.fontTable+xml"),
     )
-    content_types = ElementTree.fromstring(parts["[Content_Types].xml"])
+    original_content_types = parts["[Content_Types].xml"]
+    content_types = ElementTree.fromstring(original_content_types)
     for kind, target, content_type in specifications:
         relationship_type = f"{OFFICE_REL_NS}/{kind}"
         if not any(
@@ -605,18 +878,19 @@ def _ensure_discoverable_parts(
                     part_name,
                 )
             )
-    parts["word/_rels/document.xml.rels"] = ElementTree.tostring(
-        relations, encoding="utf-8", xml_declaration=True
+    parts["word/_rels/document.xml.rels"] = serialize_xml(
+        relations, original_relations
     )
-    parts["[Content_Types].xml"] = ElementTree.tostring(
-        content_types, encoding="utf-8", xml_declaration=True
+    parts["[Content_Types].xml"] = serialize_xml(
+        content_types, original_content_types
     )
 
 
 def _add_signoff_structure(
     parts: dict[str, bytes], changes: list[_Change]
 ) -> None:
-    document = ElementTree.fromstring(parts["word/document.xml"])
+    original_document = parts["word/document.xml"]
+    document = ElementTree.fromstring(original_document)
     body = document.find(f"{W}body")
     if body is not None:
         children = list(body)
@@ -649,6 +923,28 @@ def _add_signoff_structure(
                 style.set(f"{W}val", "Normal")
         for level, title, paragraph in _canonical_heading_paragraphs(body):
             _set_heading(paragraph, f"Heading{level}")
+            properties = paragraph.find(f"{W}pPr")
+            if properties is not None:
+                direct_numbering = properties.find(f"{W}numPr")
+                if direct_numbering is not None:
+                    properties.remove(direct_numbering)
+                    changes.append(
+                        _Change(
+                            "direct numbering removed",
+                            "word/document.xml",
+                            title,
+                            "numId 900 now applies from the style",
+                        )
+                    )
+                if _strip_dot_leader_tabs(properties):
+                    changes.append(
+                        _Change(
+                            "dot-leader tab stop removed",
+                            "word/document.xml",
+                            title,
+                            "leftover summary tab stop removed",
+                        )
+                    )
             changes.append(
                 _Change(
                     "heading assigned",
@@ -657,51 +953,43 @@ def _add_signoff_structure(
                     f"Heading{level}",
                 )
             )
-        parts["word/document.xml"] = ElementTree.tostring(document, encoding="utf-8", xml_declaration=True)
+        parts["word/document.xml"] = serialize_xml(document, original_document)
 
-    settings = ElementTree.fromstring(parts.get("word/settings.xml", f'<w:settings xmlns:w="{WORD_NS}"/>'.encode()))
-    update = settings.find(f"{W}updateFields")
-    if update is None:
-        update = ElementTree.SubElement(settings, f"{W}updateFields")
-    update.set(f"{W}val", "true")
-    parts["word/settings.xml"] = ElementTree.tostring(settings, encoding="utf-8", xml_declaration=True)
-    changes.append(
-        _Change(
-            "setting",
-            "word/settings.xml",
-            "source field-update behavior",
-            "updateFields=true",
-        )
+    if "word/settings.xml" not in parts:
+        parts["word/settings.xml"] = f'<w:settings xmlns:w="{WORD_NS}"/>'.encode()
+
+    original_styles = parts.get(
+        "word/styles.xml", f'<w:styles xmlns:w="{WORD_NS}"/>'.encode()
     )
-
-    styles = ElementTree.fromstring(parts.get("word/styles.xml", f'<w:styles xmlns:w="{WORD_NS}"/>'.encode()))
+    styles = ElementTree.fromstring(original_styles)
     for level, name in ((1, "Título 1"), (2, "Título 2")):
         style_id = f"Heading{level}"
         style = next((item for item in styles.findall(f"{W}style") if item.get(f"{W}styleId") == style_id), None)
         if style is None:
             style = ElementTree.SubElement(styles, f"{W}style", {f"{W}type": "paragraph", f"{W}styleId": style_id})
-        named = style.find(f"{W}name")
-        if named is None:
-            named = ElementTree.SubElement(style, f"{W}name")
+        named = _ordered_child(style, f"{W}name", _STYLE_CHILD_ORDER)
         named.set(f"{W}val", name)
-        properties = style.find(f"{W}pPr")
-        if properties is None:
-            properties = ElementTree.SubElement(style, f"{W}pPr")
-        outline = properties.find(f"{W}outlineLvl")
-        if outline is None:
-            outline = ElementTree.SubElement(properties, f"{W}outlineLvl")
+        properties = _ordered_child(style, f"{W}pPr", _STYLE_CHILD_ORDER)
+        outline = _ordered_child(
+            properties, f"{W}outlineLvl", _PARAGRAPH_PROPERTIES_CHILD_ORDER
+        )
         outline.set(f"{W}val", str(level - 1))
-        run = style.find(f"{W}rPr")
-        if run is None:
-            run = ElementTree.SubElement(style, f"{W}rPr")
+        run = _ordered_child(style, f"{W}rPr", _STYLE_CHILD_ORDER)
         fonts = run.find(f"{W}rFonts")
         if fonts is None:
             fonts = ElementTree.SubElement(run, f"{W}rFonts")
         for attribute in ("ascii", "hAnsi", "cs", "eastAsia"):
             fonts.set(f"{W}{attribute}", "Montserrat")
-        number_properties = properties.find(f"{W}numPr")
-        if number_properties is None:
-            number_properties = ElementTree.SubElement(properties, f"{W}numPr")
+        for attribute in ("asciiTheme", "hAnsiTheme", "eastAsiaTheme", "cstheme"):
+            fonts.attrib.pop(f"{W}{attribute}", None)
+        color = run.find(f"{W}color")
+        if color is None:
+            color = ElementTree.SubElement(run, f"{W}color")
+        color.attrib.clear()
+        color.set(f"{W}val", "404040")
+        number_properties = _ordered_child(
+            properties, f"{W}numPr", _PARAGRAPH_PROPERTIES_CHILD_ORDER
+        )
         level_element = number_properties.find(f"{W}ilvl")
         if level_element is None:
             level_element = ElementTree.SubElement(number_properties, f"{W}ilvl")
@@ -710,41 +998,74 @@ def _add_signoff_structure(
         if number_id is None:
             number_id = ElementTree.SubElement(number_properties, f"{W}numId")
         number_id.set(f"{W}val", "900")
+        indentation = _ordered_child(
+            properties, f"{W}ind", _PARAGRAPH_PROPERTIES_CHILD_ORDER
+        )
+        indentation.set(f"{W}start", "432" if level == 1 else "576")
+        indentation.set(f"{W}hanging", "432" if level == 1 else "576")
         changes.append(
             _Change(
                 "style updated",
                 "word/styles.xml",
                 style_id,
-                f"{name}; Montserrat; numbering 900 level {level - 1}",
+                f"{name}; Montserrat; 404040; numbering 900 level {level - 1}",
             )
         )
-    parts["word/styles.xml"] = ElementTree.tostring(styles, encoding="utf-8", xml_declaration=True)
+    parts["word/styles.xml"] = serialize_xml(styles, original_styles)
     _ensure_numbering(parts, changes)
     _ensure_discoverable_parts(parts, changes)
+
+
+_RFONTS_ASCII = re.compile(r'<w:rFonts\b[^>]*\bw:ascii="([^"]*)"')
+_FONT_BEARING_PART = re.compile(r"^word/(document|header\d*|footer\d*)\.xml$")
+
+
+def _referenced_font_faces(parts: dict[str, bytes]) -> tuple[str, ...]:
+    found: set[str] = set()
+    for name, content in parts.items():
+        if not _FONT_BEARING_PART.match(name):
+            continue
+        found.update(
+            _RFONTS_ASCII.findall(content.decode("utf-8", errors="ignore"))
+        )
+    unknown = found - set(_FONT_FACE_ASSETS)
+    if unknown:
+        raise MasterBuildError(
+            f"document references unrecognized font faces: {sorted(unknown)}"
+        )
+    return tuple(face for face in _FONT_FACE_ORDER if face in found)
 
 
 def _embed_montserrat(
     parts: dict[str, bytes], changes: list[_Change]
 ) -> None:
-    font_path = Path(__file__).with_name("assets") / "Montserrat-wght.ttf"
-    asset_folder = font_path.parent
-    font = font_path.read_bytes()
+    asset_folder = Path(__file__).with_name("assets")
+    faces = _referenced_font_faces(parts)
     key = uuid.UUID(_FONT_KEY).bytes[::-1]
-    obfuscated = bytearray(font)
-    for index in range(min(32, len(obfuscated))):
-        obfuscated[index] ^= key[index % len(key)]
-    faces = ("Montserrat", "Montserrat Medium", "Montserrat Light", "Montserrat ExtraLight", "Montserrat Black")
-    font_table = ElementTree.fromstring(parts.get("word/fontTable.xml", f'<w:fonts xmlns:w="{WORD_NS}" xmlns:r="{OFFICE_REL_NS}"/>'.encode()))
+    font_digests: list[tuple[str, str, str]] = []
+
+    original_font_table = parts.get(
+        "word/fontTable.xml",
+        f'<w:fonts xmlns:w="{WORD_NS}" xmlns:r="{OFFICE_REL_NS}"/>'.encode(),
+    )
+    font_table = ElementTree.fromstring(original_font_table)
     for index, face in enumerate(faces):
+        asset_name = _FONT_FACE_ASSETS[face]
+        font = (asset_folder / asset_name).read_bytes()
+        obfuscated = bytearray(font)
+        for position in range(min(32, len(obfuscated))):
+            obfuscated[position] ^= key[position % len(key)]
         relation_id = f"rIdMontserrat{index}"
         target = f"fonts/montserrat-{index}.odttf"
         parts[f"word/{target}"] = bytes(obfuscated)
+        digest = hashlib.sha256(font).hexdigest()
+        font_digests.append((face, asset_name, digest))
         changes.append(
             _Change(
                 "Boilerplate font embedded",
                 f"word/{target}",
                 "(none)",
-                f"{face}; source sha256={hashlib.sha256(font).hexdigest()}",
+                f"{face}; source={asset_name}; sha256={digest}",
             )
         )
         entry = next((item for item in font_table.findall(f"{W}font") if item.get(f"{W}name") == face), None)
@@ -755,8 +1076,13 @@ def _embed_montserrat(
             embed = ElementTree.SubElement(entry, f"{W}embedRegular")
         embed.set(f"{R}id", relation_id)
         embed.set(f"{W}fontKey", f"{{{_FONT_KEY}}}")
-    parts["word/fontTable.xml"] = ElementTree.tostring(font_table, encoding="utf-8", xml_declaration=True)
-    rels = ElementTree.fromstring(parts.get("word/_rels/fontTable.xml.rels", f'<Relationships xmlns="{RELATIONSHIPS_NS}"/>'.encode()))
+    parts["word/fontTable.xml"] = serialize_xml(font_table, original_font_table)
+
+    original_font_relations = parts.get(
+        "word/_rels/fontTable.xml.rels",
+        f'<Relationships xmlns="{RELATIONSHIPS_NS}"/>'.encode(),
+    )
+    rels = ElementTree.fromstring(original_font_relations)
     for index, _face in enumerate(faces):
         relation_id = f"rIdMontserrat{index}"
         relation = next((item for item in rels if item.get("Id") == relation_id), None)
@@ -771,8 +1097,12 @@ def _embed_montserrat(
                 f"{relation_id} -> fonts/montserrat-{index}.odttf",
             )
         )
-    parts["word/_rels/fontTable.xml.rels"] = ElementTree.tostring(rels, encoding="utf-8", xml_declaration=True)
-    types = ElementTree.fromstring(parts["[Content_Types].xml"])
+    parts["word/_rels/fontTable.xml.rels"] = serialize_xml(
+        rels, original_font_relations
+    )
+
+    original_content_types = parts["[Content_Types].xml"]
+    types = ElementTree.fromstring(original_content_types)
     for index, _face in enumerate(faces):
         part_name = f"/word/fonts/montserrat-{index}.odttf"
         override = next((item for item in types if item.get("PartName") == part_name), None)
@@ -810,11 +1140,15 @@ def _embed_montserrat(
                 detail,
             )
         )
+    font_entries = "".join(
+        f'<font name="{face}" file="{asset_name}" sha256="{digest}"/>'
+        for face, asset_name, digest in font_digests
+    )
     provenance = (
         '<?xml version="1.0" encoding="UTF-8"?>'
         '<provenance origin="Boilerplate" family="Montserrat" '
-        'sha256="0f7b311b2f3279e4eef9b2f968bcdbab6e28f4daeb1f049f4f278a902bcd82f7" '
-        'upstreamRevision="76fca9fd0bb4ea46583f92e978660f3984ab9442">'
+        f'upstreamRevision="{_FONT_UPSTREAM_REVISION}">'
+        f"{font_entries}"
         '<license part="/customXml/Montserrat-OFL.txt">SIL Open Font License 1.1</license>'
         '<source part="/customXml/Montserrat-SOURCE.md"/>'
         '<metadata part="/customXml/Montserrat-METADATA.pb"/>'
@@ -826,13 +1160,12 @@ def _embed_montserrat(
             "Boilerplate provenance added",
             "customXml/montserrat-provenance.xml",
             "(none)",
-            "Montserrat upstream revision, SHA-256, SIL OFL, source metadata",
+            "Montserrat upstream revision, per-face SHA-256, SIL OFL, source metadata",
         )
     )
 
-    document_relations = ElementTree.fromstring(
-        parts["word/_rels/document.xml.rels"]
-    )
+    original_document_relations = parts["word/_rels/document.xml.rels"]
+    document_relations = ElementTree.fromstring(original_document_relations)
     if not any(
         item.get("Id") == "rIdMontserratProvenance"
         for item in document_relations
@@ -846,8 +1179,8 @@ def _embed_montserrat(
                 "Target": "../customXml/montserrat-provenance.xml",
             },
         )
-    parts["word/_rels/document.xml.rels"] = ElementTree.tostring(
-        document_relations, encoding="utf-8", xml_declaration=True
+    parts["word/_rels/document.xml.rels"] = serialize_xml(
+        document_relations, original_document_relations
     )
     changes.append(
         _Change(
@@ -877,7 +1210,7 @@ def _embed_montserrat(
                     part_name,
                 )
             )
-    parts["[Content_Types].xml"] = ElementTree.tostring(types, encoding="utf-8", xml_declaration=True)
+    parts["[Content_Types].xml"] = serialize_xml(types, original_content_types)
 
 
 def _format_diff(
@@ -913,6 +1246,10 @@ def _format_diff(
             "section. The live Heading 2 range ends at `2.10 ORIENTAÇÕES AO CLIENTE`.",
             "- The Ficha Técnica passage beginning `A portal web` remains verbatim; "
             "its grammar may be normative source text.",
+            "- `Ficha Técnica SEBRAETEC 4.0 – Pág. 3` is a citation of page 3 of the "
+            "SEBRAETEC spec, not a page counter for this document, by owner ruling. "
+            "It is kept and restyled as `Fonte: Ficha Técnica SEBRAETEC 4.0, p. 3` "
+            "so it cannot be misread as pagination.",
             "",
         )
     )
@@ -938,8 +1275,10 @@ def build_master(source: str | Path, destination: str | Path) -> MasterBuild:
     if document_name not in parts or relationship_name not in parts:
         raise MasterBuildError("approved source lacks the main Word document or relationships")
 
-    document = ElementTree.fromstring(parts[document_name])
-    relationships = ElementTree.fromstring(parts[relationship_name])
+    original_document = parts[document_name]
+    original_relationships = parts[relationship_name]
+    document = ElementTree.fromstring(original_document)
+    relationships = ElementTree.fromstring(original_relationships)
     removed_ids = {
         relation.attrib["Id"]
         for relation in relationships.findall(f"{{{RELATIONSHIPS_NS}}}Relationship")
@@ -998,12 +1337,10 @@ def build_master(source: str | Path, destination: str | Path) -> MasterBuild:
                 )
             )
 
-    parts[document_name] = ElementTree.tostring(
-        document, encoding="utf-8", xml_declaration=True
-    )
-    parts[relationship_name] = ElementTree.tostring(
-        relationships, encoding="utf-8", xml_declaration=True
-    )
+    _restyle_source_citations(document, changes)
+
+    parts[document_name] = serialize_xml(document, original_document)
+    parts[relationship_name] = serialize_xml(relationships, original_relationships)
 
     source_media = {item.part_name: item for item in source_package.media}
     for name, media in source_media.items():

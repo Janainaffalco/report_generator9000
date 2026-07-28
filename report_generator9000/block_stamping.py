@@ -12,6 +12,7 @@ from zipfile import ZIP_DEFLATED, BadZipFile, ZipFile, ZipInfo
 from PIL import Image
 
 from .capture import fitted_emu_dimensions
+from .docx_package import serialize_xml
 from .lista_paginas import Pagina
 from .master import (
     CONTENT_TYPES_NS,
@@ -102,7 +103,8 @@ def _ensure_content_type(parts: dict[str, bytes], suffix: str) -> None:
         raise BlockStampingError(
             f"Block image format {suffix or '<none>'!r} is unsupported"
         )
-    root = ElementTree.fromstring(parts["[Content_Types].xml"])
+    original = parts["[Content_Types].xml"]
+    root = ElementTree.fromstring(original)
     extension = suffix.removeprefix(".")
     if not any(
         item.get("Extension", "").casefold() == extension
@@ -113,9 +115,7 @@ def _ensure_content_type(parts: dict[str, bytes], suffix: str) -> None:
             f"{CT}Default",
             {"Extension": extension, "ContentType": content_type},
         )
-        parts["[Content_Types].xml"] = ElementTree.tostring(
-            root, encoding="utf-8", xml_declaration=True
-        )
+        parts["[Content_Types].xml"] = serialize_xml(root, original)
 
 
 def _removed_relationship_media(
@@ -238,10 +238,10 @@ def stamp_blocks(
 
     parts = {item.filename: content for item, content in entries}
     try:
-        document = ElementTree.fromstring(parts["word/document.xml"])
-        relationships = ElementTree.fromstring(
-            parts["word/_rels/document.xml.rels"]
-        )
+        original_document = parts["word/document.xml"]
+        original_relationships = parts["word/_rels/document.xml.rels"]
+        document = ElementTree.fromstring(original_document)
+        relationships = ElementTree.fromstring(original_relationships)
     except (ElementTree.ParseError, KeyError) as error:
         raise BlockStampingError(
             "Master lacks a valid document relationship structure"
@@ -323,11 +323,9 @@ def stamp_blocks(
     for part_name in _removed_relationship_media(document, relationships):
         parts.pop(part_name, None)
 
-    parts["word/document.xml"] = ElementTree.tostring(
-        document, encoding="utf-8", xml_declaration=True
-    )
-    parts["word/_rels/document.xml.rels"] = ElementTree.tostring(
-        relationships, encoding="utf-8", xml_declaration=True
+    parts["word/document.xml"] = serialize_xml(document, original_document)
+    parts["word/_rels/document.xml.rels"] = serialize_xml(
+        relationships, original_relationships
     )
     destination.parent.mkdir(parents=True, exist_ok=True)
     original_names = {item.filename for item, _content in entries}

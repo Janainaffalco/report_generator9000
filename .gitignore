@@ -6,6 +6,8 @@ __pycache__/
 *.egg-info/
 .pytest_cache/
 .venv/
+.env
+!.env.example
 
 # .graphifyignore
 node_modules/
@@ -22,5 +24,8 @@ dist/
 !tests/**
 !.github/
 !.github/**
+!.env.example
+!README.md
+!uv.lock
 __pycache__/
 *.py[cod]

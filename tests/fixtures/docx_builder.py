@@ -51,6 +51,9 @@ class ParagraphSpec:
     hyperlink: str | None = None
     extent: tuple[int, int] = (5400000, 3600000)
     bookmark: tuple[int, str] | None = None
+    font: str | None = None
+    direct_numbering: tuple[int, int] | None = None
+    dot_leader_tab: bool = False
 
 
 @dataclass(frozen=True)
@@ -109,7 +112,21 @@ def _escape(text: str) -> str:
 
 
 def _paragraph_xml(spec: ParagraphSpec, drawing_id: int) -> str:
-    properties = "<w:pPr><w:keepNext/></w:pPr>" if spec.keep_next else ""
+    numbering_xml = ""
+    if spec.direct_numbering is not None:
+        ilvl, num_id = spec.direct_numbering
+        numbering_xml = (
+            f'<w:numPr><w:ilvl w:val="{ilvl}"/><w:numId w:val="{num_id}"/></w:numPr>'
+        )
+    tabs_xml = (
+        '<w:tabs><w:tab w:val="clear" w:pos="709"/>'
+        '<w:tab w:val="right" w:pos="8504" w:leader="dot"/></w:tabs>'
+        if spec.dot_leader_tab
+        else ""
+    )
+    keep_next_xml = "<w:keepNext/>" if spec.keep_next else ""
+    inner_properties = f"{keep_next_xml}{numbering_xml}{tabs_xml}"
+    properties = f"<w:pPr>{inner_properties}</w:pPr>" if inner_properties else ""
     bookmark_start = (
         ""
         if spec.bookmark is None
@@ -120,8 +137,14 @@ def _paragraph_xml(spec: ParagraphSpec, drawing_id: int) -> str:
         if spec.bookmark is None
         else f'<w:bookmarkEnd w:id="{spec.bookmark[0]}"/>'
     )
+    run_properties = (
+        ""
+        if spec.font is None
+        else f'<w:rPr><w:rFonts w:ascii="{_escape(spec.font)}" '
+        f'w:hAnsi="{_escape(spec.font)}"/></w:rPr>'
+    )
     runs_xml = "".join(
-        f"<w:r><w:t>{_escape(run)}</w:t></w:r>" for run in spec.runs
+        f"<w:r>{run_properties}<w:t>{_escape(run)}</w:t></w:r>" for run in spec.runs
     )
     if spec.hyperlink is not None:
         runs_xml = (
@@ -139,7 +162,10 @@ def _paragraph_xml(spec: ParagraphSpec, drawing_id: int) -> str:
             f'<pic:cNvPr id="{drawing_id}" name="Picture {drawing_id}"/>'
             "<pic:cNvPicPr/></pic:nvPicPr><pic:blipFill>"
             f'<a:blip r:embed="{spec.image}"/>'
-            "</pic:blipFill></pic:pic></a:graphicData></a:graphic>"
+            "</pic:blipFill><pic:spPr><a:xfrm>"
+            f'<a:off x="0" y="0"/><a:ext cx="{cx}" cy="{cy}"/>'
+            "</a:xfrm></pic:spPr>"
+            "</pic:pic></a:graphicData></a:graphic>"
             "</wp:inline></w:drawing></w:r>"
         )
     return (
@@ -163,7 +189,10 @@ def _document_xml(paragraphs: Sequence[ParagraphSpec]) -> str:
         f' xmlns:pic="{PICTURE_NS}">\n'
         "  <w:body>\n"
         f"{body}"
-        "    <w:sectPr/>\n"
+        '    <w:sectPr><w:pgSz w:w="11906" w:h="16838"/>'
+        '<w:pgMar w:top="1701" w:right="1701" w:bottom="1701" '
+        'w:left="1701" w:header="708" w:footer="708" w:gutter="0"/>'
+        "</w:sectPr>\n"
         "  </w:body>\n"
         "</w:document>\n"
     )
