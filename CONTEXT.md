@@ -93,7 +93,11 @@ _Avoid_: domain, url
 
 **Capture**:
 A screenshot the pipeline takes of a live page at the Capture Origin. Never reused across
-engagements, never synthesised, never AI-generated.
+engagements, never AI-generated. The declared client-logo fallback is the sole acquisition
+exception: when no rendered element matches the declared URL, the exact declared asset is
+downloaded and rasterised onto white. It remains a Capture because identification is still
+bound to the live site's declaration and the fallback bytes are acquired during this run;
+it is never selected or synthesised heuristically.
 _Avoid_: screenshot, print, image
 
 **Gated Input**:

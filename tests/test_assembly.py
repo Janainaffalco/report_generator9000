@@ -15,6 +15,7 @@ from report_generator9000.docx_package import open_docx_package
 from report_generator9000.gates import GATES
 from report_generator9000.gates.blocks import check_block_integrity
 from report_generator9000.generate import StopCondition
+from report_generator9000.logo import CLIENT_LOGO_PART
 from report_generator9000.master import build_master
 from report_generator9000.prose import (
     GroundedField,
@@ -139,6 +140,18 @@ def test_one_engagement_directory_contains_the_complete_handoff_package(
     )
 
     document_package = open_docx_package(package.report.document)
+    logo_artifact = next(
+        item
+        for item in package.report.context.media
+        if item.label == "logo_cliente"
+    )
+    assert logo_artifact.origin == "capture"
+    assert logo_artifact.source is not None
+    assert Path(logo_artifact.source).parent.name == "capturas"
+    with ZipFile(package.report.document) as archive:
+        assert archive.read(CLIENT_LOGO_PART) == Path(
+            logo_artifact.source
+        ).read_bytes()
     assert package.report.context.blocks == tuple(
         page.titulo_bloco for page in package.pages
     )

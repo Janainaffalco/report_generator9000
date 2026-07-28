@@ -33,6 +33,7 @@ from .gated_inputs import (
     load_gated_inputs,
 )
 from .lista_paginas import Pagina, derive_lista_paginas
+from .logo import LogoCapture, capture_client_logo
 from .palette import PaletteCollectionError, derive_palette_from_site
 from .prose import ProseConfig, ProseProvider
 from .placeholders import render_placeholder
@@ -93,6 +94,10 @@ def _assemble_staged_package(
         pages,
         directory / "capturas",
         config=capture_config,
+    )
+    client_logo = capture_client_logo(
+        engagement.capture_origin,
+        captures.folder,
     )
     captures_by_page = {
         capture.pagina: capture for capture in captures.captures
@@ -183,6 +188,7 @@ def _assemble_staged_package(
             capture_folder=captures.folder,
             run_pendencias=tuple(capture_pendencias),
             derived_palette=derived_palette,
+            client_logo=client_logo,
         )
 
     renderer = (
@@ -204,6 +210,11 @@ def _assemble_staged_package(
             for failure in captures.failures
             if failure.raw_path is not None
         ]
+        + (
+            [client_logo.path.resolve()]
+            if isinstance(client_logo, LogoCapture)
+            else []
+        )
     )
     output_paths = (
         generated.document.resolve(),

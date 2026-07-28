@@ -3,11 +3,19 @@
   <head>
     <meta charset="utf-8">
     <title>Fixture</title>
+    <script type="application/ld+json">
+      {
+        "@context": "https://schema.org",
+        "@type": "Organization",
+        "logo": {"url": "/client-logo.svg", "width": 320, "height": 120}
+      }
+    </script>
     <link rel="stylesheet" href="/missing-palette.css">
     <link rel="stylesheet" href="/palette-root.css">
     <style>
       body { margin: 0; font-family: sans-serif; }
       header { padding: 20px; background: rgb(21, 67, 96); color: white; }
+      header .client-logo { display: block; width: 160px; height: 60px; }
       header a { color: white; margin-right: 12px; }
       main { min-height: 1500px; padding: 24px; background: white; }
       #lazy-hero {
@@ -37,6 +45,7 @@
       <a href="/breadcrumb.html">Página ancestral</a>
     </nav>
     <header>
+      <img class="client-logo" src="/client-logo.svg" alt="Fixture">
       <nav aria-label="Menu principal">
         <a href="/">Home</a>
         <a href="/servicos.html">Serviços</a>

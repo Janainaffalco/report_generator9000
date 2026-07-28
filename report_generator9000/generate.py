@@ -5,7 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import tempfile
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 from xml.sax.saxutils import escape
 from zipfile import BadZipFile, ZipFile
@@ -30,8 +30,15 @@ from .prose import (
     draft_prose,
 )
 from .lista_paginas import Pagina, derive_lista_paginas
+from .logo import CLIENT_LOGO_PART, LogoCapture, LogoFailure
 from .palette import PaletteDerivation, render_palette
-from .run_context import Artifact, Grounding, Pendencia, RunContext
+from .run_context import (
+    Artifact,
+    Grounding,
+    Pendencia,
+    RunContext,
+    is_within,
+)
 
 
 SPREADSHEET_TOKENS = {
@@ -238,6 +245,7 @@ def generate_report(
     capture_folder: str | Path | None = None,
     run_pendencias: tuple[Pendencia, ...] = (),
     derived_palette: PaletteDerivation | None = None,
+    client_logo: LogoCapture | LogoFailure | None = None,
 ) -> GeneratedReport:
     """Clone *master* and fill spreadsheet and available Gated Inputs."""
     master_path = Path(master)
@@ -336,6 +344,58 @@ def generate_report(
     used_run_artifacts: set[Artifact] = set()
     palette_grounding: list[Grounding] = []
     claimed_media_parts: set[str] = set()
+    if CLIENT_LOGO_PART in parts:
+        claimed_media_parts.add(CLIENT_LOGO_PART)
+        if isinstance(client_logo, LogoCapture):
+            if capture_folder is None or not is_within(
+                str(client_logo.path.resolve()),
+                str(Path(capture_folder).resolve()),
+            ):
+                raise ReportGenerationError(
+                    "client logo is outside this run's Capture folder"
+                )
+            content = client_logo.path.read_bytes()
+            digest = hashlib.sha256(content).hexdigest()
+            if digest.casefold() != client_logo.digest.casefold():
+                raise ReportGenerationError(
+                    "client logo digest does not match its Capture"
+                )
+            parts[CLIENT_LOGO_PART] = content
+            artifacts.append(client_logo.artifact)
+        else:
+            failure = (
+                client_logo
+                if isinstance(client_logo, LogoFailure)
+                else LogoFailure(
+                    classification="UNDECLARED",
+                    reason=(
+                        "site não declara logo em nenhuma fonte suportada"
+                    ),
+                    required_action="Anexar o logo do cliente",
+                )
+            )
+            width, height = _placeholder_pixel_dimensions(
+                master_package, CLIENT_LOGO_PART
+            )
+            content = render_placeholder(
+                parts[CLIENT_LOGO_PART],
+                failure.classification,
+                "logo do cliente",
+                width,
+                height,
+            )
+            parts[CLIENT_LOGO_PART] = content
+            digest = hashlib.sha256(content).hexdigest()
+            artifacts.append(
+                Artifact(
+                    digest=digest,
+                    origin="placeholder",
+                    label="logo_cliente",
+                )
+            )
+            pendencias.append(
+                replace(failure.pendencia, evidence=digest)
+            )
     supplied_images = gated.images_by_part()
     for slot, _filename, part_name in GATED_IMAGE_PARTS:
         supplied = supplied_images.get(part_name)

@@ -36,6 +36,11 @@ from .gates.master import (
     MASTER_BLOCK_HEADINGS,
     check_master_build,
 )
+from .logo import (
+    CLIENT_LOGO_HEIGHT_EMU,
+    CLIENT_LOGO_PART,
+    CLIENT_LOGO_WIDTH_EMU,
+)
 from .gates.results import GateResult
 
 
@@ -483,6 +488,141 @@ def _scale_block_image(
             "word/document.xml",
             f"{width}x{height} EMU",
             f"{scaled_width}x{scaled_height} EMU",
+        )
+    )
+
+
+def _add_client_logo_slot(
+    parts: dict[str, bytes], changes: list[_Change]
+) -> None:
+    document_name = "word/document.xml"
+    relationship_name = "word/_rels/document.xml.rels"
+    original_document = parts[document_name]
+    original_relationships = parts[relationship_name]
+    document = ElementTree.fromstring(original_document)
+    relationships = ElementTree.fromstring(original_relationships)
+    body = document.find(f"{W}body")
+    if body is None:
+        raise MasterBuildError("word/document.xml has no body")
+    children = list(body)
+    briefing_index = next(
+        (
+            index
+            for index, paragraph in enumerate(children)
+            if _paragraph_text(paragraph).strip()
+            == "BRIEFING INICIAL PARA DEFINIÇÃO DO ESCOPO"
+        ),
+        None,
+    )
+    stamp_index = next(
+        (
+            index
+            for index, paragraph in enumerate(children)
+            if paragraph.find(
+                f"{W}bookmarkStart[@{W}name='MASTER_BLOCK_STAMP']"
+            )
+            is not None
+        ),
+        None,
+    )
+    if briefing_index is None or stamp_index is None:
+        raise MasterBuildError("client logo Slot insertion anchors not found")
+    source_image = children[stamp_index + 1]
+    logo_paragraph = deepcopy(source_image)
+    for bookmark in list(logo_paragraph):
+        if bookmark.tag in {f"{W}bookmarkStart", f"{W}bookmarkEnd"}:
+            logo_paragraph.remove(bookmark)
+    blip = logo_paragraph.find(
+        f".//{{{DRAWING_NS}}}blip"
+    )
+    if blip is None:
+        raise MasterBuildError("client logo Slot source has no image")
+    relation_id = "rIdClientLogo"
+    used_ids = {
+        item.get("Id")
+        for item in relationships.findall(
+            f"{{{RELATIONSHIPS_NS}}}Relationship"
+        )
+    }
+    if relation_id in used_ids:
+        raise MasterBuildError("client logo relationship id already exists")
+    blip.set(f"{R}embed", relation_id)
+    for extent in logo_paragraph.iter():
+        if extent.tag in {
+            f"{WP}extent",
+            f"{{{DRAWING_NS}}}ext",
+        } and "cx" in extent.attrib and "cy" in extent.attrib:
+            extent.set("cx", str(CLIENT_LOGO_WIDTH_EMU))
+            extent.set("cy", str(CLIENT_LOGO_HEIGHT_EMU))
+    used_doc_ids = {
+        int(item.get("id"))
+        for item in document.iter(f"{WP}docPr")
+        if (item.get("id") or "").isdigit()
+    }
+    used_picture_ids = {
+        int(item.get("id"))
+        for item in document.iter(f"{PIC}cNvPr")
+        if (item.get("id") or "").isdigit()
+    }
+    next_doc_id = max(used_doc_ids, default=0) + 1
+    next_picture_id = max(used_picture_ids, default=0) + 1
+    for item in logo_paragraph.iter(f"{WP}docPr"):
+        item.set("id", str(next_doc_id))
+        next_doc_id += 1
+    for item in logo_paragraph.iter(f"{PIC}cNvPr"):
+        item.set("id", str(next_picture_id))
+        next_picture_id += 1
+    for local_name in ("anchorId", "editId"):
+        used_values = {
+            value.upper()
+            for item in document.iter()
+            for attribute, value in item.attrib.items()
+            if attribute.rsplit("}", 1)[-1] == local_name
+        }
+        candidate = max(
+            (
+                int(value, 16)
+                for value in used_values
+                if len(value) == 8
+                and all(
+                    character in "0123456789ABCDEF"
+                    for character in value
+                )
+            ),
+            default=0,
+        ) + 1
+        for item in logo_paragraph.iter():
+            for attribute in tuple(item.attrib):
+                if attribute.rsplit("}", 1)[-1] != local_name:
+                    continue
+                while f"{candidate:08X}" in used_values:
+                    candidate += 1
+                value = f"{candidate:08X}"
+                item.set(attribute, value)
+                used_values.add(value)
+                candidate += 1
+    _set_spacing(logo_paragraph, before=80, after=160)
+    ElementTree.SubElement(
+        relationships,
+        f"{{{RELATIONSHIPS_NS}}}Relationship",
+        {
+            "Id": relation_id,
+            "Type": f"{OFFICE_REL_NS}/image",
+            "Target": "media/client-logo.png",
+        },
+    )
+    body.insert(briefing_index + 1, logo_paragraph)
+    parts[CLIENT_LOGO_PART] = _neutral_media(1200, 600, "PNG")
+    parts[document_name] = serialize_xml(document, original_document)
+    parts[relationship_name] = serialize_xml(
+        relationships, original_relationships
+    )
+    changes.append(
+        _Change(
+            "client logo Slot added",
+            CLIENT_LOGO_PART,
+            "(none)",
+            f"{CLIENT_LOGO_WIDTH_EMU}x{CLIENT_LOGO_HEIGHT_EMU} EMU",
         )
     )
 
@@ -1352,6 +1492,7 @@ def build_master(source: str | Path, destination: str | Path) -> MasterBuild:
 
     _add_signoff_structure(parts, changes)
     _canonicalize_blocks(parts, changes)
+    _add_client_logo_slot(parts, changes)
     _embed_montserrat(parts, changes)
     master_path.parent.mkdir(parents=True, exist_ok=True)
     _deterministic_zip(master_path, parts)
@@ -1363,6 +1504,9 @@ def build_master(source: str | Path, destination: str | Path) -> MasterBuild:
 
 
 __all__ = [
+    "CLIENT_LOGO_HEIGHT_EMU",
+    "CLIENT_LOGO_PART",
+    "CLIENT_LOGO_WIDTH_EMU",
     "EXPECTED_TOKENS",
     "MasterBuild",
     "MasterBuildError",

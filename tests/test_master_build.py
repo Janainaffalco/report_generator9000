@@ -13,6 +13,9 @@ from report_generator9000.docx_package import open_docx_package
 from report_generator9000.gates.blocks import check_block_integrity
 from report_generator9000.gates.master import MASTER_BLOCK_HEADINGS, check_master_build
 from report_generator9000.master import (
+    CLIENT_LOGO_HEIGHT_EMU,
+    CLIENT_LOGO_PART,
+    CLIENT_LOGO_WIDTH_EMU,
     EXPECTED_TOKENS,
     build_master,
     clone_block_stamp,
@@ -423,6 +426,28 @@ def test_master_blocks_are_two_paragraph_bound_and_cloneable(
             "Heading1",
             "Heading2",
         }
+
+
+def test_master_contains_one_sensibly_sized_client_logo_slot(
+    tmp_path: Path,
+) -> None:
+    built = build_master(
+        approved_source(tmp_path / "approved.docx"), tmp_path / "out"
+    )
+    package = open_docx_package(built.master)
+    with ZipFile(built.master) as archive:
+        document = ElementTree.fromstring(
+            archive.read("word/document.xml")
+        )
+    slots = [
+        slot for slot in package.slots if slot.media_part == CLIENT_LOGO_PART
+    ]
+
+    assert len(slots) == 1
+    assert slots[0].width_emu == CLIENT_LOGO_WIDTH_EMU
+    assert slots[0].height_emu == CLIENT_LOGO_HEIGHT_EMU
+    assert CLIENT_LOGO_WIDTH_EMU < 3_000_000
+    assert built.validation.passed
 
     cloned_heading, cloned_image = clone_block_stamp(
         document, "SEÇÃO CLONADA", "rIdClone"

@@ -18,6 +18,11 @@ from ..docx_package import (
     DocxPackage,
     text_column_width_emu,
 )
+from ..logo import (
+    CLIENT_LOGO_HEIGHT_EMU,
+    CLIENT_LOGO_PART,
+    CLIENT_LOGO_WIDTH_EMU,
+)
 from .results import GateResult, result, violation
 
 
@@ -271,6 +276,31 @@ def check_master_build(
     """Check token shape, residue, links, and media against an approved source."""
     violations = []
     seen: set[str] = set()
+
+    logo_slots = [
+        slot for slot in package.slots if slot.media_part == CLIENT_LOGO_PART
+    ]
+    if len(logo_slots) != 1:
+        violations.append(
+            violation(
+                GATE,
+                "invalid-client-logo-slot-count",
+                CLIENT_LOGO_PART,
+                f"expected 1, found {len(logo_slots)}",
+            )
+        )
+    elif (
+        logo_slots[0].width_emu != CLIENT_LOGO_WIDTH_EMU
+        or logo_slots[0].height_emu != CLIENT_LOGO_HEIGHT_EMU
+    ):
+        violations.append(
+            violation(
+                GATE,
+                "invalid-client-logo-slot-size",
+                CLIENT_LOGO_PART,
+                f"expected {CLIENT_LOGO_WIDTH_EMU}x{CLIENT_LOGO_HEIGHT_EMU} EMU",
+            )
+        )
 
     for paragraph in package.paragraphs:
         for run in paragraph.runs:
