@@ -42,14 +42,14 @@ def check_engagement_scope(
     if context.drop_folder is not None:
         drop_folder = _normalise(context.drop_folder)
         final_component = PurePosixPath(drop_folder).name
-        if pasta and final_component != pasta:
+        if pasta and not _keyed_to(pasta, final_component):
             violations.append(
                 violation(
                     GATE,
                     "drop-folder-not-this-engagement",
                     context.drop_folder,
-                    f"final path component {final_component!r} is not "
-                    f"Pasta {pasta!r}",
+                    f"final path component {final_component!r} is not keyed "
+                    f"to Pasta {pasta!r}",
                 )
             )
 

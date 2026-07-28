@@ -8,6 +8,7 @@ from zipfile import ZipFile
 
 from report_generator9000.docx_package import open_docx_package
 from report_generator9000.gates.tokens import check_token_residue
+from report_generator9000.gated_inputs import GATED_VALUE_SLOTS
 from report_generator9000.master import build_master
 from report_generator9000.run_context import RunContext
 from test_master_build import approved_source
@@ -25,7 +26,12 @@ SPREADSHEET_TOKENS = {
 
 
 def run_generator(
-    master: Path, output: Path, pasta: str
+    master: Path,
+    output: Path,
+    pasta: str,
+    *,
+    control_sheet: Path = CONTROL_SHEET,
+    gated_drop_root: Path | None = None,
 ) -> subprocess.CompletedProcess[str]:
     stdout_path = output.parent / f"{pasta}-stdout.txt"
     stderr_path = output.parent / f"{pasta}-stderr.txt"
@@ -35,12 +41,22 @@ def run_generator(
         "--linha",
         pasta,
         "--planilha",
-        str(CONTROL_SHEET),
+        str(control_sheet),
         "--master",
         str(master),
         "--saida",
         str(output),
     ]
+    command.extend(
+        (
+            "--gated-drop-root",
+            str(
+                gated_drop_root
+                if gated_drop_root is not None
+                else output.parent / "absent-gated"
+            ),
+        )
+    )
     with stdout_path.open("w", encoding="utf-8") as stdout, stderr_path.open(
         "w", encoding="utf-8"
     ) as stderr:
@@ -132,10 +148,18 @@ def test_cli_clones_master_and_fills_each_shared_pasta_engagement(
                     source_info.external_attr,
                     source_info.create_system,
                 )
-                restored = generated.read(item.filename)
+                expected_content = source_content
                 for token, value in values.items():
-                    restored = restored.replace(value.encode(), token.encode())
-                assert restored == source_content
+                    expected_content = expected_content.replace(
+                        token.encode(), value.encode()
+                    )
+                for slot, tokens in GATED_VALUE_SLOTS:
+                    evidence = f"[PEND\u00caNCIA GATED: {slot}]".encode()
+                    for token in tokens:
+                        expected_content = expected_content.replace(
+                            token.encode(), evidence
+                        )
+                assert generated.read(item.filename) == expected_content
 
 
 def test_cli_stop_condition_produces_no_document(tmp_path: Path) -> None:

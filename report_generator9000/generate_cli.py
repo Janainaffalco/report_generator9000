@@ -13,6 +13,7 @@ from .control_sheet import (
     read_control_sheet_for_pasta,
 )
 from .generate import generate_report
+from .gated_inputs import load_gated_inputs
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -41,6 +42,12 @@ def build_parser() -> argparse.ArgumentParser:
         default=Path("relatorios-gerados"),
         help="root directory for generated engagement artifacts",
     )
+    parser.add_argument(
+        "--gated-drop-root",
+        type=Path,
+        default=Path("gated"),
+        help="root containing one Pasta + Razao Social Gated Drop Folder",
+    )
     return parser
 
 
@@ -53,8 +60,14 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
         for outcome in outcomes:
             if isinstance(outcome, Engagement):
+                load_gated_inputs(arguments.gated_drop_root, outcome)
+        for outcome in outcomes:
+            if isinstance(outcome, Engagement):
                 generated = generate_report(
-                    arguments.master, arguments.saida, outcome
+                    arguments.master,
+                    arguments.saida,
+                    outcome,
+                    arguments.gated_drop_root,
                 )
                 print(f"DOCX\t{generated.document.resolve()}")
             elif isinstance(outcome, StopCondition):
