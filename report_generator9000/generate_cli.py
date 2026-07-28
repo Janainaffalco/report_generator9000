@@ -7,15 +7,15 @@ import importlib
 from pathlib import Path
 from typing import Sequence
 
-from .capture import extract_site_text
+from .assembly import assemble_output_package
 from .control_sheet import (
     Engagement,
     SkippedRow,
     StopCondition,
     read_control_sheet_for_pasta,
 )
-from .generate import generate_report
 from .gated_inputs import load_gated_inputs
+from .generate import generate_report
 from .lista_paginas import derive_lista_paginas
 from .prose import ProseConfig, ProseProvider
 
@@ -73,6 +73,11 @@ def build_parser() -> argparse.ArgumentParser:
             "load a ProseProvider instance or zero-argument factory for "
             "grounded model mode"
         ),
+    )
+    parser.add_argument(
+        "--skip-assembly",
+        action="store_true",
+        help=argparse.SUPPRESS,
     )
     return parser
 
@@ -152,35 +157,47 @@ def main(
                 load_gated_inputs(arguments.gated_drop_root, outcome)
         for outcome in outcomes:
             if isinstance(outcome, Engagement):
-                gated = load_gated_inputs(
-                    arguments.gated_drop_root,
-                    outcome,
-                )
-                pages = derive_lista_paginas(
-                    outcome.capture_origin,
-                    gated.declared_pages,
-                )
-                site_text = (
-                    ()
-                    if arguments.no_llm
-                    else extract_site_text(pages)
-                )
-                generated = generate_report(
-                    arguments.master,
-                    arguments.saida,
-                    outcome,
-                    arguments.gated_drop_root,
-                    pages=pages,
-                    site_text=site_text,
-                    prose_provider=prose_provider,
-                    prose_config=prose_config,
-                    no_llm=arguments.no_llm,
-                )
+                if arguments.skip_assembly:
+                    gated = load_gated_inputs(
+                        arguments.gated_drop_root,
+                        outcome,
+                    )
+                    pages = derive_lista_paginas(
+                        outcome.capture_origin,
+                        gated.declared_pages,
+                    )
+                    generated = generate_report(
+                        arguments.master,
+                        arguments.saida,
+                        outcome,
+                        arguments.gated_drop_root,
+                        pages=pages,
+                        prose_provider=prose_provider,
+                        prose_config=prose_config,
+                        no_llm=arguments.no_llm,
+                    )
+                else:
+                    package = assemble_output_package(
+                        arguments.master,
+                        arguments.saida,
+                        outcome,
+                        arguments.gated_drop_root,
+                        prose_provider=prose_provider,
+                        prose_config=prose_config,
+                        no_llm=arguments.no_llm,
+                    )
+                    generated = package.report
                 print(f"DOCX\t{generated.document.resolve()}")
                 print(
                     f"STATUS\t{generated.status.upper()}\t"
                     f"{generated.document.resolve()}"
                 )
+                if not arguments.skip_assembly:
+                    print(f"DIRECTORY\t{package.directory}")
+                    for preview in package.previews:
+                        print(f"PREVIEW\t{preview}")
+                    for capture in package.raw_captures:
+                        print(f"CAPTURE\t{capture}")
             elif isinstance(outcome, StopCondition):
                 print(
                     f"STOP CONDITION\t{arguments.linha}\t{outcome.cause}"

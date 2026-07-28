@@ -225,6 +225,10 @@ def generate_report(
     prose_provider: ProseProvider | None = None,
     prose_config: ProseConfig | None = None,
     no_llm: bool = False,
+    run_artifacts: tuple[Artifact, ...] = (),
+    blocks: tuple[str, ...] = (),
+    capture_folder: str | Path | None = None,
+    run_pendencias: tuple[Pendencia, ...] = (),
 ) -> GeneratedReport:
     """Clone *master* and fill spreadsheet and available Gated Inputs."""
     master_path = Path(master)
@@ -267,7 +271,10 @@ def generate_report(
     }
     supplied_gated_values = gated.values_by_token()
     replacement_text.update(supplied_gated_values)
-    pendencias: list[Pendencia] = list(drafted.pendencias)
+    pendencias: list[Pendencia] = [
+        *run_pendencias,
+        *drafted.pendencias,
+    ]
     replacement_text.update(drafted.token_values)
     for slot, tokens in GATED_VALUE_SLOTS:
         if all(token in supplied_gated_values for token in tokens):
@@ -312,6 +319,12 @@ def generate_report(
             f"{master_path}: invalid Master package: {error}"
         ) from error
     artifacts: list[Artifact] = []
+    run_artifacts_by_digest: dict[str, list[Artifact]] = {}
+    for artifact in run_artifacts:
+        run_artifacts_by_digest.setdefault(
+            artifact.digest.casefold(), []
+        ).append(artifact)
+    used_run_artifacts: set[Artifact] = set()
     claimed_media_parts: set[str] = set()
     supplied_images = gated.images_by_part()
     for slot, _filename, part_name in GATED_IMAGE_PARTS:
@@ -369,6 +382,16 @@ def generate_report(
 
     for media in master_package.media:
         if media.part_name in claimed_media_parts:
+            continue
+        matching_run_artifacts = run_artifacts_by_digest.get(
+            media.sha256.casefold(),
+            (),
+        )
+        if matching_run_artifacts:
+            for artifact in matching_run_artifacts:
+                if artifact not in used_run_artifacts:
+                    artifacts.append(artifact)
+                    used_run_artifacts.add(artifact)
             continue
         if media.part_name in BOILERPLATE_MEDIA:
             artifacts.append(
@@ -460,7 +483,13 @@ def generate_report(
         drop_folder=(
             None if gated.folder is None else str(gated.folder.resolve())
         ),
+        capture_folder=(
+            None
+            if capture_folder is None
+            else str(Path(capture_folder).resolve())
+        ),
         output_paths=(str(output.resolve()),),
+        blocks=blocks,
         pendencias=tuple(pendencias),
         prose_grounding=drafted.grounding,
     )

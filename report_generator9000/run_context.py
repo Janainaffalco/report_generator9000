@@ -59,7 +59,9 @@ class RunContext:
 
     @property
     def ready_to_send(self) -> bool:
-        return not self.pendencias
+        return not self.pendencias and not any(
+            artifact.origin == "placeholder" for artifact in self.media
+        )
 
     @property
     def status(self) -> str:

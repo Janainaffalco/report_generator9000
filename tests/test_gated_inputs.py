@@ -69,6 +69,8 @@ def gated_master(path: Path, *, with_capture: bool = False) -> Path:
         paragraph("{{DATA_KICKOFF}}"),
         *(paragraph(token) for token in sorted(GATED_TOKENS)),
         paragraph("{{SOBRE_A_EMPRESA}}"),
+        paragraph("{{BRIEFING_INICIAL}}"),
+        paragraph("{{LISTA_DE_PAGINAS}}"),
     ]
     relationships = []
     media = {}
@@ -184,12 +186,12 @@ def test_complete_gated_folder_fills_values_images_and_provenance(
     pendencias_report = json.loads(
         output.with_name("pendencias.json").read_text(encoding="utf-8")
     )
-    assert pendencias_report == {
-        "status": "complete",
-        "ready_to_send": True,
-        "pendencias": [],
-    }
-    assert "STATUS\tCOMPLETE" in completed.stdout
+    assert pendencias_report["status"] == "draft"
+    assert pendencias_report["ready_to_send"] is False
+    assert {
+        item["slot"] for item in pendencias_report["pendencias"]
+    } == {"descricao_empresa", "objetivo_briefing"}
+    assert "STATUS\tDRAFT" in completed.stdout
     context = json.loads(
         output.with_name("run.json").read_text(encoding="utf-8")
     )
@@ -265,7 +267,7 @@ def test_absent_gated_folder_is_a_normal_draft_with_explicit_pendencias(
     assert pendencias_report["status"] == "draft"
     assert pendencias_report["ready_to_send"] is False
     pendencias = pendencias_report["pendencias"]
-    assert len(pendencias) == 18
+    assert len(pendencias) == 20
     assert {item["class"] for item in pendencias} == {"GATED"}
     assert all(
         {
@@ -444,9 +446,8 @@ def test_real_current_master_passes_media_and_link_provenance_gates(
 
     checked = run_check(output, output.with_name("run.json"))
 
-    assert checked.returncode == 1
+    assert checked.returncode == 0
     assert "GATE media-provenance: PASS" in checked.stdout
     assert "GATE link-provenance: PASS" in checked.stdout
     assert "GATE pendencias-agreement: PASS" in checked.stdout
-    assert "GATE token-residue: FAIL" in checked.stdout
-    assert "{{SOBRE_A_EMPRESA}}" in checked.stdout
+    assert "GATE token-residue: PASS" in checked.stdout

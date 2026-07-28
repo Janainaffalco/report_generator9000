@@ -166,16 +166,19 @@ def _validate_inputs(
             raise BlockStampingError(
                 f"Block image {index} does not match its Lista entry"
             )
-        if image.origin not in {"capture", "gated"}:
+        if image.origin not in {"capture", "gated", "placeholder"}:
             raise BlockStampingError(
-                f"Block image {index} origin must be capture or gated"
+                f"Block image {index} origin must be capture, gated, "
+                "or placeholder"
             )
         source_root = (
-            capture_folder if image.origin == "capture" else drop_folder
+            capture_folder
+            if image.origin in {"capture", "placeholder"}
+            else drop_folder
         )
         source_name = (
             "Capture folder"
-            if image.origin == "capture"
+            if image.origin in {"capture", "placeholder"}
             else "Gated Drop Folder"
         )
         if source_root is None or not is_within(

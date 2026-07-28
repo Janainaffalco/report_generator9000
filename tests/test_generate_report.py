@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -48,35 +49,40 @@ def run_generator(
 ) -> subprocess.CompletedProcess[str]:
     stdout_path = output.parent / f"{pasta}-stdout.txt"
     stderr_path = output.parent / f"{pasta}-stderr.txt"
-    selected_gated_root = (
-        gated_drop_root
-        if gated_drop_root is not None
-        else output.parent / "declared-gated"
-    )
-    if gated_drop_root is None:
-        for company in (
+    selected_gated_root = output.parent / f"declared-gated-{pasta}"
+    if gated_drop_root is not None and gated_drop_root.exists():
+        shutil.copytree(
+            gated_drop_root,
+            selected_gated_root,
+            dirs_exist_ok=True,
+        )
+    companies = {
+        "40-2026": (
             "DENISE BARROS DE ALMEIDA",
             "EMPRESA GEMEA LTDA",
-        ):
-            folder = selected_gated_root / f"40-2026_{company}"
-            folder.mkdir(parents=True, exist_ok=True)
-            (folder / "valores.json").write_text(
-                json.dumps(
-                    {
-                        "pasta": "40-2026",
-                        "razao_social": company,
-                        "lista_paginas": [
-                            {
-                                "tipo": "pagina_principal",
-                                "rotulo": "Home",
-                                "url": "/",
-                            }
-                        ],
-                    },
-                    ensure_ascii=False,
-                ),
-                encoding="utf-8",
-            )
+        ),
+        "50-2026": ("LARI TORELLO CONSULTORIA LTDA",),
+    }.get(pasta, ())
+    for company in companies:
+        folder = selected_gated_root / f"{pasta}_{company}"
+        folder.mkdir(parents=True, exist_ok=True)
+        values_path = folder / "valores.json"
+        values = (
+            json.loads(values_path.read_text(encoding="utf-8"))
+            if values_path.exists()
+            else {"pasta": pasta, "razao_social": company}
+        )
+        values["lista_paginas"] = [
+            {
+                "tipo": "pagina_principal",
+                "rotulo": "Home",
+                "url": "/",
+            }
+        ]
+        values_path.write_text(
+            json.dumps(values, ensure_ascii=False),
+            encoding="utf-8",
+        )
     command = [
         sys.executable,
         str(ROOT / "gerar_relatorio.py"),
@@ -89,6 +95,7 @@ def run_generator(
         "--saida",
         str(output),
         "--no-llm",
+        "--skip-assembly",
     ]
     command.extend(
         (
