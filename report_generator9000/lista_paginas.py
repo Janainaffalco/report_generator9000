@@ -32,6 +32,18 @@ _ATTRIBUTION_MARKERS = (
     "powered by",
     "site por",
 )
+_MAIN_NAV_MARKERS = ("main", "principal", "primary")
+_LEGAL_AREA_MARKERS = (
+    "cookie",
+    "dados pessoais",
+    "data protection",
+    "legal",
+    "lgpd",
+    "privacidade",
+    "privacy",
+    "terms",
+    "termos",
+)
 
 
 class ListaPaginasError(ValueError):
@@ -75,18 +87,21 @@ class Pagina:
 class _Link:
     href: str
     label: str
-    in_main_menu: bool
+    nav_id: int | None
+    in_explicit_main_menu: bool
     in_footer: bool
 
 
 class _SourceLinksParser(HTMLParser):
     def __init__(self) -> None:
         super().__init__(convert_charrefs=True)
-        self._nav_depth = 0
+        self._nav_counter = 0
+        self._nav_stack: list[tuple[int, bool]] = []
         self._footer_depth = 0
         self._anchor_href = ""
         self._anchor_text: list[str] | None = None
-        self._anchor_in_main_menu = False
+        self._anchor_nav_id: int | None = None
+        self._anchor_in_explicit_main_menu = False
         self._anchor_in_footer = False
         self.links: list[_Link] = []
 
@@ -95,14 +110,34 @@ class _SourceLinksParser(HTMLParser):
     ) -> None:
         attributes = dict(attrs)
         if tag == "nav":
-            self._nav_depth += 1
+            self._nav_counter += 1
+            descriptor = " ".join(
+                value
+                for key in ("aria-label", "id", "class")
+                if (value := attributes.get(key))
+            )
+            explicit_main = (
+                self._footer_depth == 0
+                and any(
+                    marker in _fold(descriptor)
+                    for marker in _MAIN_NAV_MARKERS
+                )
+            )
+            self._nav_stack.append((self._nav_counter, explicit_main))
         if tag == "footer":
             self._footer_depth += 1
         if tag == "a":
             self._anchor_href = attributes.get("href") or ""
             self._anchor_text = []
-            self._anchor_in_main_menu = (
-                self._nav_depth > 0 and self._footer_depth == 0
+            self._anchor_nav_id = (
+                self._nav_stack[-1][0]
+                if self._nav_stack and self._footer_depth == 0
+                else None
+            )
+            self._anchor_in_explicit_main_menu = bool(
+                self._nav_stack
+                and self._nav_stack[-1][1]
+                and self._footer_depth == 0
             )
             self._anchor_in_footer = self._footer_depth > 0
         elif tag == "img" and self._anchor_text is not None:
@@ -121,13 +156,16 @@ class _SourceLinksParser(HTMLParser):
                 _Link(
                     href=self._anchor_href,
                     label=label,
-                    in_main_menu=self._anchor_in_main_menu,
+                    nav_id=self._anchor_nav_id,
+                    in_explicit_main_menu=(
+                        self._anchor_in_explicit_main_menu
+                    ),
                     in_footer=self._anchor_in_footer,
                 )
             )
             self._anchor_text = None
-        if tag == "nav" and self._nav_depth:
-            self._nav_depth -= 1
+        if tag == "nav" and self._nav_stack:
+            self._nav_stack.pop()
         if tag == "footer" and self._footer_depth:
             self._footer_depth -= 1
 
@@ -165,6 +203,11 @@ def _is_social(url: str) -> bool:
 def _is_attribution(label: str) -> bool:
     folded = _fold(label)
     return any(marker in folded for marker in _ATTRIBUTION_MARKERS)
+
+
+def _is_legal_area(label: str, url: str) -> bool:
+    candidate = _fold(f"{label} {urlsplit(url).path}")
+    return any(marker in candidate for marker in _LEGAL_AREA_MARKERS)
 
 
 def _block_title(tipo: str, label: str, url: str, home_url: str) -> str:
@@ -265,6 +308,22 @@ def derive_lista_paginas(
     assert home_url is not None
     parser = _SourceLinksParser()
     parser.feed(markup)
+    main_nav_ids = {
+        link.nav_id
+        for link in parser.links
+        if link.in_explicit_main_menu and link.nav_id is not None
+    }
+    if not main_nav_ids:
+        first_nav_id = next(
+            (
+                link.nav_id
+                for link in parser.links
+                if link.nav_id is not None and not link.in_footer
+            ),
+            None,
+        )
+        if first_nav_id is not None:
+            main_nav_ids.add(first_nav_id)
 
     pages: list[Pagina] = []
     seen: set[str] = set()
@@ -274,7 +333,9 @@ def derive_lista_paginas(
     ):
         for link in parser.links:
             belongs = (
-                link.in_main_menu if source == "main" else link.in_footer
+                link.nav_id in main_nav_ids
+                if source == "main"
+                else link.in_footer
             )
             if not belongs or not link.label:
                 continue
@@ -283,6 +344,8 @@ def derive_lista_paginas(
                 continue
             url = _canonical_url(final_url, link.href, expected_host)
             if url is None or url in seen:
+                continue
+            if tipo == AREA_LEGAL and not _is_legal_area(link.label, url):
                 continue
             seen.add(url)
             pages.append(_page(tipo, link.label, url, home_url))

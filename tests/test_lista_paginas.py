@@ -70,6 +70,9 @@ def test_local_http_fixture_derives_all_three_sources_deterministically() -> Non
     ]
     assert all("portal.example.test" not in page.url for page in pages)
     assert all("instagram.com" not in page.url for page in pages)
+    assert all("breadcrumb.html" not in page.url for page in pages)
+    assert all("carreiras.html" not in page.url for page in pages)
+    assert all("outra-agencia.html" not in page.url for page in pages)
     assert all("AGÊNCIA" not in page.titulo_bloco for page in pages)
     assert [page.titulo_bloco for page in pages].count("SEÇÃO SERVIÇOS") == 1
     assert pages[-2].entra_no_briefing is False
