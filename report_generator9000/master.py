@@ -36,6 +36,8 @@ RELATIONSHIPS_NS = "http://schemas.openxmlformats.org/package/2006/relationships
 CONTENT_TYPES_NS = "http://schemas.openxmlformats.org/package/2006/content-types"
 W = f"{{{WORD_NS}}}"
 R = f"{{{OFFICE_REL_NS}}}"
+WP = "{http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing}"
+PIC = "{http://schemas.openxmlformats.org/drawingml/2006/picture}"
 XML = "{http://www.w3.org/XML/1998/namespace}"
 _TOKEN = re.compile(r"(\{\{[^{}<>]{1,64}\}\})")
 _FONT_KEY = "6D5E55E7-46BF-4B17-9DCE-422D31C5A72D"
@@ -337,15 +339,22 @@ def _canonicalize_blocks(
             paragraph.findall(f"{W}bookmarkEnd")
         ):
             paragraph.remove(marker)
+    used_bookmark_ids = {
+        int(marker.get(f"{W}id"))
+        for marker in document.iter()
+        if marker.tag in {f"{W}bookmarkStart", f"{W}bookmarkEnd"}
+        and (marker.get(f"{W}id") or "").isdigit()
+    }
+    stamp_id = str(max(used_bookmark_ids, default=-1) + 1)
     stamp_heading.insert(
         1 if stamp_heading.find(f"{W}pPr") is not None else 0,
         ElementTree.Element(
             f"{W}bookmarkStart",
-            {f"{W}id": "9000", f"{W}name": "MASTER_BLOCK_STAMP"},
+            {f"{W}id": stamp_id, f"{W}name": "MASTER_BLOCK_STAMP"},
         ),
     )
     stamp_image.append(
-        ElementTree.Element(f"{W}bookmarkEnd", {f"{W}id": "9000"})
+        ElementTree.Element(f"{W}bookmarkEnd", {f"{W}id": stamp_id})
     )
     changes.append(
         _Change(
@@ -365,7 +374,9 @@ def clone_block_stamp(
     heading: str,
     relationship_id: str,
 ) -> tuple[ElementTree.Element, ElementTree.Element]:
-    """Clone the Master's bookmarked two-paragraph Block stamp."""
+    """Clone and insert the Master's Block stamp before the next body section."""
+    if not relationship_id:
+        raise ValueError("relationship_id must not be empty")
     body = document.find(f"{W}body")
     if body is None:
         raise ValueError("document has no body")
@@ -398,6 +409,64 @@ def clone_block_stamp(
         raise ValueError("MASTER_BLOCK_STAMP has no image Slot")
     blip.set(f"{R}embed", relationship_id)
     blip.attrib.pop(f"{R}link", None)
+
+    used_doc_ids = {
+        int(item.get("id"))
+        for item in document.iter(f"{WP}docPr")
+        if (item.get("id") or "").isdigit()
+    }
+    used_picture_ids = {
+        int(item.get("id"))
+        for item in document.iter(f"{PIC}cNvPr")
+        if (item.get("id") or "").isdigit()
+    }
+    next_doc_id = max(used_doc_ids, default=0) + 1
+    next_picture_id = max(used_picture_ids, default=0) + 1
+    for item in cloned_image.iter(f"{WP}docPr"):
+        item.set("id", str(next_doc_id))
+        next_doc_id += 1
+    for item in cloned_image.iter(f"{PIC}cNvPr"):
+        item.set("id", str(next_picture_id))
+        next_picture_id += 1
+    for local_name in ("anchorId", "editId"):
+        used_values = {
+            value.upper()
+            for item in document.iter()
+            for attribute, value in item.attrib.items()
+            if attribute.rsplit("}", 1)[-1] == local_name
+        }
+        numeric_values = {
+            int(value, 16)
+            for value in used_values
+            if len(value) == 8
+            and all(character in "0123456789ABCDEF" for character in value)
+        }
+        candidate = max(numeric_values, default=0) + 1
+        for item in cloned_image.iter():
+            for attribute in tuple(item.attrib):
+                if attribute.rsplit("}", 1)[-1] != local_name:
+                    continue
+                while f"{candidate:08X}" in used_values:
+                    candidate += 1
+                value = f"{candidate:08X}"
+                item.set(attribute, value)
+                used_values.add(value)
+                candidate += 1
+
+    insertion_index = next(
+        (
+            index
+            for index, paragraph in enumerate(children)
+            if index > source_index
+            and _paragraph_text(paragraph).strip().casefold()
+            == "painel de configuração wordpress"
+        ),
+        None,
+    )
+    if insertion_index is None:
+        raise ValueError("Block insertion boundary not found")
+    body.insert(insertion_index, cloned_heading)
+    body.insert(insertion_index + 1, cloned_image)
     return cloned_heading, cloned_image
 
 

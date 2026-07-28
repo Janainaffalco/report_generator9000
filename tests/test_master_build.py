@@ -10,7 +10,7 @@ from fixtures.docx_builder import RelationshipSpec, build_docx, paragraph, png_b
 
 from report_generator9000.docx_package import open_docx_package
 from report_generator9000.gates.blocks import check_block_integrity
-from report_generator9000.gates.master import MASTER_BLOCK_HEADINGS
+from report_generator9000.gates.master import MASTER_BLOCK_HEADINGS, check_master_build
 from report_generator9000.master import (
     EXPECTED_TOKENS,
     build_master,
@@ -75,7 +75,7 @@ def approved_source(path: Path) -> Path:
     return build_docx(
         path,
         paragraphs=[
-            paragraph(image="rIdImage1"),
+            paragraph(image="rIdImage1", bookmark=(9000, "ExistingBookmark")),
             paragraph("SUMÁRIO"),
             paragraph("summary entry"),
             paragraph("ETAPA 1"),
@@ -179,6 +179,22 @@ def approved_source(path: Path) -> Path:
             ),
         ],
     )
+
+
+def replace_document_xml(
+    source: Path, target: Path, document: ElementTree.Element
+) -> None:
+    with ZipFile(source) as archive:
+        parts = [(item, archive.read(item.filename)) for item in archive.infolist()]
+    replacement = ElementTree.tostring(
+        document, encoding="utf-8", xml_declaration=True
+    )
+    with ZipFile(target, "w") as archive:
+        for item, content in parts:
+            archive.writestr(
+                item,
+                replacement if item.filename == "word/document.xml" else content,
+            )
 
 
 def test_master_build_is_reproducible_and_auditable(tmp_path: Path) -> None:
@@ -371,3 +387,80 @@ def test_master_blocks_are_two_paragraph_bound_and_cloneable(
     ) == "rIdClone"
     assert not list(cloned_heading.iter(f"{W}bookmarkStart"))
     assert not list(cloned_image.iter(f"{W}bookmarkEnd"))
+    second_heading, second_image = clone_block_stamp(
+        document, "SEÇÃO CLONADA 2", "rIdClone2"
+    )
+    assert "".join(
+        node.text or "" for node in second_heading.iter(f"{W}t")
+    ) == "SEÇÃO CLONADA 2"
+    assert second_image.find(
+        ".//{http://schemas.openxmlformats.org/drawingml/2006/main}blip"
+    ).get(
+        "{http://schemas.openxmlformats.org/officeDocument/2006/relationships}embed"
+    ) == "rIdClone2"
+    doc_ids = [
+        item.get("id")
+        for item in document.iter(
+            "{http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing}docPr"
+        )
+    ]
+    picture_ids = [
+        item.get("id")
+        for item in document.iter(
+            "{http://schemas.openxmlformats.org/drawingml/2006/picture}cNvPr"
+        )
+    ]
+    assert len(doc_ids) == len(set(doc_ids))
+    assert len(picture_ids) == len(set(picture_ids))
+    for local_name in ("anchorId", "editId"):
+        values = [
+            value
+            for item in document.iter()
+            for attribute, value in item.attrib.items()
+            if attribute.rsplit("}", 1)[-1] == local_name
+        ]
+        assert len(values) == len(set(values))
+    assert cloned_image is not second_image
+    stamp = next(
+        item
+        for item in document.iter(f"{W}bookmarkStart")
+        if item.get(f"{W}name") == "MASTER_BLOCK_STAMP"
+    )
+    assert stamp.get(f"{W}id") == "9001"
+
+
+def test_master_gate_rejects_a_stamp_without_its_matching_end(
+    tmp_path: Path,
+) -> None:
+    built = build_master(
+        approved_source(tmp_path / "approved.docx"), tmp_path / "out"
+    )
+    with ZipFile(built.master) as archive:
+        document = ElementTree.fromstring(archive.read("word/document.xml"))
+    stamp = next(
+        item
+        for item in document.iter(f"{W}bookmarkStart")
+        if item.get(f"{W}name") == "MASTER_BLOCK_STAMP"
+    )
+    stamp_id = stamp.get(f"{W}id")
+    for parent in document.iter():
+        matching_end = next(
+            (
+                child
+                for child in list(parent)
+                if child.tag == f"{W}bookmarkEnd"
+                and child.get(f"{W}id") == stamp_id
+            ),
+            None,
+        )
+        if matching_end is not None:
+            parent.remove(matching_end)
+            break
+    malformed = tmp_path / "malformed-stamp.docx"
+    replace_document_xml(built.master, malformed, document)
+
+    result = check_master_build(open_docx_package(malformed))
+
+    assert any(
+        item.rule == "invalid-master-blocks" for item in result.violations
+    )

@@ -316,12 +316,32 @@ def check_master_build(
                             or image_spacing.get(f"{w}before") != "0",
                         )
                     )
-        stamp_count = sum(
-            1
+        stamp_starts = [
+            item
             for item in document.iter(f"{w}bookmarkStart")
             if item.get(f"{w}name") == "MASTER_BLOCK_STAMP"
-        )
-        if block_error or stamp_count != 1:
+        ]
+        stamp_valid = len(stamp_starts) == 1 and not block_error
+        if stamp_valid:
+            stamp_id = stamp_starts[0].get(f"{w}id")
+            stamp_ends = [
+                item
+                for item in document.iter(f"{w}bookmarkEnd")
+                if item.get(f"{w}id") == stamp_id
+            ]
+            first_heading, first_image = block_region[:2]
+            stamp_valid = (
+                stamp_id is not None
+                and len(stamp_ends) == 1
+                and stamp_starts[0] in list(first_heading)
+                and stamp_ends[0] in list(first_image)
+                and not any(
+                    item is not stamp_starts[0]
+                    and item.get(f"{w}id") == stamp_id
+                    for item in document.iter(f"{w}bookmarkStart")
+                )
+            )
+        if block_error or not stamp_valid:
             violations.append(
                 violation(
                     GATE,

@@ -24,6 +24,9 @@ DRAWING_NS = "http://schemas.openxmlformats.org/drawingml/2006/main"
 WORD_DRAWING_NS = (
     "http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing"
 )
+WORD_DRAWING_2010_NS = (
+    "http://schemas.microsoft.com/office/word/2010/wordprocessingDrawing"
+)
 PICTURE_NS = "http://schemas.openxmlformats.org/drawingml/2006/picture"
 
 _RELATIONSHIP_TYPES = {
@@ -47,6 +50,7 @@ class ParagraphSpec:
     image: str | None = None
     hyperlink: str | None = None
     extent: tuple[int, int] = (5400000, 3600000)
+    bookmark: tuple[int, str] | None = None
 
 
 @dataclass(frozen=True)
@@ -104,8 +108,18 @@ def _escape(text: str) -> str:
     return text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
 
 
-def _paragraph_xml(spec: ParagraphSpec) -> str:
+def _paragraph_xml(spec: ParagraphSpec, drawing_id: int) -> str:
     properties = "<w:pPr><w:keepNext/></w:pPr>" if spec.keep_next else ""
+    bookmark_start = (
+        ""
+        if spec.bookmark is None
+        else f'<w:bookmarkStart w:id="{spec.bookmark[0]}" w:name="{_escape(spec.bookmark[1])}"/>'
+    )
+    bookmark_end = (
+        ""
+        if spec.bookmark is None
+        else f'<w:bookmarkEnd w:id="{spec.bookmark[0]}"/>'
+    )
     runs_xml = "".join(
         f"<w:r><w:t>{_escape(run)}</w:t></w:r>" for run in spec.runs
     )
@@ -117,23 +131,34 @@ def _paragraph_xml(spec: ParagraphSpec) -> str:
     if spec.image is not None:
         cx, cy = spec.extent
         drawing_xml = (
-            "<w:r><w:drawing><wp:inline>"
+            f'<w:r><w:drawing><wp:inline wp14:anchorId="{drawing_id:08X}" '
+            f'wp14:editId="{drawing_id + 1000:08X}">'
             f'<wp:extent cx="{cx}" cy="{cy}"/>'
-            "<a:graphic><a:graphicData><pic:pic><pic:blipFill>"
+            f'<wp:docPr id="{drawing_id}" name="Picture {drawing_id}"/>'
+            "<a:graphic><a:graphicData><pic:pic><pic:nvPicPr>"
+            f'<pic:cNvPr id="{drawing_id}" name="Picture {drawing_id}"/>'
+            "<pic:cNvPicPr/></pic:nvPicPr><pic:blipFill>"
             f'<a:blip r:embed="{spec.image}"/>'
             "</pic:blipFill></pic:pic></a:graphicData></a:graphic>"
             "</wp:inline></w:drawing></w:r>"
         )
-    return f"    <w:p>{properties}{runs_xml}{drawing_xml}</w:p>\n"
+    return (
+        f"    <w:p>{properties}{bookmark_start}{runs_xml}"
+        f"{drawing_xml}{bookmark_end}</w:p>\n"
+    )
 
 
 def _document_xml(paragraphs: Sequence[ParagraphSpec]) -> str:
-    body = "".join(_paragraph_xml(spec) for spec in paragraphs)
+    body = "".join(
+        _paragraph_xml(spec, index + 1)
+        for index, spec in enumerate(paragraphs)
+    )
     return (
         '<?xml version="1.0" encoding="UTF-8"?>\n'
         f'<w:document xmlns:w="{WORD_NS}"\n'
         f' xmlns:r="{OFFICE_REL_NS}"\n'
         f' xmlns:wp="{WORD_DRAWING_NS}"\n'
+        f' xmlns:wp14="{WORD_DRAWING_2010_NS}"\n'
         f' xmlns:a="{DRAWING_NS}"\n'
         f' xmlns:pic="{PICTURE_NS}">\n'
         "  <w:body>\n"
