@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from datetime import datetime
 from pathlib import Path
 from zipfile import ZipFile
 
@@ -108,6 +109,23 @@ def test_output_and_gated_folder_share_the_canonical_engagement_key() -> None:
     assert (
         report_output_path("outputs", engagement).parent.name
         == gated_drop_folder("gated", engagement).name
+    )
+    reserved = Engagement(
+        row_number=99,
+        demanda="099999/2026",
+        pasta="CON.",
+        razao_social="CLIENTE",
+        cnpj="99.999.999/0001-99",
+        kick_off=datetime(2026, 7, 27),
+        especialista="Especialista",
+        capture_origin="https://capture.example/",
+        published_domain=None,
+    )
+    assert engagement_artifact_key(reserved) == "_CON._CLIENTE"
+    assert (
+        report_output_path("outputs", reserved).parent.name
+        == gated_drop_folder("gated", reserved).name
+        == "_CON._CLIENTE"
     )
 
 
