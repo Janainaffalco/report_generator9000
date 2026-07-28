@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 import re
+from xml.etree import ElementTree
 
-from ..docx_package import DocxPackage
+from ..docx_package import WORD_NS, DocxPackage
 from .results import GateResult, result, violation
 
 
@@ -35,6 +36,26 @@ EXPECTED_TOKENS = frozenset(
 
 BOILERPLATE_MEDIA = frozenset(
     {"word/media/image1.png", "word/media/image21.png"}
+)
+
+CANONICAL_HEADINGS = (
+    (1, "BRIEFING INICIAL PARA DEFINIÇÃO DO ESCOPO"),
+    (2, "SOBRE A EMPRESA"),
+    (2, "BRIEFING"),
+    (1, "DESENVOLVIMENTO DE WEBSITE"),
+    (2, "OBJETIVO"),
+    (2, "ACESSOS E ENTREGAS"),
+    (2, "HOSPEDAGEM E DADOS TÉCNICOS"),
+    (2, "PLATAFORMA | WORDPRESS"),
+    (2, "PLUGINS"),
+    (2, "IDENTIDADE VISUAL"),
+    (2, "PÁGINA HOME E SEÇÕES"),
+    (2, "PAINEL DE CONFIGURAÇÃO WORDPRESS"),
+    (2, "SEO"),
+    (2, "ORIENTAÇÕES AO CLIENTE"),
+    (1, "DECLARAÇÃO DE RECEBIMENTO E FINALIZAÇÃO"),
+    (1, "TERMO DE CESSÃO DE DIREITOS"),
+    (1, "REUNIÕES"),
 )
 
 _TOKEN = re.compile(r"\{\{[^{}<>]{1,64}\}\}")
@@ -139,5 +160,159 @@ def check_master_build(
                             relationship.target,
                         )
                     )
+
+    part_text = {item.name: item.text for item in package.parts}
+    required_xml = (
+        "word/document.xml",
+        "word/settings.xml",
+        "word/styles.xml",
+        "word/numbering.xml",
+        "word/fontTable.xml",
+    )
+    missing_xml = [name for name in required_xml if not part_text.get(name)]
+    for name in missing_xml:
+        violations.append(
+            violation(GATE, "master-signoff-part-missing", name, "required")
+        )
+    if not missing_xml:
+        w = f"{{{WORD_NS}}}"
+        document = ElementTree.fromstring(part_text["word/document.xml"] or "")
+        field_types = [
+            item.get(f"{w}fldCharType")
+            for item in document.iter(f"{w}fldChar")
+        ]
+        instructions = [
+            item.text or "" for item in document.iter(f"{w}instrText")
+        ]
+        if field_types != ["begin", "separate", "end"] or instructions != [
+            ' TOC \\o "1-2" \\h \\z \\u '
+        ]:
+            violations.append(
+                violation(
+                    GATE,
+                    "invalid-toc-field",
+                    "word/document.xml",
+                    f"field-types={field_types!r}",
+                )
+            )
+        headings = []
+        for paragraph in document.iter(f"{w}p"):
+            style = paragraph.find(f"{w}pPr/{w}pStyle")
+            if style is None:
+                continue
+            style_id = style.get(f"{w}val")
+            if style_id not in {"Heading1", "Heading2"}:
+                continue
+            text = "".join(
+                node.text or "" for node in paragraph.iter(f"{w}t")
+            )
+            headings.append((int(style_id[-1]), text))
+        if tuple(headings) != CANONICAL_HEADINGS:
+            violations.append(
+                violation(
+                    GATE,
+                    "noncanonical-heading-sequence",
+                    "word/document.xml",
+                    repr(headings),
+                )
+            )
+
+        settings = ElementTree.fromstring(part_text["word/settings.xml"] or "")
+        update = settings.find(f"{w}updateFields")
+        if update is None or update.get(f"{w}val") != "true":
+            violations.append(
+                violation(
+                    GATE,
+                    "field-update-disabled",
+                    "word/settings.xml",
+                    "updateFields must be true",
+                )
+            )
+        styles = ElementTree.fromstring(part_text["word/styles.xml"] or "")
+        for level in (1, 2):
+            style = next(
+                (
+                    item
+                    for item in styles.findall(f"{w}style")
+                    if item.get(f"{w}styleId") == f"Heading{level}"
+                ),
+                None,
+            )
+            number_id = (
+                None
+                if style is None
+                else style.find(f"{w}pPr/{w}numPr/{w}numId")
+            )
+            fonts = (
+                None if style is None else style.find(f"{w}rPr/{w}rFonts")
+            )
+            if (
+                number_id is None
+                or number_id.get(f"{w}val") != "900"
+                or fonts is None
+                or fonts.get(f"{w}ascii") != "Montserrat"
+            ):
+                violations.append(
+                    violation(
+                        GATE,
+                        "heading-style-not-linked",
+                        f"word/styles.xml Heading{level}",
+                        "Montserrat and numbering 900 required",
+                    )
+                )
+        numbering = ElementTree.fromstring(
+            part_text["word/numbering.xml"] or ""
+        )
+        abstract = next(
+            (
+                item
+                for item in numbering.findall(f"{w}abstractNum")
+                if item.get(f"{w}abstractNumId") == "900"
+            ),
+            None,
+        )
+        formats = (
+            []
+            if abstract is None
+            else [
+                item.find(f"{w}lvlText").get(f"{w}val")
+                for item in abstract.findall(f"{w}lvl")
+            ]
+        )
+        if formats != ["%1", "%1.%2"]:
+            violations.append(
+                violation(
+                    GATE,
+                    "invalid-heading-numbering",
+                    "word/numbering.xml",
+                    repr(formats),
+                )
+            )
+        font_parts = [
+            item.name
+            for item in package.parts
+            if item.name.startswith("word/fonts/montserrat-")
+        ]
+        if len(font_parts) != 5:
+            violations.append(
+                violation(
+                    GATE,
+                    "embedded-font-set-incomplete",
+                    "word/fonts",
+                    repr(font_parts),
+                )
+            )
+        provenance = part_text.get(
+            "customXml/montserrat-provenance.xml", ""
+        ) or ""
+        if 'origin="Boilerplate"' not in provenance:
+            violations.append(
+                violation(
+                    GATE,
+                    "font-provenance-missing",
+                    "customXml/montserrat-provenance.xml",
+                    "Boilerplate",
+                )
+            )
 
     return result(GATE, violations)

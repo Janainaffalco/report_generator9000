@@ -17,7 +17,7 @@ report-generator9000 = "report_generator9000.cli:main"
 include = ["report_generator9000*"]
 
 [tool.setuptools.package-data]
-report_generator9000 = ["assets/*.ttf"]
+report_generator9000 = ["assets/*.ttf", "assets/*.txt", "assets/*.md", "assets/*.pb"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
