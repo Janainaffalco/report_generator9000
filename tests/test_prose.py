@@ -13,11 +13,12 @@ from report_generator9000.lista_paginas import (
     Pagina,
 )
 from report_generator9000.control_sheet import Engagement
+from report_generator9000.capture import CaptureConfig, extract_site_text
 from report_generator9000.generate import (
     ReportGenerationError,
     generate_report,
 )
-from report_generator9000.generate_cli import build_parser
+from report_generator9000.generate_cli import build_parser, load_prose_provider
 from report_generator9000.master import build_master
 from report_generator9000.prose import (
     ExtractedPageText,
@@ -31,6 +32,7 @@ from report_generator9000.prose import (
 )
 from report_generator9000.docx_package import open_docx_package
 from tests.test_master_build import approved_source
+from tests.test_lista_paginas import serve_fixture_site
 
 
 PAGES = (
@@ -92,6 +94,23 @@ class CannedProvider:
     ) -> ProseResponse:
         self.calls.append((request, config))
         return self.response
+
+
+def configured_provider_factory() -> CannedProvider:
+    return CannedProvider(
+        ProseResponse(
+            company_description=GroundedField(
+                "Empresa",
+                True,
+                (COMPANY_CITATION,),
+            ),
+            briefing_objective=GroundedField(
+                "Objetivo",
+                True,
+                (OBJECTIVE_CITATION,),
+            ),
+        )
+    )
 
 
 def test_grounded_provider_authors_only_two_fields_and_pages_are_deterministic() -> None:
@@ -378,9 +397,41 @@ def test_cli_exposes_no_llm_model_and_budget_configuration() -> None:
             "configured-model",
             "--prose-output-budget",
             "730",
+            "--prose-provider",
+            f"{__name__}:configured_provider_factory",
         ]
     )
 
     assert no_llm.no_llm is True
     assert configured.prose_model == "configured-model"
     assert configured.prose_output_budget == 730
+    assert isinstance(
+        load_prose_provider(configured.prose_provider),
+        CannedProvider,
+    )
+
+
+def test_visible_site_text_is_script_extracted_with_a_real_browser() -> None:
+    with serve_fixture_site() as origin:
+        pages = (
+            Pagina(PAGINA_PRINCIPAL, "Home", origin, "PÁGINA HOME"),
+            Pagina(ELEMENTO_TRANSVERSAL, "Rodapé", origin, "RODAPÉ"),
+        )
+        extracted = extract_site_text(
+            pages,
+            config=CaptureConfig(
+                viewport_width=800,
+                viewport_height=500,
+                device_scale_factor=1,
+                navigation_timeout_ms=10_000,
+                network_idle_timeout_ms=2_000,
+                lazy_settle_ms=150,
+                embedding_max_width=600,
+                minimum_color_count=8,
+            ),
+        )
+
+    assert len(extracted) == 1
+    assert extracted[0].capture_origin == origin
+    assert "Site de teste" in extracted[0].text
+    assert "<main" not in extracted[0].text

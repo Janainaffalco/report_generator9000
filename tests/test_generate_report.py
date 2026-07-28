@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 import subprocess
 import sys
@@ -24,6 +25,17 @@ SPREADSHEET_TOKENS = {
     "{{ESPECIALISTA}}",
     "{{DATA_KICKOFF}}",
 }
+PROSE_VALUES = {
+    "{{SOBRE_A_EMPRESA}}": (
+        "[PENDÊNCIA GATED: descrição da empresa não gerada (--no-llm)]"
+    ),
+    "{{BRIEFING_INICIAL}}": (
+        "[PENDÊNCIA GATED: objetivo do briefing não gerado (--no-llm)]"
+    ),
+    "{{LISTA_DE_PAGINAS}}": (
+        "A estrutura do site contempla as páginas Home."
+    ),
+}
 
 
 def run_generator(
@@ -36,6 +48,35 @@ def run_generator(
 ) -> subprocess.CompletedProcess[str]:
     stdout_path = output.parent / f"{pasta}-stdout.txt"
     stderr_path = output.parent / f"{pasta}-stderr.txt"
+    selected_gated_root = (
+        gated_drop_root
+        if gated_drop_root is not None
+        else output.parent / "declared-gated"
+    )
+    if gated_drop_root is None:
+        for company in (
+            "DENISE BARROS DE ALMEIDA",
+            "EMPRESA GEMEA LTDA",
+        ):
+            folder = selected_gated_root / f"40-2026_{company}"
+            folder.mkdir(parents=True, exist_ok=True)
+            (folder / "valores.json").write_text(
+                json.dumps(
+                    {
+                        "pasta": "40-2026",
+                        "razao_social": company,
+                        "lista_paginas": [
+                            {
+                                "tipo": "pagina_principal",
+                                "rotulo": "Home",
+                                "url": "/",
+                            }
+                        ],
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
     command = [
         sys.executable,
         str(ROOT / "gerar_relatorio.py"),
@@ -47,14 +88,13 @@ def run_generator(
         str(master),
         "--saida",
         str(output),
+        "--no-llm",
     ]
     command.extend(
         (
             "--gated-drop-root",
             str(
-                gated_drop_root
-                if gated_drop_root is not None
-                else output.parent / "absent-gated"
+                selected_gated_root
             ),
         )
     )
@@ -127,13 +167,10 @@ def test_cli_clones_master_and_fills_each_shared_pasta_engagement(
         text = "\n".join(part.text or "" for part in package.parts)
         assert not any(token in text for token in SPREADSHEET_TOKENS)
         assert all(value in text for value in values.values())
-        assert "{{SOBRE_A_EMPRESA}}" in text
+        assert not any(token in text for token in PROSE_VALUES)
+        assert all(value in text for value in PROSE_VALUES.values())
         token_gate = check_token_residue(package, RunContext())
-        assert not token_gate.passed
-        assert not any(
-            item.detail in SPREADSHEET_TOKENS
-            for item in token_gate.violations
-        )
+        assert token_gate.passed
         with ZipFile(output) as generated:
             assert generated.namelist() == list(source_parts)
             assert {
@@ -177,6 +214,10 @@ def test_cli_clones_master_and_fills_each_shared_pasta_engagement(
                         expected_content = expected_content.replace(
                             token.encode(), evidence
                         )
+                for token, value in PROSE_VALUES.items():
+                    expected_content = expected_content.replace(
+                        token.encode(), value.encode()
+                    )
                 generated_content = generated.read(item.filename)
                 if "/media/" not in f"/{item.filename}":
                     assert generated_content == expected_content

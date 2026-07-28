@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import argparse
+import importlib
 from pathlib import Path
 from typing import Sequence
 
+from .capture import extract_site_text
 from .control_sheet import (
     Engagement,
     SkippedRow,
@@ -14,6 +16,7 @@ from .control_sheet import (
 )
 from .generate import generate_report
 from .gated_inputs import load_gated_inputs
+from .lista_paginas import derive_lista_paginas
 from .prose import ProseConfig, ProseProvider
 
 
@@ -63,7 +66,32 @@ def build_parser() -> argparse.ArgumentParser:
         type=int,
         help="measured maximum output tokens for the prose provider",
     )
+    parser.add_argument(
+        "--prose-provider",
+        metavar="MODULE:ATTRIBUTE",
+        help=(
+            "load a ProseProvider instance or zero-argument factory for "
+            "grounded model mode"
+        ),
+    )
     return parser
+
+
+def load_prose_provider(specification: str) -> ProseProvider:
+    """Load the configured provider without coupling the pipeline to a vendor."""
+    module_name, separator, attribute_name = specification.partition(":")
+    if not separator or not module_name or not attribute_name:
+        raise ValueError(
+            "prose provider must use MODULE:ATTRIBUTE syntax"
+        )
+    module = importlib.import_module(module_name)
+    configured = getattr(module, attribute_name)
+    provider = configured() if callable(configured) else configured
+    if not callable(getattr(provider, "generate", None)):
+        raise ValueError(
+            "configured prose provider must expose generate(request, config)"
+        )
+    return provider
 
 
 def main(
@@ -76,11 +104,13 @@ def main(
     if arguments.no_llm and (
         arguments.prose_model is not None
         or arguments.prose_output_budget is not None
+        or arguments.prose_provider is not None
     ):
         parser.error("--no-llm cannot be combined with prose model settings")
     configured = (
         arguments.prose_model is not None
         or arguments.prose_output_budget is not None
+        or arguments.prose_provider is not None
     )
     if configured and (
         arguments.prose_model is None
@@ -97,8 +127,22 @@ def main(
             output_budget=arguments.prose_output_budget,
         )
     )
-    if prose_config is not None and prose_provider is None:
-        parser.error("a prose provider must be injected for model mode")
+    if not arguments.no_llm and not configured and prose_provider is None:
+        parser.error(
+            "choose --no-llm or configure prose provider, model, and budget"
+        )
+    if prose_provider is None and arguments.prose_provider is not None:
+        try:
+            prose_provider = load_prose_provider(arguments.prose_provider)
+        except (ImportError, AttributeError, TypeError, ValueError) as error:
+            parser.error(str(error))
+    if not arguments.no_llm and prose_provider is None:
+        parser.error("a prose provider is required for model mode")
+    if not arguments.no_llm and prose_config is None:
+        parser.error(
+            "--prose-model and --prose-output-budget are required "
+            "for model mode"
+        )
     try:
         outcomes = read_control_sheet_for_pasta(
             arguments.planilha, arguments.linha
@@ -108,11 +152,26 @@ def main(
                 load_gated_inputs(arguments.gated_drop_root, outcome)
         for outcome in outcomes:
             if isinstance(outcome, Engagement):
+                gated = load_gated_inputs(
+                    arguments.gated_drop_root,
+                    outcome,
+                )
+                pages = derive_lista_paginas(
+                    outcome.capture_origin,
+                    gated.declared_pages,
+                )
+                site_text = (
+                    ()
+                    if arguments.no_llm
+                    else extract_site_text(pages)
+                )
                 generated = generate_report(
                     arguments.master,
                     arguments.saida,
                     outcome,
                     arguments.gated_drop_root,
+                    pages=pages,
+                    site_text=site_text,
                     prose_provider=prose_provider,
                     prose_config=prose_config,
                     no_llm=arguments.no_llm,

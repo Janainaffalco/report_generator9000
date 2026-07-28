@@ -237,29 +237,29 @@ def generate_report(
     except GatedInputError as error:
         raise ReportGenerationError(str(error)) from error
 
-    drafted = None
-    if no_llm or prose_provider is not None or prose_config is not None:
-        selected_pages = (
-            derive_lista_paginas(
-                engagement.capture_origin,
-                gated.declared_pages,
-            )
-            if pages is None
-            else pages
+    selected_pages = (
+        derive_lista_paginas(
+            engagement.capture_origin,
+            gated.declared_pages,
         )
-        try:
-            drafted = draft_prose(
-                selected_pages,
-                site_text,
-                prose_provider,
-                prose_config,
-                no_llm=no_llm,
-            )
-        except ProseBudgetExceeded as error:
-            raise ReportGenerationError(
-                "TOOL_BLOCKED: prose provider exhausted its output budget",
-                pendencia=error.pendencia,
-            ) from error
+        if pages is None
+        else pages
+    )
+    try:
+        drafted = draft_prose(
+            selected_pages,
+            site_text,
+            prose_provider,
+            prose_config,
+            no_llm=no_llm,
+        )
+    except ProseBudgetExceeded as error:
+        raise ReportGenerationError(
+            "TOOL_BLOCKED: prose provider exhausted its output budget",
+            pendencia=error.pendencia,
+        ) from error
+    except ValueError as error:
+        raise ReportGenerationError(str(error)) from error
 
     replacement_text = {
         token: str(getattr(engagement, field))
@@ -267,11 +267,8 @@ def generate_report(
     }
     supplied_gated_values = gated.values_by_token()
     replacement_text.update(supplied_gated_values)
-    pendencias: list[Pendencia] = (
-        [] if drafted is None else list(drafted.pendencias)
-    )
-    if drafted is not None:
-        replacement_text.update(drafted.token_values)
+    pendencias: list[Pendencia] = list(drafted.pendencias)
+    replacement_text.update(drafted.token_values)
     for slot, tokens in GATED_VALUE_SLOTS:
         if all(token in supplied_gated_values for token in tokens):
             continue
@@ -465,9 +462,7 @@ def generate_report(
         ),
         output_paths=(str(output.resolve()),),
         pendencias=tuple(pendencias),
-        prose_grounding=(
-            () if drafted is None else drafted.grounding
-        ),
+        prose_grounding=drafted.grounding,
     )
     context_path, pendencias_document, pendencias_json = _write_sidecars(
         output, context

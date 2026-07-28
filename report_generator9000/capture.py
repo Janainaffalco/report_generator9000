@@ -7,6 +7,7 @@ import re
 import unicodedata
 from dataclasses import dataclass
 from pathlib import Path
+from typing import TYPE_CHECKING
 from urllib.parse import urlsplit
 
 from PIL import Image, ImageOps
@@ -19,6 +20,8 @@ from playwright.sync_api import (
 from .lista_paginas import ELEMENTO_TRANSVERSAL, Pagina
 from .run_context import Artifact, Pendencia
 
+if TYPE_CHECKING:
+    from .prose import ExtractedPageText
 
 DECLINE_SELECTORS = (
     "#cmplz-deny",
@@ -447,6 +450,72 @@ def capture_site(
     )
 
 
+def extract_site_text(
+    pages: tuple[Pagina, ...],
+    *,
+    config: CaptureConfig | None = None,
+) -> tuple[ExtractedPageText, ...]:
+    """Extract rendered body text without exposing markup to prose providers."""
+    from .prose import ExtractedPageText
+
+    settings = CaptureConfig() if config is None else config
+    extracted: list[ExtractedPageText] = []
+    seen: set[str] = set()
+    with sync_playwright() as playwright:
+        browser = playwright.chromium.launch(headless=True)
+        try:
+            context = browser.new_context(
+                viewport={
+                    "width": settings.viewport_width,
+                    "height": settings.viewport_height,
+                },
+                device_scale_factor=settings.device_scale_factor,
+            )
+            page = context.new_page()
+            for pagina in pages:
+                if not pagina.entra_no_briefing or pagina.url in seen:
+                    continue
+                seen.add(pagina.url)
+                parsed = urlsplit(pagina.url)
+                if (
+                    parsed.scheme not in {"http", "https"}
+                    or not parsed.netloc
+                    or parsed.username is not None
+                    or parsed.password is not None
+                ):
+                    raise CaptureError(
+                        "prose extraction URL must be unauthenticated HTTP(S)"
+                    )
+                page.goto(
+                    pagina.url,
+                    wait_until="domcontentloaded",
+                    timeout=settings.navigation_timeout_ms,
+                )
+                final_url = urlsplit(page.url)
+                if (
+                    final_url.netloc.casefold()
+                    != parsed.netloc.casefold()
+                    or final_url.username is not None
+                    or final_url.password is not None
+                ):
+                    raise CaptureError(
+                        "prose extraction left the declared page host"
+                    )
+                _dismiss_consent(page)
+                _force_lazy_rendering(page, settings)
+                text = page.locator("body").inner_text().strip()
+                if text:
+                    extracted.append(
+                        ExtractedPageText(
+                            capture_origin=page.url,
+                            text=text,
+                        )
+                    )
+        finally:
+            browser.close()
+    return tuple(extracted)
+
+
 __all__ = [
     "CONSENT_BANNER_SELECTORS",
     "DECLINE_SELECTORS",
@@ -456,6 +525,7 @@ __all__ = [
     "CaptureFailure",
     "CaptureRun",
     "capture_site",
+    "extract_site_text",
     "fitted_emu_dimensions",
     "image_color_count",
 ]
