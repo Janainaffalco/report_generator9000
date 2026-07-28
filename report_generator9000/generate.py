@@ -30,7 +30,8 @@ from .prose import (
     draft_prose,
 )
 from .lista_paginas import Pagina, derive_lista_paginas
-from .run_context import Artifact, Pendencia, RunContext
+from .palette import PaletteDerivation, render_palette
+from .run_context import Artifact, Grounding, Pendencia, RunContext
 
 
 SPREADSHEET_TOKENS = {
@@ -236,6 +237,7 @@ def generate_report(
     blocks: tuple[str, ...] = (),
     capture_folder: str | Path | None = None,
     run_pendencias: tuple[Pendencia, ...] = (),
+    derived_palette: PaletteDerivation | None = None,
 ) -> GeneratedReport:
     """Clone *master* and fill spreadsheet and available Gated Inputs."""
     master_path = Path(master)
@@ -332,6 +334,7 @@ def generate_report(
             artifact.digest.casefold(), []
         ).append(artifact)
     used_run_artifacts: set[Artifact] = set()
+    palette_grounding: list[Grounding] = []
     claimed_media_parts: set[str] = set()
     supplied_images = gated.images_by_part()
     for slot, _filename, part_name in GATED_IMAGE_PARTS:
@@ -355,8 +358,45 @@ def generate_report(
                     source=str(source_path.resolve()),
                 )
             )
+        elif slot == "paleta" and (
+            derived_palette is not None and derived_palette.colors
+        ):
+            width, height = _placeholder_pixel_dimensions(
+                master_package, part_name
+            )
+            content = render_palette(
+                tuple(color.hex for color in derived_palette.colors),
+                width=width,
+                height=height,
+            )
+            parts[part_name] = content
+            palette_digest = hashlib.sha256(content).hexdigest()
+            artifacts.append(
+                Artifact(
+                    digest=palette_digest,
+                    origin="derived",
+                    label=slot,
+                )
+            )
+            palette_grounding.extend(
+                Grounding(
+                    field=f"paleta:{color.hex}",
+                    capture_origin=color.source,
+                    excerpt=color.evidence,
+                    artifact_digest=palette_digest,
+                )
+                for color in derived_palette.colors
+            )
         else:
-            required_action = f"Fornecer {slot} no Gated Drop Folder"
+            is_undeclared_palette = slot == "paleta"
+            classification = (
+                "UNDECLARED" if is_undeclared_palette else "GATED"
+            )
+            required_action = (
+                "Revisar a paleta no Word e substituir a imagem se necessario"
+                if is_undeclared_palette
+                else f"Fornecer {slot} no Gated Drop Folder"
+            )
             _document_slot, page = _media_location(
                 master_package, part_name
             )
@@ -364,7 +404,7 @@ def generate_report(
                 master_package, part_name
             )
             content = render_placeholder(
-                parts[part_name], "GATED", slot, width, height
+                parts[part_name], classification, slot, width, height
             )
             parts[part_name] = content
             digest = hashlib.sha256(content).hexdigest()
@@ -378,8 +418,13 @@ def generate_report(
             pendencias.append(
                 Pendencia(
                     slot=slot,
-                    classification="GATED",
-                    reason="imagem nao fornecida no Gated Drop Folder",
+                    classification=classification,
+                    reason=(
+                        "site nao declara cores e nao tem ao menos duas "
+                        "cores observadas utilizaveis"
+                        if is_undeclared_palette
+                        else "imagem nao fornecida no Gated Drop Folder"
+                    ),
                     evidence=digest,
                     name=slot,
                     page=page,
@@ -504,7 +549,7 @@ def generate_report(
             output_paths=(str(output.resolve()),),
             blocks=blocks,
             pendencias=tuple(pendencias),
-            prose_grounding=drafted.grounding,
+            prose_grounding=(*drafted.grounding, *palette_grounding),
         )
         gate_report = run_gates(package, context)
         if not gate_report.passed:

@@ -106,11 +106,13 @@ The per-engagement directory a consultant fills with Gated Inputs before a run. 
 are consumed if present; absence is normal and never an error.
 
 **Derived**:
-An artifact the pipeline generates from declarations it observed at the Capture Origin,
-rather than photographing or being handed — today, the colour palette. Every Derived
-artifact carries a Grounding citation naming the exact declaration it came from, so it is
-auditable the same way generated prose is. Never a Capture, because nothing was
-photographed; never Boilerplate, because it differs per client.
+An artifact the pipeline generates from public evidence at the Capture Origin, rather than
+photographing or being handed — today, the colour palette. Declared palette tokens are the
+first choice; when none exist, sufficiently prominent non-neutral colours observed in the
+rendered page may be used. Every Derived artifact carries Grounding citations naming the
+exact declaration, or the observed selector and property, so it is auditable the same way
+generated prose is. Never a Capture, because the artifact itself was not photographed;
+never Boilerplate, because it differs per client.
 _Avoid_: computed, inferred, generated image
 
 ### Gaps
@@ -128,9 +130,10 @@ Placeholder class meaning the content should have been captured automatically bu
 attempt failed. Always a defect requiring investigation.
 
 **UNDECLARED**:
-Placeholder class meaning the site declares the content nowhere machine-readable, so the
-pipeline cannot derive it without guessing. The content is public and a human can obtain it
-in seconds — it is neither behind authentication nor a failure of the automation. Distinct
+Placeholder class meaning the site declares no palette machine-readably and fewer than two
+usable colours survive rendered-page observation, so the pipeline cannot derive the
+artifact honestly. The content is public and a human can obtain it in seconds — it is
+neither behind authentication nor a failure of the automation. Distinct
 from GATED, which is about access, and from TOOL_BLOCKED, which is always a defect;
 UNDECLARED is expected on a meaningful minority of sites and must never be investigated as
 a bug.

@@ -8,8 +8,8 @@ from pathlib import Path, PurePosixPath
 from typing import Any, Mapping
 
 
-ORIGINS = ("boilerplate", "capture", "gated", "placeholder")
-CLASSIFICATIONS = ("GATED", "TOOL_BLOCKED", "REVIEW")
+ORIGINS = ("boilerplate", "capture", "derived", "gated", "placeholder")
+CLASSIFICATIONS = ("GATED", "TOOL_BLOCKED", "UNDECLARED", "REVIEW")
 
 
 @dataclass(frozen=True)
@@ -42,6 +42,7 @@ class Grounding:
     field: str
     capture_origin: str
     excerpt: str
+    artifact_digest: str = ""
 
 
 @dataclass(frozen=True)
@@ -182,13 +183,14 @@ def _grounding(value: Any, where: str) -> Grounding:
     mapping = _require_mapping(value, where)
     _reject_unknown(
         mapping,
-        ("field", "capture_origin", "excerpt"),
+        ("field", "capture_origin", "excerpt", "artifact_digest"),
         where,
     )
     return Grounding(
         field=_require_str(mapping, "field", where),
         capture_origin=_require_str(mapping, "capture_origin", where),
         excerpt=_require_str(mapping, "excerpt", where),
+        artifact_digest=_optional_str(mapping, "artifact_digest", where).lower(),
     )
 
 

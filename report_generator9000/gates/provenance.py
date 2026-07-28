@@ -15,6 +15,11 @@ def check_media_provenance(
 ) -> GateResult:
     violations: list[Violation] = []
     claims_by_digest = context.media_by_digest()
+    grounded_artifact_digests = {
+        item.artifact_digest.lower()
+        for item in context.prose_grounding
+        if item.artifact_digest
+    }
     for media in package.media:
         digest = media.sha256.lower()
         claims = claims_by_digest.get(digest)
@@ -25,8 +30,9 @@ def check_media_provenance(
                     "media-without-provenance",
                     media.part_name,
                     f"sha256={digest} traces to no Boilerplate entry, "
-                    "no Capture from this run, and no Gated Input from "
-                    "this run's Gated Drop Folder",
+                    "no Capture from this run, no Derived artifact from "
+                    "this run, and no Gated Input from this run's Gated "
+                    "Drop Folder, and no declared Placeholder",
                 )
             )
             continue
@@ -41,6 +47,16 @@ def check_media_provenance(
                     "ambiguous-provenance",
                     media.part_name,
                     f"sha256={digest} claimed as {claim_descriptions}",
+                )
+            )
+        if "derived" in origins and digest not in grounded_artifact_digests:
+            violations.append(
+                violation(
+                    GATE,
+                    "derived-without-grounding",
+                    media.part_name,
+                    f"sha256={digest} is Derived but has no linked "
+                    "Grounding record",
                 )
             )
     return result(GATE, violations)

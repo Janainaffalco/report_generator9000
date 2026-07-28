@@ -27,8 +27,13 @@ from .generate import (
     generate_report,
 )
 from .gates import run_gates
-from .gated_inputs import GatedInputError, load_gated_inputs
+from .gated_inputs import (
+    GATED_IMAGE_PARTS,
+    GatedInputError,
+    load_gated_inputs,
+)
 from .lista_paginas import Pagina, derive_lista_paginas
+from .palette import PaletteCollectionError, derive_palette_from_site
 from .prose import ProseConfig, ProseProvider
 from .placeholders import render_placeholder
 from .previews import DocumentPreviewRenderer, PreviewRenderer
@@ -66,6 +71,19 @@ def _assemble_staged_package(
         gated = load_gated_inputs(gated_drop_root, engagement)
     except GatedInputError as error:
         raise StopCondition(f"STOP CONDITION: {error}") from error
+    palette_part = next(
+        part_name
+        for slot, _filename, part_name in GATED_IMAGE_PARTS
+        if slot == "paleta"
+    )
+    derived_palette = None
+    if palette_part not in gated.images_by_part():
+        try:
+            derived_palette = derive_palette_from_site(
+                engagement.capture_origin
+            )
+        except PaletteCollectionError as error:
+            raise StopCondition(f"STOP CONDITION: {error}") from error
     pages = derive_lista_paginas(
         engagement.capture_origin,
         gated.declared_pages,
@@ -164,6 +182,7 @@ def _assemble_staged_package(
             blocks=stamped.headings,
             capture_folder=captures.folder,
             run_pendencias=tuple(capture_pendencias),
+            derived_palette=derived_palette,
         )
 
     renderer = (

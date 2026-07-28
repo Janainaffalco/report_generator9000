@@ -85,6 +85,7 @@ def test_media_without_provenance_is_reported(tmp_path: Path) -> None:
     assert "GATE media-provenance: FAIL" in completed.stdout
     assert "media-without-provenance" in completed.stdout
     assert "word/media/image1.png" in completed.stdout
+    assert "Derived artifact" in completed.stdout
 
 
 def test_capture_declared_for_this_run_passes_while_second_image_fails(
@@ -168,6 +169,38 @@ def test_ambiguous_provenance_is_reported(tmp_path: Path) -> None:
     assert "capture" in completed.stdout
     assert "cabecalho SEBRAE" in completed.stdout
     assert "pagina inicial" in completed.stdout
+
+
+def test_derived_media_without_linked_grounding_is_reported(
+    tmp_path: Path,
+) -> None:
+    image = png_bytes(2, 2)
+    document = build_docx(
+        tmp_path / "doc.docx",
+        paragraphs=[paragraph(image="rIdImage1")],
+        media={"media/image1.png": image},
+        relationships=[
+            RelationshipSpec(id="rIdImage1", target="media/image1.png")
+        ],
+    )
+    context = write_context(
+        tmp_path / "run.json",
+        {
+            "media": [
+                {
+                    "digest": digest(image),
+                    "origin": "derived",
+                    "label": "paleta",
+                }
+            ]
+        },
+    )
+
+    completed = run_check(document, context)
+
+    assert completed.returncode == 1
+    assert "derived-without-grounding" in completed.stdout
+    assert "word/media/image1.png" in completed.stdout
 
 
 def test_link_without_provenance_third_party_wpadmin_among_boilerplate(

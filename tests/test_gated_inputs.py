@@ -26,8 +26,9 @@ from report_generator9000.gates.pendencias import check_pendencias_agreement
 from report_generator9000.gates.provenance import check_media_provenance
 from report_generator9000.gates.scope import check_engagement_scope
 from report_generator9000.gated_inputs import gated_drop_folder
-from report_generator9000.generate import report_output_path
+from report_generator9000.generate import generate_report, report_output_path
 from report_generator9000.master import build_master
+from report_generator9000.palette import PaletteColor, PaletteDerivation
 from report_generator9000.run_context import load_run_context
 from test_generate_report import run_generator
 
@@ -146,6 +147,114 @@ def test_output_and_gated_folder_share_the_canonical_engagement_key() -> None:
     )
 
 
+def test_derived_palette_has_grounding_and_passes_provenance(
+    tmp_path: Path,
+) -> None:
+    master = gated_master(tmp_path / "MASTER.docx")
+    engagement = next(
+        outcome
+        for outcome in read_control_sheet_for_pasta(
+            CONTROL_SHEET, "50-2026"
+        )
+        if isinstance(outcome, Engagement)
+    )
+    derivation = PaletteDerivation(
+        stage="declared",
+        colors=(
+            PaletteColor(
+                "#004127",
+                "https://capture.example/kit.css",
+                "--e-global-color-primary: #004127",
+            ),
+            PaletteColor(
+                "#61CE70",
+                "https://capture.example/kit.css",
+                "--e-global-color-accent: #61CE70",
+            ),
+        ),
+    )
+
+    generated = generate_report(
+        master,
+        tmp_path / "reports",
+        engagement,
+        GATED_FIXTURES / "absent",
+        pages=(),
+        no_llm=True,
+        derived_palette=derivation,
+    )
+
+    palette = next(
+        artifact
+        for artifact in generated.context.media
+        if artifact.label == "paleta"
+    )
+    assert palette.origin == "derived"
+    reloaded = load_run_context(generated.context_document)
+    assert {
+        (item.field, item.capture_origin, item.excerpt)
+        for item in reloaded.prose_grounding
+        if item.field.startswith("paleta:")
+    } == {
+        (
+            "paleta:#004127",
+            "https://capture.example/kit.css",
+            "--e-global-color-primary: #004127",
+        ),
+        (
+            "paleta:#61CE70",
+            "https://capture.example/kit.css",
+            "--e-global-color-accent: #61CE70",
+        ),
+    }
+    assert next(
+        result
+        for result in generated.gate_report.results
+        if result.gate == "media-provenance"
+    ).passed
+    with ZipFile(generated.document) as package:
+        with Image.open(BytesIO(package.read("word/media/image3.png"))) as image:
+            assert image.info["Description"] == "Cores\n#004127\n#61CE70"
+
+
+def test_undeclared_palette_has_placeholder_and_matching_pendencia(
+    tmp_path: Path,
+) -> None:
+    master = gated_master(tmp_path / "MASTER.docx")
+    engagement = next(
+        outcome
+        for outcome in read_control_sheet_for_pasta(
+            CONTROL_SHEET, "50-2026"
+        )
+        if isinstance(outcome, Engagement)
+    )
+
+    generated = generate_report(
+        master,
+        tmp_path / "reports",
+        engagement,
+        GATED_FIXTURES / "absent",
+        pages=(),
+        no_llm=True,
+        derived_palette=PaletteDerivation(stage="undeclared", colors=()),
+    )
+
+    pendencia = next(
+        item for item in generated.context.pendencias if item.slot == "paleta"
+    )
+    assert pendencia.classification == "UNDECLARED"
+    assert pendencia.evidence in {
+        artifact.digest
+        for artifact in generated.context.media
+        if artifact.label == "paleta" and artifact.origin == "placeholder"
+    }
+    assert next(
+        result
+        for result in generated.gate_report.results
+        if result.gate == "pendencias-agreement"
+    ).passed
+
+
 def test_complete_gated_folder_fills_values_images_and_provenance(
     tmp_path: Path,
 ) -> None:
@@ -259,7 +368,14 @@ def test_absent_gated_folder_is_a_normal_draft_with_explicit_pendencias(
             rendered = generated.read(part_name)
             assert rendered != original
             with Image.open(BytesIO(rendered)) as placeholder:
-                assert "GATED" in str(placeholder.info.get("Description", ""))
+                expected_class = (
+                    "UNDECLARED"
+                    if part_name == IMAGE_PARTS["paleta.png"]
+                    else "GATED"
+                )
+                assert expected_class in str(
+                    placeholder.info.get("Description", "")
+                )
                 assert len(placeholder.getcolors(maxcolors=1_000_000) or ()) > 2
     pendencias_report = json.loads(
         output.with_name("pendencias.json").read_text(encoding="utf-8")
@@ -268,7 +384,15 @@ def test_absent_gated_folder_is_a_normal_draft_with_explicit_pendencias(
     assert pendencias_report["ready_to_send"] is False
     pendencias = pendencias_report["pendencias"]
     assert len(pendencias) == 20
-    assert {item["class"] for item in pendencias} == {"GATED"}
+    assert {item["class"] for item in pendencias} == {
+        "GATED",
+        "UNDECLARED",
+    }
+    assert [
+        item["slot"]
+        for item in pendencias
+        if item["class"] == "UNDECLARED"
+    ] == ["paleta"]
     assert all(
         {
             "slot",
@@ -286,6 +410,7 @@ def test_absent_gated_folder_is_a_normal_draft_with_explicit_pendencias(
     )
     assert "Estado: **RASCUNHO**" in readable_report
     assert "GATED" in readable_report
+    assert "UNDECLARED" in readable_report
     assert "completo" not in readable_report.casefold()
     assert "pronto para envio" not in readable_report.casefold()
     assert "STATUS\tDRAFT" in completed.stdout
@@ -389,6 +514,7 @@ def test_failed_capture_renders_a_tool_blocked_placeholder_and_draft(
     assert {item["class"] for item in report["pendencias"]} == {
         "GATED",
         "TOOL_BLOCKED",
+        "UNDECLARED",
     }
     pendencia = next(
         item
