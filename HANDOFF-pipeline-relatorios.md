@@ -1,3 +1,10 @@
+> **SUPERSEDED by [issue #1](https://github.com/seriouslyvictor/report_generator9000/issues/1).** Kept only for the
+> document-internals reconnaissance in §4.1, §4.6 and §4.7 (page setup, relationship map, slot
+> inventory), which is accurate and should not be re-derived. **Three claims below did not survive
+> verification** — a Block is **two** paragraphs, not the three-paragraph triple in §4.4; the briefing
+> paragraph does **not** follow nav order (§6.1); and the summary is **not** reproduced as-is (§4.3, §15)
+> but replaced with a live field. Where this file and issue #1 disagree, issue #1 wins.
+
 # HANDOFF — Deterministic Report Pipeline (SEBRAETEC)
 ### Architecture brief for prototyping in Claude Code
 **Date:** 2026-07-25 · **Scope:** `Inserção digital – Desenvolvimento de WebSite` (Ficha 46003-4)

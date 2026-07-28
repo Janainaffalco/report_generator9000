@@ -44,12 +44,8 @@ Used by `/wayfinder`. The **map** is a single issue with **child** issues as tic
 - **Claim**: `gh issue edit <n> --add-assignee @me` — the session's first write.
 - **Resolve**: `gh issue comment <n> --body "<answer>"`, then `gh issue close <n>`, then append a context pointer (gist + link) to the map's Decisions-so-far.
 
-## Prerequisite: this repo is not yet a git repo
+## Repo
 
-At setup time `D:\report_generator9000` was not a git repository and had no GitHub remote. The `gh` CLI is installed and authenticated, but every command above resolves the target repo from `git remote -v` and will fail until:
+`seriouslyvictor/report_generator9000` (private, issues enabled) at `origin`. All five triage labels exist.
 
-1. `git init` in the repo root,
-2. a GitHub repo exists (e.g. `gh repo create`), and
-3. `origin` points at it.
-
-Until then, treat the tracker as unavailable rather than silently falling back to `.scratch/`. The pre-existing `.scratch/pipeline-relatorios/` files are historical and are not the tracker.
+`.scratch/pipeline-relatorios/` predates the tracker and is **not** it. `spec.md` there is mirrored by issue #1 — GitHub is canonical. Never fall back to `.scratch/` when a `gh` command fails; stop and report instead.

@@ -7,7 +7,7 @@ consultancy engagement. See `CONTEXT.md` for the domain glossary.
 
 ### Issue tracker
 
-GitHub Issues via the `gh` CLI — note that this directory is not yet a git repo, so the tracker is not usable until `git init` + a GitHub `origin` remote exist. See `docs/agents/issue-tracker.md`.
+GitHub Issues via the `gh` CLI, on `seriouslyvictor/report_generator9000`. See `docs/agents/issue-tracker.md`.
 
 ### Triage labels
 
