@@ -58,6 +58,17 @@ CANONICAL_HEADINGS = (
     (1, "REUNIÕES"),
 )
 
+MASTER_BLOCK_HEADINGS = (
+    "PÁGINA HOME",
+    "SEÇÃO PRODUTOS",
+    "SEÇÃO VÍDEOS",
+    "SEÇÃO CONTATO",
+    "SEÇÃO SOBRE",
+    "POLÍTICAS DE PRIVACIDADE",
+    "CABEÇALHO",
+    "RODAPÉ",
+)
+
 _TOKEN = re.compile(r"\{\{[^{}<>]{1,64}\}\}")
 _CLIENT_MARKERS = (
     "argel",
@@ -237,6 +248,88 @@ def check_master_build(
                         "ORIENTAÇÕES AO CLIENTE",
                     )
                 )
+        body = document.find(f"{w}body")
+        body_children = [] if body is None else list(body)
+        page_area = next(
+            (
+                index
+                for index, item in enumerate(body_children)
+                if "".join(
+                    node.text or "" for node in item.iter(f"{w}t")
+                ).strip()
+                == "PÁGINA HOME E SEÇÕES"
+            ),
+            None,
+        )
+        panel = next(
+            (
+                index
+                for index, item in enumerate(body_children)
+                if page_area is not None
+                and index > page_area
+                and "".join(
+                    node.text or "" for node in item.iter(f"{w}t")
+                ).strip()
+                == "PAINEL DE CONFIGURAÇÃO WORDPRESS"
+            ),
+            None,
+        )
+        block_error = page_area is None or panel is None
+        if not block_error:
+            block_region = body_children[page_area + 1 : panel]
+            block_error = len(block_region) != len(MASTER_BLOCK_HEADINGS) * 2
+            if not block_error:
+                for offset, expected in enumerate(MASTER_BLOCK_HEADINGS):
+                    heading = block_region[offset * 2]
+                    image = block_region[offset * 2 + 1]
+                    text = "".join(
+                        node.text or "" for node in heading.iter(f"{w}t")
+                    ).strip()
+                    properties = heading.find(f"{w}pPr")
+                    keep = (
+                        None
+                        if properties is None
+                        else properties.find(f"{w}keepNext")
+                    )
+                    spacing = (
+                        None
+                        if properties is None
+                        else properties.find(f"{w}spacing")
+                    )
+                    style = (
+                        None
+                        if properties is None
+                        else properties.find(f"{w}pStyle")
+                    )
+                    image_spacing = image.find(f"{w}pPr/{w}spacing")
+                    block_error = block_error or any(
+                        (
+                            text != expected,
+                            keep is None or keep.get(f"{w}val") != "true",
+                            spacing is None
+                            or spacing.get(f"{w}after") != "80",
+                            style is not None
+                            and style.get(f"{w}val")
+                            in {"Heading1", "Heading2"},
+                            image.find(f".//{w}drawing") is None,
+                            image_spacing is None
+                            or image_spacing.get(f"{w}before") != "0",
+                        )
+                    )
+        stamp_count = sum(
+            1
+            for item in document.iter(f"{w}bookmarkStart")
+            if item.get(f"{w}name") == "MASTER_BLOCK_STAMP"
+        )
+        if block_error or stamp_count != 1:
+            violations.append(
+                violation(
+                    GATE,
+                    "invalid-master-blocks",
+                    "word/document.xml",
+                    "expected eight two-paragraph bound Blocks and one stamp",
+                )
+            )
 
         settings = ElementTree.fromstring(part_text["word/settings.xml"] or "")
         update = settings.find(f"{w}updateFields")

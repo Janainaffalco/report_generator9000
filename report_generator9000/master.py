@@ -26,6 +26,7 @@ from .gates.master import (
     BOILERPLATE_MEDIA,
     CANONICAL_HEADINGS,
     EXPECTED_TOKENS,
+    MASTER_BLOCK_HEADINGS,
     check_master_build,
 )
 from .gates.results import GateResult
@@ -222,6 +223,182 @@ def _set_heading(paragraph: ElementTree.Element, style_id: str) -> None:
     if style is None:
         style = ElementTree.SubElement(properties, f"{W}pStyle")
     style.set(f"{W}val", style_id)
+
+
+def _set_spacing(
+    paragraph: ElementTree.Element, *, before: int, after: int
+) -> None:
+    properties = _paragraph_properties(paragraph)
+    spacing = properties.find(f"{W}spacing")
+    if spacing is None:
+        spacing = ElementTree.SubElement(properties, f"{W}spacing")
+    spacing.set(f"{W}before", str(before))
+    spacing.set(f"{W}after", str(after))
+
+
+def _canonicalize_blocks(
+    parts: dict[str, bytes], changes: list[_Change]
+) -> None:
+    document = ElementTree.fromstring(parts["word/document.xml"])
+    body = document.find(f"{W}body")
+    if body is None:
+        raise MasterBuildError("word/document.xml has no body")
+    children = list(body)
+    start = next(
+        (
+            index
+            for index, item in enumerate(children)
+            if item.tag == f"{W}p"
+            and _paragraph_text(item).strip().casefold()
+            == "página home e seções"
+        ),
+        None,
+    )
+    end = next(
+        (
+            index
+            for index, item in enumerate(children)
+            if item.tag == f"{W}p"
+            and _paragraph_text(item).strip().casefold()
+            == "painel de configuração wordpress"
+            and index > (start or 0)
+        ),
+        None,
+    )
+    if start is None or end is None:
+        raise MasterBuildError("canonical Block region boundaries not found")
+
+    region = children[start + 1 : end]
+    empty_spacers = [
+        item
+        for item in region
+        if item.tag == f"{W}p"
+        and not _paragraph_text(item).strip()
+        and item.find(f".//{W}drawing") is None
+    ]
+    for spacer in empty_spacers:
+        body.remove(spacer)
+        changes.append(
+            _Change(
+                "Block spacer removed",
+                "word/document.xml",
+                "empty paragraph",
+                "paragraph spacing",
+            )
+        )
+
+    children = list(body)
+    block_pairs = []
+    cursor = start + 1
+    for expected in MASTER_BLOCK_HEADINGS:
+        heading_index = next(
+            (
+                index
+                for index, item in enumerate(children[cursor:], cursor)
+                if item.tag == f"{W}p"
+                and _paragraph_text(item).strip().casefold()
+                == expected.casefold()
+            ),
+            None,
+        )
+        if heading_index is None or heading_index + 1 >= len(children):
+            raise MasterBuildError(f"canonical Block missing: {expected}")
+        heading = children[heading_index]
+        image = children[heading_index + 1]
+        if image.find(f".//{W}drawing") is None:
+            raise MasterBuildError(f"Block image does not follow heading: {expected}")
+        properties = _paragraph_properties(heading)
+        keep = properties.find(f"{W}keepNext")
+        if keep is None:
+            keep = ElementTree.SubElement(properties, f"{W}keepNext")
+        keep.set(f"{W}val", "true")
+        style = properties.find(f"{W}pStyle")
+        if style is not None and style.get(f"{W}val") in {
+            "Heading1",
+            "Heading2",
+        }:
+            style.set(f"{W}val", "Normal")
+        _set_spacing(heading, before=240, after=80)
+        _set_spacing(image, before=0, after=240)
+        block_pairs.append((heading, image))
+        changes.append(
+            _Change(
+                "Block canonicalized",
+                "word/document.xml",
+                expected,
+                "two paragraphs; keepNext; pPr spacing; TOC-excluded",
+            )
+        )
+        cursor = heading_index + 2
+
+    stamp_heading, stamp_image = block_pairs[0]
+    for paragraph in (stamp_heading, stamp_image):
+        for marker in list(paragraph.findall(f"{W}bookmarkStart")) + list(
+            paragraph.findall(f"{W}bookmarkEnd")
+        ):
+            paragraph.remove(marker)
+    stamp_heading.insert(
+        1 if stamp_heading.find(f"{W}pPr") is not None else 0,
+        ElementTree.Element(
+            f"{W}bookmarkStart",
+            {f"{W}id": "9000", f"{W}name": "MASTER_BLOCK_STAMP"},
+        ),
+    )
+    stamp_image.append(
+        ElementTree.Element(f"{W}bookmarkEnd", {f"{W}id": "9000"})
+    )
+    changes.append(
+        _Change(
+            "Block stamp designated",
+            "word/document.xml",
+            "PÁGINA HOME Block",
+            "MASTER_BLOCK_STAMP",
+        )
+    )
+    parts["word/document.xml"] = ElementTree.tostring(
+        document, encoding="utf-8", xml_declaration=True
+    )
+
+
+def clone_block_stamp(
+    document: ElementTree.Element,
+    heading: str,
+    relationship_id: str,
+) -> tuple[ElementTree.Element, ElementTree.Element]:
+    """Clone the Master's bookmarked two-paragraph Block stamp."""
+    body = document.find(f"{W}body")
+    if body is None:
+        raise ValueError("document has no body")
+    children = list(body)
+    source_index = next(
+        (
+            index
+            for index, paragraph in enumerate(children)
+            if paragraph.find(
+                f"{W}bookmarkStart[@{W}name='MASTER_BLOCK_STAMP']"
+            )
+            is not None
+        ),
+        None,
+    )
+    if source_index is None or source_index + 1 >= len(children):
+        raise ValueError("MASTER_BLOCK_STAMP not found")
+    cloned_heading = deepcopy(children[source_index])
+    cloned_image = deepcopy(children[source_index + 1])
+    _replace_paragraph(cloned_heading, heading)
+    for paragraph in (cloned_heading, cloned_image):
+        for marker in list(paragraph.findall(f"{W}bookmarkStart")) + list(
+            paragraph.findall(f"{W}bookmarkEnd")
+        ):
+            paragraph.remove(marker)
+    blip = cloned_image.find(
+        ".//{http://schemas.openxmlformats.org/drawingml/2006/main}blip"
+    )
+    if blip is None:
+        raise ValueError("MASTER_BLOCK_STAMP has no image Slot")
+    blip.set(f"{R}embed", relationship_id)
+    blip.attrib.pop(f"{R}link", None)
+    return cloned_heading, cloned_image
 
 
 def _toc_paragraph() -> ElementTree.Element:
@@ -768,6 +945,7 @@ def build_master(source: str | Path, destination: str | Path) -> MasterBuild:
             _Change("media neutralized", name, media.sha256, "neutral stamp"))
 
     _add_signoff_structure(parts, changes)
+    _canonicalize_blocks(parts, changes)
     _embed_montserrat(parts, changes)
     master_path.parent.mkdir(parents=True, exist_ok=True)
     _deterministic_zip(master_path, parts)
@@ -783,4 +961,5 @@ __all__ = [
     "MasterBuild",
     "MasterBuildError",
     "build_master",
+    "clone_block_stamp",
 ]

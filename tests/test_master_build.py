@@ -9,7 +9,14 @@ import pytest
 from fixtures.docx_builder import RelationshipSpec, build_docx, paragraph, png_bytes
 
 from report_generator9000.docx_package import open_docx_package
-from report_generator9000.master import EXPECTED_TOKENS, build_master
+from report_generator9000.gates.blocks import check_block_integrity
+from report_generator9000.gates.master import MASTER_BLOCK_HEADINGS
+from report_generator9000.master import (
+    EXPECTED_TOKENS,
+    build_master,
+    clone_block_stamp,
+)
+from report_generator9000.run_context import RunContext
 
 
 W = "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}"
@@ -68,6 +75,7 @@ def approved_source(path: Path) -> Path:
     return build_docx(
         path,
         paragraphs=[
+            paragraph(image="rIdImage1"),
             paragraph("SUMÁRIO"),
             paragraph("summary entry"),
             paragraph("ETAPA 1"),
@@ -83,6 +91,36 @@ def approved_source(path: Path) -> Path:
             paragraph("PLUGINS"),
             paragraph("IDENTIDADE VISUAL"),
             paragraph("PÁGINA HOME E SEÇÕES"),
+            paragraph(),
+            paragraph("PÁGINA HOME"),
+            paragraph(),
+            paragraph(image="rIdImage2"),
+            paragraph(),
+            paragraph("SEÇÃO PRODUTOS"),
+            paragraph(),
+            paragraph(image="rIdImage2"),
+            paragraph(),
+            paragraph("SEÇÃO VÍDEOS"),
+            paragraph(),
+            paragraph(image="rIdImage2"),
+            paragraph(),
+            paragraph("SEÇÃO CONTATO"),
+            paragraph(image="rIdImage2"),
+            paragraph("SEÇÃO SOBRE"),
+            paragraph(image="rIdImage2"),
+            paragraph(),
+            paragraph("POLÍTICAS DE PRIVACIDADE"),
+            paragraph(),
+            paragraph(image="rIdImage2"),
+            paragraph(),
+            paragraph("CABEÇALHO"),
+            paragraph(),
+            paragraph(image="rIdImage2"),
+            paragraph(),
+            paragraph("RODAPÉ"),
+            paragraph(),
+            paragraph(image="rIdImage2"),
+            paragraph(),
             paragraph("PAINEL DE CONFIGURAÇÃO WORDPRESS"),
             paragraph("PAINEL DE CONFIGURAÇÃO WORDPRESS"),
             paragraph("SEO"),
@@ -272,3 +310,64 @@ def test_real_source_uses_the_exact_canonical_heading_sequence(
         document = ElementTree.fromstring(package.read("word/document.xml"))
     assert heading_sequence(document) == EXPECTED_HEADINGS
     assert built.validation.passed
+
+
+def test_master_blocks_are_two_paragraph_bound_and_cloneable(
+    tmp_path: Path,
+) -> None:
+    built = build_master(
+        approved_source(tmp_path / "approved.docx"), tmp_path / "out"
+    )
+    package = open_docx_package(built.master)
+    assert check_block_integrity(
+        package, RunContext(blocks=MASTER_BLOCK_HEADINGS)
+    ).passed
+
+    with ZipFile(built.master) as archive:
+        document = ElementTree.fromstring(archive.read("word/document.xml"))
+    body = document.find(f"{W}body")
+    children = list(body)
+    start = next(
+        index
+        for index, item in enumerate(children)
+        if "".join(node.text or "" for node in item.iter(f"{W}t")).strip()
+        == "PÁGINA HOME E SEÇÕES"
+    )
+    end = next(
+        index
+        for index, item in enumerate(children[start + 1 :], start + 1)
+        if "".join(node.text or "" for node in item.iter(f"{W}t")).strip()
+        == "PAINEL DE CONFIGURAÇÃO WORDPRESS"
+    )
+    region = children[start + 1 : end]
+    assert len(region) == len(MASTER_BLOCK_HEADINGS) * 2
+    for offset, expected in enumerate(MASTER_BLOCK_HEADINGS):
+        heading, image = region[offset * 2 : offset * 2 + 2]
+        assert (
+            "".join(node.text or "" for node in heading.iter(f"{W}t")).strip()
+            == expected
+        )
+        assert heading.find(f"{W}pPr/{W}keepNext").get(f"{W}val") == "true"
+        assert heading.find(f"{W}pPr/{W}spacing").get(f"{W}after") == "80"
+        assert image.find(f"{W}pPr/{W}spacing").get(f"{W}before") == "0"
+        assert image.find(f".//{W}drawing") is not None
+        style = heading.find(f"{W}pPr/{W}pStyle")
+        assert style is None or style.get(f"{W}val") not in {
+            "Heading1",
+            "Heading2",
+        }
+
+    cloned_heading, cloned_image = clone_block_stamp(
+        document, "SEÇÃO CLONADA", "rIdClone"
+    )
+    assert "".join(
+        node.text or "" for node in cloned_heading.iter(f"{W}t")
+    ) == "SEÇÃO CLONADA"
+    assert cloned_heading.find(f"{W}pPr/{W}keepNext") is not None
+    assert cloned_image.find(
+        ".//{http://schemas.openxmlformats.org/drawingml/2006/main}blip"
+    ).get(
+        "{http://schemas.openxmlformats.org/officeDocument/2006/relationships}embed"
+    ) == "rIdClone"
+    assert not list(cloned_heading.iter(f"{W}bookmarkStart"))
+    assert not list(cloned_image.iter(f"{W}bookmarkEnd"))
