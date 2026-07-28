@@ -12,7 +12,12 @@ from PIL import Image
 
 from .artifact_paths import engagement_artifact_key
 from .block_stamping import BlockImage, stamp_blocks
-from .capture import CaptureRun, capture_site, extract_site_text
+from .capture import (
+    CaptureRun,
+    capture_config_from_master,
+    capture_site,
+    extract_site_text,
+)
 from .control_sheet import Engagement
 from .docx_package import open_docx_package
 from .generate import (
@@ -65,7 +70,12 @@ def _assemble_staged_package(
         engagement.capture_origin,
         gated.declared_pages,
     )
-    captures = capture_site(pages, directory / "capturas")
+    capture_config = capture_config_from_master(master)
+    captures = capture_site(
+        pages,
+        directory / "capturas",
+        config=capture_config,
+    )
     captures_by_page = {
         capture.pagina: capture for capture in captures.captures
     }

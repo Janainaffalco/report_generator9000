@@ -38,6 +38,7 @@ NAMESPACES = {
     "w": WORD_NS,
     "wp": WORD_DRAWING_NS,
 }
+TWIP_TO_EMU = 635
 
 _NAMESPACE_PREFIXES = (
     ("mc", MARKUP_COMPATIBILITY_NS),
@@ -150,6 +151,39 @@ def serialize_xml(element: ElementTree.Element, original: bytes) -> bytes:
 
 def text_column_width_emu(document: ElementTree.Element) -> int:
     """Return the body text column width, in EMU, from the document's sectPr."""
+    return page_geometry_emu(document).text_width_emu
+
+
+@dataclass(frozen=True)
+class PageGeometry:
+    """The Master's page box expressed in Word's EMU drawing unit."""
+
+    page_width_emu: int
+    page_height_emu: int
+    left_margin_emu: int
+    right_margin_emu: int
+    top_margin_emu: int
+    bottom_margin_emu: int
+
+    @property
+    def text_width_emu(self) -> int:
+        return (
+            self.page_width_emu
+            - self.left_margin_emu
+            - self.right_margin_emu
+        )
+
+    @property
+    def usable_height_emu(self) -> int:
+        return (
+            self.page_height_emu
+            - self.top_margin_emu
+            - self.bottom_margin_emu
+        )
+
+
+def page_geometry_emu(document: ElementTree.Element) -> PageGeometry:
+    """Read the body section's page size and margins without assuming A4."""
     w = f"{{{WORD_NS}}}"
     section_properties = document.find(f"{w}body/{w}sectPr")
     if section_properties is None:
@@ -160,10 +194,158 @@ def text_column_width_emu(document: ElementTree.Element) -> int:
     margins = section_properties.find(f"{w}pgMar")
     if page_size is None or margins is None:
         raise ValueError("sectPr lacks pgSz or pgMar")
-    page_width = int(page_size.get(f"{w}w"))
-    left_margin = int(margins.get(f"{w}left"))
-    right_margin = int(margins.get(f"{w}right"))
-    return (page_width - left_margin - right_margin) * 635
+    required = {
+        "page width": page_size.get(f"{w}w"),
+        "page height": page_size.get(f"{w}h"),
+        "left margin": margins.get(f"{w}left"),
+        "right margin": margins.get(f"{w}right"),
+        "top margin": margins.get(f"{w}top"),
+        "bottom margin": margins.get(f"{w}bottom"),
+    }
+    if any(value is None for value in required.values()):
+        missing = ", ".join(
+            label for label, value in required.items() if value is None
+        )
+        raise ValueError(f"sectPr lacks {missing}")
+    values = {label: int(value) for label, value in required.items()}
+    geometry = PageGeometry(
+        page_width_emu=values["page width"] * TWIP_TO_EMU,
+        page_height_emu=values["page height"] * TWIP_TO_EMU,
+        left_margin_emu=values["left margin"] * TWIP_TO_EMU,
+        right_margin_emu=values["right margin"] * TWIP_TO_EMU,
+        top_margin_emu=values["top margin"] * TWIP_TO_EMU,
+        bottom_margin_emu=values["bottom margin"] * TWIP_TO_EMU,
+    )
+    if geometry.text_width_emu <= 0 or geometry.usable_height_emu <= 0:
+        raise ValueError("sectPr page margins leave no usable page area")
+    return geometry
+
+
+def block_embedding_box_emu(
+    document: ElementTree.Element,
+    styles: ElementTree.Element | None = None,
+) -> tuple[int, int]:
+    """Return the Block Slot width and one-page image-height cap."""
+    w = f"{{{WORD_NS}}}"
+    wp = f"{{{WORD_DRAWING_NS}}}"
+    body = document.find(f"{w}body")
+    if body is None:
+        raise ValueError("document has no body")
+    children = list(body)
+    heading_index = next(
+        (
+            index
+            for index, paragraph in enumerate(children)
+            if paragraph.find(
+                f"{w}bookmarkStart[@{w}name='MASTER_BLOCK_STAMP']"
+            )
+            is not None
+        ),
+        None,
+    )
+    if heading_index is None or heading_index + 1 >= len(children):
+        raise ValueError("MASTER_BLOCK_STAMP is incomplete")
+    heading = children[heading_index]
+    image_paragraph = children[heading_index + 1]
+    extent = image_paragraph.find(f".//{wp}extent")
+    if extent is None or extent.get("cx") is None:
+        raise ValueError("MASTER_BLOCK_STAMP has no image extent")
+
+    direct_spacing = heading.find(f"{w}pPr/{w}spacing")
+    style_properties: list[ElementTree.Element] = []
+    if styles is not None:
+        styles_by_id = {
+            item.get(f"{w}styleId"): item
+            for item in styles.findall(f"{w}style")
+        }
+        style_id_node = heading.find(f"{w}pPr/{w}pStyle")
+        style_id = (
+            style_id_node.get(f"{w}val")
+            if style_id_node is not None
+            else None
+        )
+        visited: set[str] = set()
+        while style_id and style_id not in visited:
+            visited.add(style_id)
+            style = styles_by_id.get(style_id)
+            if style is None:
+                break
+            style_properties.append(style)
+            based_on = style.find(f"{w}basedOn")
+            style_id = (
+                based_on.get(f"{w}val")
+                if based_on is not None
+                else None
+            )
+
+    def inherited_attribute(element_name: str, attribute: str) -> int:
+        if direct_spacing is not None:
+            value = direct_spacing.get(f"{w}{attribute}")
+            if value is not None:
+                return int(value)
+        for style in style_properties:
+            element = style.find(f"{w}pPr/{w}{element_name}")
+            if element is not None:
+                value = element.get(f"{w}{attribute}")
+                if value is not None:
+                    return int(value)
+        return 0
+
+    before = inherited_attribute("spacing", "before")
+    after = inherited_attribute("spacing", "after")
+    explicit_line = inherited_attribute("spacing", "line")
+    inherited_font_size = next(
+        (
+            int(size)
+            for style in style_properties
+            for size_node in style.findall(f"{w}rPr/{w}sz")
+            if (size := size_node.get(f"{w}val")) is not None
+        ),
+        None,
+    )
+    default_font_sizes = (
+        [
+            int(size)
+            for size_node in styles.findall(
+                f"{w}docDefaults/{w}rPrDefault/{w}rPr/{w}sz"
+            )
+            if (size := size_node.get(f"{w}val")) is not None
+        ]
+        if styles is not None
+        else []
+    )
+    style_font_size = (
+        inherited_font_size
+        if inherited_font_size is not None
+        else max(default_font_sizes or [24])
+    )
+    run_font_sizes = []
+    for run in heading.iter(f"{w}r"):
+        size_node = run.find(f"{w}rPr/{w}sz")
+        size = (
+            size_node.get(f"{w}val")
+            if size_node is not None
+            else None
+        )
+        run_font_sizes.append(
+            int(size) if size is not None else style_font_size
+        )
+    effective_font_size = max(
+        run_font_sizes or [style_font_size]
+    )
+    line_height_twips = max(
+        explicit_line,
+        effective_font_size * 10,
+    )
+    heading_height_emu = (
+        before + line_height_twips + after
+    ) * TWIP_TO_EMU
+    max_height_emu = (
+        page_geometry_emu(document).usable_height_emu - heading_height_emu
+    )
+    if max_height_emu <= 0:
+        raise ValueError("Block heading leaves no usable image height")
+    return int(extent.get("cx")), max_height_emu
 
 
 @dataclass(frozen=True)

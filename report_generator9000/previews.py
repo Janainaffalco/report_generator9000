@@ -8,10 +8,11 @@ from collections import defaultdict
 from pathlib import Path
 from typing import Protocol
 from zipfile import ZipFile
+from xml.etree import ElementTree
 
 from PIL import Image, ImageDraw, ImageFont, ImageOps
 
-from .docx_package import open_docx_package
+from .docx_package import Slot, open_docx_package, page_geometry_emu
 
 
 _MANAGED_PREVIEW = re.compile(r"^preview-\d{3}\.png$")
@@ -71,6 +72,41 @@ class DocumentPreviewRenderer:
             item.part_name: (item.width, item.height)
             for item in package.media
         }
+        with ZipFile(document) as archive:
+            geometry = page_geometry_emu(
+                ElementTree.fromstring(archive.read("word/document.xml"))
+            )
+        emu_to_preview_pixels = (
+            self.page_size[0] / geometry.page_width_emu
+        )
+
+        def rendered_slot_size(slot: Slot) -> tuple[int, int]:
+            if slot.media_part is None:
+                raise ValueError("preview image Slot has no media part")
+            width, height = media_sizes[slot.media_part]
+            width_emu = slot.width_emu
+            height_emu = slot.height_emu
+            rendered_width = max(
+                1,
+                (
+                    round(width_emu * emu_to_preview_pixels)
+                    if width_emu is not None
+                    else min(
+                        self.page_size[0] - 2 * self.margin,
+                        width,
+                    )
+                ),
+            )
+            rendered_height = max(
+                1,
+                (
+                    round(height_emu * emu_to_preview_pixels)
+                    if height_emu is not None
+                    else round(rendered_width * height / width)
+                ),
+            )
+            return rendered_width, rendered_height
+
         page = Image.new("RGB", self.page_size, "white")
         draw = ImageDraw.Draw(page)
         body_font = self._font(24)
@@ -119,13 +155,24 @@ class DocumentPreviewRenderer:
                 finish_page()
 
         with ZipFile(document) as archive:
-            for paragraph in body:
+            for position, paragraph in enumerate(body):
                 text = paragraph.text.strip()
                 if text:
                     font = heading_font if paragraph.keep_next else body_font
                     lines = textwrap.wrap(text, width=76) or [text]
                     line_height = 39 if paragraph.keep_next else 34
-                    ensure_space(len(lines) * line_height + 18)
+                    text_height = len(lines) * line_height + 18
+                    bound_image_height = 0
+                    if paragraph.keep_next and position + 1 < len(body):
+                        bound_image_height = sum(
+                            rendered_slot_size(slot)[1] + 24
+                            for slot in slots_by_paragraph.get(
+                                body[position + 1].index,
+                                (),
+                            )
+                            if slot.media_part in media_sizes
+                        )
+                    ensure_space(text_height + bound_image_height)
                     for line in lines:
                         draw.text(
                             (self.margin, y),
@@ -138,31 +185,16 @@ class DocumentPreviewRenderer:
                 for slot in slots_by_paragraph.get(paragraph.index, ()):
                     if slot.media_part not in media_sizes:
                         continue
-                    width, height = media_sizes[slot.media_part]
-                    available_width = self.page_size[0] - 2 * self.margin
-                    rendered_width = min(available_width, width)
-                    rendered_height = max(
-                        1,
-                        round(rendered_width * height / width),
+                    rendered_width, rendered_height = rendered_slot_size(
+                        slot
                     )
-                    max_height = (
-                        self.page_size[1]
-                        - self.footer_height
-                        - 2 * self.margin
-                    )
-                    if rendered_height > max_height:
-                        rendered_height = max_height
-                        rendered_width = max(
-                            1,
-                            round(rendered_height * width / height),
-                        )
                     ensure_space(rendered_height + 24)
                     with archive.open(slot.media_part) as source:
                         with Image.open(source) as embedded:
                             visual = ImageOps.exif_transpose(
                                 embedded
                             ).convert("RGB")
-                            visual.thumbnail(
+                            visual = visual.resize(
                                 (rendered_width, rendered_height),
                                 Image.Resampling.LANCZOS,
                             )

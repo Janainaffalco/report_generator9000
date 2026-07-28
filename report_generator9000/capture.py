@@ -5,18 +5,21 @@ from __future__ import annotations
 import hashlib
 import re
 import unicodedata
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import TYPE_CHECKING
 from urllib.parse import urlsplit
+from zipfile import BadZipFile, ZipFile
+from xml.etree import ElementTree
 
-from PIL import Image, ImageOps
+from PIL import Image, ImageDraw, ImageFont, ImageOps
 from playwright.sync_api import (
     Error as PlaywrightError,
     Page,
     sync_playwright,
 )
 
+from .docx_package import block_embedding_box_emu
 from .lista_paginas import ELEMENTO_TRANSVERSAL, Pagina
 from .run_context import Artifact, Pendencia
 
@@ -47,6 +50,7 @@ CONSENT_BANNER_SELECTORS = (
 )
 _SAFE_STEM = re.compile(r"[^a-z0-9]+")
 _MANAGED_CAPTURE = re.compile(r"^\d{2}-[a-z0-9-]+\.png$")
+PARTIAL_CAPTURE_BADGE_TEXT = "captura parcial da página"
 
 
 class CaptureError(ValueError):
@@ -64,6 +68,8 @@ class CaptureConfig:
     network_idle_timeout_ms: int = 10_000
     lazy_settle_ms: int = 500
     embedding_max_width: int = 1600
+    embedding_slot_width_emu: int | None = None
+    embedding_max_height_emu: int | None = None
     minimum_color_count: int = 128
 
     def __post_init__(self) -> None:
@@ -80,6 +86,27 @@ class CaptureConfig:
             raise ValueError("CaptureConfig values must be positive")
         if self.lazy_settle_ms < 0:
             raise ValueError("lazy_settle_ms cannot be negative")
+        height_box = (
+            self.embedding_slot_width_emu,
+            self.embedding_max_height_emu,
+        )
+        if (height_box[0] is None) != (height_box[1] is None):
+            raise ValueError(
+                "embedding Slot width and height cap must be supplied together"
+            )
+        if any(value is not None and value <= 0 for value in height_box):
+            raise ValueError("embedding Slot dimensions must be positive")
+
+
+@dataclass(frozen=True)
+class EmbeddingDerivative:
+    """Observable result of building a Word embedding derivative."""
+
+    width: int
+    height: int
+    cropped: bool
+    cropped_from_width: int | None = None
+    cropped_from_height: int | None = None
 
 
 @dataclass(frozen=True)
@@ -95,6 +122,9 @@ class Capture:
     raw_height: int
     embedding_width: int
     embedding_height: int
+    cropped: bool
+    cropped_from_width: int | None
+    cropped_from_height: int | None
     color_count: int
     consent_warning: bool = False
 
@@ -200,18 +230,129 @@ def fitted_emu_dimensions(
     )
 
 
-def _embedding_image(
-    raw_path: Path, embedding_path: Path, max_width: int
-) -> tuple[int, int]:
+def _burn_partial_capture_badge(image: Image.Image) -> None:
+    draw = ImageDraw.Draw(image)
+    font_path = Path(__file__).parent / "assets" / "Montserrat-Regular.ttf"
+    font_size = max(8, round(image.width * 0.016))
+    margin = max(3, round(image.width * 0.008))
+    padding_x = max(4, round(image.width * 0.006))
+    padding_y = max(2, round(image.width * 0.003))
+    while True:
+        font = ImageFont.truetype(str(font_path), font_size)
+        text_box = draw.textbbox((0, 0), PARTIAL_CAPTURE_BADGE_TEXT, font=font)
+        text_width = text_box[2] - text_box[0]
+        text_height = text_box[3] - text_box[1]
+        if text_width + 2 * padding_x <= image.width - 2 * margin:
+            break
+        if font_size == 8:
+            break
+        font_size -= 1
+    rectangle_width = min(image.width - margin, text_width + 2 * padding_x)
+    rectangle_height = min(
+        image.height - margin,
+        text_height + 2 * padding_y,
+    )
+    left = margin
+    top = max(0, image.height - margin - rectangle_height)
+    right = left + rectangle_width
+    bottom = image.height - margin
+    draw.rectangle(
+        (left, top, right, bottom),
+        fill=(28, 28, 28),
+        outline="white",
+        width=1,
+    )
+    draw.text(
+        (left + padding_x, top + padding_y - text_box[1]),
+        PARTIAL_CAPTURE_BADGE_TEXT,
+        fill="white",
+        font=font,
+    )
+
+
+def build_embedding_derivative(
+    raw_path: str | Path,
+    embedding_path: str | Path,
+    *,
+    max_width: int,
+    slot_width_emu: int | None = None,
+    max_height_emu: int | None = None,
+) -> EmbeddingDerivative:
+    """Downscale, top-crop if required, and badge the embedding copy."""
+    raw_path = Path(raw_path)
+    embedding_path = Path(embedding_path)
+    if max_width <= 0:
+        raise ValueError("max_width must be positive")
+    if (slot_width_emu is None) != (max_height_emu is None):
+        raise ValueError("Slot width and height cap must be supplied together")
     with Image.open(raw_path) as source:
+        raw_width, raw_height = source.size
         image = ImageOps.exif_transpose(source).convert("RGB")
         if image.width > max_width:
             height = max(1, round(image.height * max_width / image.width))
             image = image.resize(
                 (max_width, height), Image.Resampling.LANCZOS
             )
+        cropped = False
+        if slot_width_emu is not None and max_height_emu is not None:
+            max_pixel_height = max(
+                1,
+                int(image.width * max_height_emu / slot_width_emu),
+            )
+            if image.height > max_pixel_height:
+                image = image.crop((0, 0, image.width, max_pixel_height))
+                cropped = True
+                _burn_partial_capture_badge(image)
+        embedding_path.parent.mkdir(parents=True, exist_ok=True)
         image.save(embedding_path, format="PNG", optimize=True)
-        return image.size
+        return EmbeddingDerivative(
+            width=image.width,
+            height=image.height,
+            cropped=cropped,
+            cropped_from_width=raw_width if cropped else None,
+            cropped_from_height=raw_height if cropped else None,
+        )
+
+
+def capture_config_from_master(
+    master: str | Path,
+    base: CaptureConfig | None = None,
+) -> CaptureConfig:
+    """Bind Capture height to the Master's real Block and page geometry."""
+    master_path = Path(master)
+    try:
+        with ZipFile(master_path) as archive:
+            document = ElementTree.fromstring(
+                archive.read("word/document.xml")
+            )
+            styles = (
+                ElementTree.fromstring(archive.read("word/styles.xml"))
+                if "word/styles.xml" in archive.namelist()
+                else None
+            )
+    except (
+        BadZipFile,
+        KeyError,
+        OSError,
+        ElementTree.ParseError,
+    ) as error:
+        raise CaptureError(
+            f"{master_path}: cannot read Capture geometry: {error}"
+        ) from error
+    try:
+        slot_width_emu, max_height_emu = block_embedding_box_emu(
+            document,
+            styles,
+        )
+    except ValueError as error:
+        raise CaptureError(
+            f"{master_path}: cannot derive Capture geometry: {error}"
+        ) from error
+    return replace(
+        CaptureConfig() if base is None else base,
+        embedding_slot_width_emu=slot_width_emu,
+        embedding_max_height_emu=max_height_emu,
+    )
 
 
 def _first_visible(page: Page, selectors: tuple[str, ...]) -> str | None:
@@ -391,10 +532,12 @@ def capture_site(
                             continue
                         with Image.open(raw_path) as raw:
                             raw_width, raw_height = raw.size
-                        embedded_width, embedded_height = _embedding_image(
+                        derivative = build_embedding_derivative(
                             raw_path,
                             embedding_path,
-                            settings.embedding_max_width,
+                            max_width=settings.embedding_max_width,
+                            slot_width_emu=settings.embedding_slot_width_emu,
+                            max_height_emu=settings.embedding_max_height_emu,
                         )
                         captures.append(
                             Capture(
@@ -405,8 +548,15 @@ def capture_site(
                                 embedding_digest=_digest(embedding_path),
                                 raw_width=raw_width,
                                 raw_height=raw_height,
-                                embedding_width=embedded_width,
-                                embedding_height=embedded_height,
+                                embedding_width=derivative.width,
+                                embedding_height=derivative.height,
+                                cropped=derivative.cropped,
+                                cropped_from_width=(
+                                    derivative.cropped_from_width
+                                ),
+                                cropped_from_height=(
+                                    derivative.cropped_from_height
+                                ),
                                 color_count=colors,
                                 consent_warning=warning,
                             )
@@ -524,6 +674,10 @@ __all__ = [
     "CaptureError",
     "CaptureFailure",
     "CaptureRun",
+    "EmbeddingDerivative",
+    "PARTIAL_CAPTURE_BADGE_TEXT",
+    "build_embedding_derivative",
+    "capture_config_from_master",
     "capture_site",
     "extract_site_text",
     "fitted_emu_dimensions",

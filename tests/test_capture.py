@@ -1,16 +1,22 @@
 from __future__ import annotations
 
+import hashlib
 from collections.abc import Iterator
 from contextlib import contextmanager
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from threading import Thread
+from zipfile import ZipFile
+from xml.etree import ElementTree
 
 import pytest
-from PIL import Image
+from PIL import Image, ImageDraw
 
 from report_generator9000.capture import (
+    PARTIAL_CAPTURE_BADGE_TEXT,
     CaptureConfig,
+    build_embedding_derivative,
+    capture_config_from_master,
     capture_site,
     fitted_emu_dimensions,
 )
@@ -20,7 +26,9 @@ from report_generator9000.lista_paginas import (
     PAGINA_PRINCIPAL,
     Pagina,
 )
+from report_generator9000.master import build_master
 from tests.test_lista_paginas import serve_fixture_site
+from tests.test_master_build import approved_source
 
 
 def _pagina(
@@ -111,6 +119,9 @@ def test_real_browser_renders_lazy_content_declines_and_downscales(
         abs=0.002,
     )
     assert capture.raw_digest != capture.embedding_digest
+    assert capture.cropped is False
+    assert capture.cropped_from_width is None
+    assert capture.cropped_from_height is None
     assert capture.artifact.origin == "capture"
     assert capture.artifact.source == str(capture.embedding_path.resolve())
 
@@ -202,6 +213,197 @@ def test_word_slot_height_is_derived_from_capture_ratio() -> None:
         5_000_000,
         2_812_500,
     )
+
+
+def test_embedding_derivative_crops_only_the_bottom_and_preserves_raw(
+    tmp_path: Path,
+) -> None:
+    raw_path = tmp_path / "raw.png"
+    embedding_path = tmp_path / "embedding.png"
+    raw = Image.new("RGB", (400, 1200), "red")
+    draw = ImageDraw.Draw(raw)
+    draw.rectangle((0, 400, 399, 799), fill="green")
+    draw.rectangle((0, 800, 399, 1199), fill="blue")
+    raw.save(raw_path)
+    raw_digest = hashlib.sha256(raw_path.read_bytes()).hexdigest()
+
+    derivative = build_embedding_derivative(
+        raw_path,
+        embedding_path,
+        max_width=200,
+        slot_width_emu=4_000_000,
+        max_height_emu=4_000_000,
+    )
+
+    assert derivative.cropped is True
+    assert derivative.cropped_from_width == 400
+    assert derivative.cropped_from_height == 1200
+    assert derivative.width == 200
+    assert derivative.height == 200
+    assert Image.open(raw_path).size == (400, 1200)
+    assert hashlib.sha256(raw_path.read_bytes()).hexdigest() == raw_digest
+    with Image.open(embedding_path) as embedded:
+        assert embedded.getpixel((190, 10)) == (255, 0, 0)
+        badge_region = embedded.crop((0, 140, 190, 200))
+        colors = set(badge_region.get_flattened_data())
+    assert any(max(color) < 80 for color in colors)
+    assert any(min(color) > 220 for color in colors)
+    assert PARTIAL_CAPTURE_BADGE_TEXT == "captura parcial da página"
+
+
+def test_short_embedding_keeps_natural_ratio_without_badge(
+    tmp_path: Path,
+) -> None:
+    raw_path = tmp_path / "raw.png"
+    embedding_path = tmp_path / "embedding.png"
+    Image.new("RGB", (400, 100), "white").save(raw_path)
+
+    derivative = build_embedding_derivative(
+        raw_path,
+        embedding_path,
+        max_width=200,
+        slot_width_emu=4_000_000,
+        max_height_emu=4_000_000,
+    )
+
+    assert derivative.cropped is False
+    assert derivative.cropped_from_width is None
+    assert derivative.cropped_from_height is None
+    assert (derivative.width, derivative.height) == (200, 50)
+    with Image.open(embedding_path) as embedded:
+        assert set(embedded.get_flattened_data()) == {(255, 255, 255)}
+
+
+@pytest.mark.parametrize("raw_height", [10, 100, 400, 2_000])
+def test_embedding_height_never_exceeds_configured_word_cap(
+    tmp_path: Path,
+    raw_height: int,
+) -> None:
+    raw_path = tmp_path / f"raw-{raw_height}.png"
+    embedding_path = tmp_path / f"embedding-{raw_height}.png"
+    Image.new("RGB", (200, raw_height), "purple").save(raw_path)
+
+    derivative = build_embedding_derivative(
+        raw_path,
+        embedding_path,
+        max_width=100,
+        slot_width_emu=5_000_000,
+        max_height_emu=4_000_000,
+    )
+
+    _width, embedded_height_emu = fitted_emu_dimensions(
+        5_000_000,
+        derivative.width,
+        derivative.height,
+    )
+    assert embedded_height_emu <= 4_000_000
+
+
+def test_capture_height_cap_comes_from_master_page_geometry(
+    tmp_path: Path,
+) -> None:
+    master = build_master(
+        approved_source(tmp_path / "approved.docx"),
+        tmp_path / "master",
+    ).master
+
+    config = capture_config_from_master(
+        master,
+        CaptureConfig(embedding_max_width=600),
+    )
+
+    assert config.embedding_slot_width_emu == 5_400_000
+    assert config.embedding_max_height_emu == 12876 * 635
+
+    with ZipFile(master) as archive:
+        parts = {
+            item.filename: archive.read(item.filename)
+            for item in archive.infolist()
+        }
+    parts["word/document.xml"] = parts["word/document.xml"].replace(
+        b'w:top="1701"',
+        b'w:top="2500"',
+    )
+    changed_master = tmp_path / "changed-margins.docx"
+    with ZipFile(changed_master, "w") as archive:
+        for name, content in parts.items():
+            archive.writestr(name, content)
+
+    changed = capture_config_from_master(changed_master)
+    assert changed.embedding_max_height_emu == (12876 - 799) * 635
+
+    with ZipFile(master) as archive:
+        styled_parts = {
+            item.filename: archive.read(item.filename)
+            for item in archive.infolist()
+        }
+    word_namespace = (
+        "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
+    )
+    w = f"{{{word_namespace}}}"
+    document = ElementTree.fromstring(styled_parts["word/document.xml"])
+    heading = next(
+        paragraph
+        for paragraph in document.iter(f"{w}p")
+        if paragraph.find(
+            f"{w}bookmarkStart[@{w}name='MASTER_BLOCK_STAMP']"
+        )
+        is not None
+    )
+    properties = heading.find(f"{w}pPr")
+    assert properties is not None
+    properties.insert(
+        0,
+        ElementTree.Element(f"{w}pStyle", {f"{w}val": "Normal"}),
+    )
+    styles = ElementTree.fromstring(styled_parts["word/styles.xml"])
+    normal = ElementTree.SubElement(
+        styles,
+        f"{w}style",
+        {f"{w}type": "paragraph", f"{w}styleId": "Normal"},
+    )
+    run_properties = ElementTree.SubElement(normal, f"{w}rPr")
+    ElementTree.SubElement(
+        run_properties,
+        f"{w}sz",
+        {f"{w}val": "40"},
+    )
+    styled_parts["word/document.xml"] = ElementTree.tostring(document)
+    styled_parts["word/styles.xml"] = ElementTree.tostring(styles)
+    styled_master = tmp_path / "styled-heading.docx"
+    with ZipFile(styled_master, "w") as archive:
+        for name, content in styled_parts.items():
+            archive.writestr(name, content)
+
+    styled = capture_config_from_master(styled_master)
+    assert styled.embedding_max_height_emu == (12876 - 160) * 635
+
+    child = ElementTree.SubElement(
+        styles,
+        f"{w}style",
+        {f"{w}type": "paragraph", f"{w}styleId": "CaptureHeading"},
+    )
+    ElementTree.SubElement(
+        child,
+        f"{w}basedOn",
+        {f"{w}val": "Normal"},
+    )
+    child_run_properties = ElementTree.SubElement(child, f"{w}rPr")
+    ElementTree.SubElement(
+        child_run_properties,
+        f"{w}sz",
+        {f"{w}val": "24"},
+    )
+    properties.find(f"{w}pStyle").set(f"{w}val", "CaptureHeading")
+    styled_parts["word/document.xml"] = ElementTree.tostring(document)
+    styled_parts["word/styles.xml"] = ElementTree.tostring(styles)
+    inherited_master = tmp_path / "inherited-heading-style.docx"
+    with ZipFile(inherited_master, "w") as archive:
+        for name, content in styled_parts.items():
+            archive.writestr(name, content)
+
+    inherited = capture_config_from_master(inherited_master)
+    assert inherited.embedding_max_height_emu == 12876 * 635
 
 
 def test_capture_url_cannot_carry_credentials(tmp_path: Path) -> None:
