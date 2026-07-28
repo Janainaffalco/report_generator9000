@@ -660,9 +660,11 @@ def _format_diff(
     lines.extend(
         (
             "",
-            "## Escalations retained without change",
+            "## Sign-off rulings",
             "",
-            "- `2.10 Indicadores14` remains in the summary without a matching body section.",
+            "- The orphaned hand-typed `2.10 Indicadores14` entry was deliberately "
+            "removed with the literal summary by owner decision: it has no body "
+            "section. The live Heading 2 range ends at `2.10 ORIENTAÇÕES AO CLIENTE`.",
             "- The Ficha Técnica passage beginning `A portal web` remains verbatim; "
             "its grammar may be normative source text.",
             "",

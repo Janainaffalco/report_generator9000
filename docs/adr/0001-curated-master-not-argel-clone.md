@@ -40,7 +40,9 @@ cloning a filled instance:
 
 The cost is that the Master is not byte-identical to the approved artifact: it also
 carries six typo corrections and a repaired login URL. That diff is generated as
-`MASTER-DIFF.md` for a single human review. Two items are deliberately escalated rather
-than fixed — the orphaned `2.10 Indicadores`, and a passage whose agreement errors appear
-to quote the Ficha Técnica SEBRAETEC 4.0 verbatim, where silently correcting would
-misquote a normative source.
+`MASTER-DIFF.md` for a single human review. The owner ruled that the orphaned hand-typed
+`2.10 Indicadores` entry is removed with the literal summary because it has no body
+section; the live Heading 2 range therefore ends at `2.10 ORIENTAÇÕES AO CLIENTE`.
+The passage whose agreement errors appear to quote the Ficha Técnica SEBRAETEC 4.0
+verbatim remains escalated, because silently correcting it would misquote a normative
+source.

@@ -216,6 +216,27 @@ def check_master_build(
                     repr(headings),
                 )
             )
+        if tuple(headings) == CANONICAL_HEADINGS:
+            stage_two_start = headings.index(
+                (1, "DESENVOLVIMENTO DE WEBSITE")
+            )
+            stage_two_end = headings.index(
+                (1, "DECLARAÇÃO DE RECEBIMENTO E FINALIZAÇÃO")
+            )
+            stage_two = headings[stage_two_start + 1 : stage_two_end]
+            if len(stage_two) != 10 or stage_two[-1] != (
+                2,
+                "ORIENTAÇÕES AO CLIENTE",
+            ):
+                violations.append(
+                    violation(
+                        GATE,
+                        "invalid-stage-two-numbering-range",
+                        "word/document.xml",
+                        "expected 2.1 through 2.10 ending "
+                        "ORIENTAÇÕES AO CLIENTE",
+                    )
+                )
 
         settings = ElementTree.fromstring(part_text["word/settings.xml"] or "")
         update = settings.find(f"{w}updateFields")

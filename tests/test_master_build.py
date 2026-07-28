@@ -47,6 +47,23 @@ def heading_sequence(document: ElementTree.Element) -> list[tuple[str, str]]:
     return sequence
 
 
+def numbered_headings(
+    headings: list[tuple[str, str]],
+) -> list[tuple[str, str]]:
+    section = 0
+    subsection = 0
+    numbered = []
+    for style, title in headings:
+        if style == "Heading1":
+            section += 1
+            subsection = 0
+            numbered.append((str(section), title))
+        else:
+            subsection += 1
+            numbered.append((f"{section}.{subsection}", title))
+    return numbered
+
+
 def approved_source(path: Path) -> Path:
     return build_docx(
         path,
@@ -145,7 +162,9 @@ def test_master_build_is_reproducible_and_auditable(tmp_path: Path) -> None:
     assert all("ondviajar" not in relation.target for relation in package.relationships)
     assert "word/media/image2.png" in first.diff.read_text(encoding="utf-8")
     assert "rId2: Disponibilizamos links para download." in first.diff.read_text(encoding="utf-8")
-    assert "2.10 Indicadores14" in first.diff.read_text(encoding="utf-8")
+    audit = first.diff.read_text(encoding="utf-8")
+    assert "orphaned hand-typed `2.10 Indicadores14` entry was deliberately" in audit
+    assert "2.10 ORIENTAÇÕES AO CLIENTE" in audit
     assert "A portal web" in first.diff.read_text(encoding="utf-8")
 
 
@@ -192,6 +211,9 @@ def test_master_contains_a_two_level_toc_embedded_font_and_named_headings(
     }
     assert headings == {"Heading1": "Título 1", "Heading2": "Título 2"}
     assert heading_sequence(document) == EXPECTED_HEADINGS
+    numbers = numbered_headings(heading_sequence(document))
+    assert ("2.10", "ORIENTAÇÕES AO CLIENTE") in numbers
+    assert not any(number == "2.11" for number, _title in numbers)
     for level in (0, 1):
         style = next(
             item
