@@ -9,6 +9,7 @@ from datetime import datetime
 from pathlib import Path
 from urllib.parse import urlparse
 
+from .artifact_paths import engagement_artifact_key
 from .control_sheet import Engagement
 
 
@@ -43,7 +44,6 @@ _VALUE_KEYS = frozenset(
     | {slot for slot, _tokens in GATED_VALUE_SLOTS}
 )
 _IGNORED_FILES = frozenset({".gitkeep", "README.md"})
-_UNSAFE_FILENAME = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
 _DOMAIN = re.compile(
     r"(?=.{1,253}\Z)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+"
     r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?",
@@ -73,18 +73,11 @@ class GatedInputError(ValueError):
     """A present Gated Drop Folder is unsafe or malformed."""
 
 
-def _path_component(value: str) -> str:
-    component = " ".join(_UNSAFE_FILENAME.sub("-", value).split()).rstrip(". ")
-    if not component:
-        raise GatedInputError("Engagement has no usable Gated Drop Folder key")
-    return component
-
-
 def gated_drop_folder(
     gated_drop_root: str | Path, engagement: Engagement
 ) -> Path:
     """Return the only folder this Engagement is allowed to read."""
-    return Path(gated_drop_root) / _path_component(engagement.output_key)
+    return Path(gated_drop_root) / engagement_artifact_key(engagement)
 
 
 def _required_text(document: dict[str, object], key: str) -> str:

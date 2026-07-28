@@ -4,16 +4,27 @@ import json
 from pathlib import Path
 from zipfile import ZipFile
 
+import pytest
+
+from fixtures.check_cli import run_check
 from fixtures.docx_builder import (
     RelationshipSpec,
     build_docx,
     paragraph,
     png_bytes,
 )
+from report_generator9000.artifact_paths import engagement_artifact_key
+from report_generator9000.control_sheet import (
+    Engagement,
+    read_control_sheet_for_pasta,
+)
 from report_generator9000.docx_package import open_docx_package
 from report_generator9000.gates.pendencias import check_pendencias_agreement
 from report_generator9000.gates.provenance import check_media_provenance
 from report_generator9000.gates.scope import check_engagement_scope
+from report_generator9000.gated_inputs import gated_drop_folder
+from report_generator9000.generate import report_output_path
+from report_generator9000.master import build_master
 from report_generator9000.run_context import load_run_context
 from test_generate_report import run_generator
 
@@ -81,6 +92,22 @@ def generated_document(completed_output: str) -> Path:
             for line in completed_output.splitlines()
             if line.startswith("DOCX\t")
         )
+    )
+
+
+def test_output_and_gated_folder_share_the_canonical_engagement_key() -> None:
+    engagement = next(
+        outcome
+        for outcome in read_control_sheet_for_pasta(
+            CONTROL_SHEET, "50-2026"
+        )
+        if isinstance(outcome, Engagement)
+    )
+
+    assert engagement_artifact_key(engagement) == ENGAGEMENT_FOLDER
+    assert (
+        report_output_path("outputs", engagement).parent.name
+        == gated_drop_folder("gated", engagement).name
     )
 
 
@@ -236,3 +263,30 @@ def test_wrong_engagement_gated_folder_fails_without_output(
     assert completed.returncode != 0
     assert "belongs to Pasta '63-2026'" in completed.stderr
     assert not list(output_root.rglob("*.docx"))
+
+
+def test_real_current_master_passes_media_and_link_provenance_gates(
+    tmp_path: Path,
+) -> None:
+    sources = list(Path(__file__).resolve().parent.parent.glob("*ARGEL*.docx"))
+    if not sources:
+        pytest.skip("approved source binary is intentionally not tracked")
+    master = build_master(sources[0], tmp_path / "master").master
+    generated = run_generator(
+        master,
+        tmp_path / "reports",
+        "50-2026",
+        control_sheet=CONTROL_SHEET,
+        gated_drop_root=GATED_FIXTURES / "complete",
+    )
+    assert generated.returncode == 0, generated.stderr
+    output = generated_document(generated.stdout)
+
+    checked = run_check(output, output.with_name("run.json"))
+
+    assert checked.returncode == 1
+    assert "GATE media-provenance: PASS" in checked.stdout
+    assert "GATE link-provenance: PASS" in checked.stdout
+    assert "GATE pendencias-agreement: PASS" in checked.stdout
+    assert "GATE token-residue: FAIL" in checked.stdout
+    assert "{{SOBRE_A_EMPRESA}}" in checked.stdout

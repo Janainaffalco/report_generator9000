@@ -4,14 +4,15 @@ from __future__ import annotations
 
 import hashlib
 import json
-import re
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from xml.sax.saxutils import escape
 from zipfile import BadZipFile, ZipFile
 
+from .artifact_paths import engagement_artifact_key
 from .control_sheet import Engagement
 from .docx_package import open_docx_package
+from .gates.master import BOILERPLATE_MEDIA
 from .gated_inputs import (
     GATED_IMAGE_PARTS,
     GATED_VALUE_SLOTS,
@@ -28,14 +29,6 @@ SPREADSHEET_TOKENS = {
     "{{ESPECIALISTA}}": "especialista",
     "{{DATA_KICKOFF}}": "kick_off_br",
 }
-_UNSAFE_FILENAME = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
-_WINDOWS_RESERVED = frozenset(
-    {"CON", "PRN", "AUX", "NUL"}
-    | {f"COM{index}" for index in range(1, 10)}
-    | {f"LPT{index}" for index in range(1, 10)}
-)
-
-
 @dataclass(frozen=True)
 class GeneratedReport:
     """One report artifact produced for an Engagement."""
@@ -52,18 +45,9 @@ class ReportGenerationError(ValueError):
     """The Master cannot safely produce the requested report."""
 
 
-def _path_component(value: str) -> str:
-    component = " ".join(_UNSAFE_FILENAME.sub("-", value).split()).rstrip(". ")
-    if not component:
-        raise ReportGenerationError("output key contains no usable characters")
-    if component.split(".", 1)[0].upper() in _WINDOWS_RESERVED:
-        component = f"_{component}"
-    return component
-
-
 def report_output_path(output_root: str | Path, engagement: Engagement) -> Path:
     """Return the collision-safe path keyed by Pasta and Razao Social."""
-    key = _path_component(engagement.output_key)
+    key = engagement_artifact_key(engagement)
     return (
         Path(output_root)
         / key
@@ -108,9 +92,9 @@ def _write_sidecars(
         encoding="utf-8",
     )
     lines = [
-        "# Pend\u00eancias de Gated Inputs",
+        "# PEND\u00caNCIAS",
         "",
-        "Este registro cobre apenas insumos GATED.",
+        "Insumos ausentes, classificados por origem da Pend\u00eancia.",
         "",
     ]
     if context.pendencias:
@@ -126,7 +110,7 @@ def _write_sidecars(
             for item in context.pendencias
         )
     else:
-        lines.append("Nenhuma Pend\u00eancia GATED registrada.")
+        lines.append("Nenhuma Pend\u00eancia registrada.")
     pendencias_document.write_text(
         "\n".join(lines) + "\n", encoding="utf-8"
     )
@@ -189,6 +173,7 @@ def generate_report(
 
     parts = {item.filename: content for item, content in entries}
     artifacts: list[Artifact] = []
+    claimed_media_parts: set[str] = set()
     supplied_images = gated.images_by_part()
     for slot, _filename, part_name in GATED_IMAGE_PARTS:
         supplied = supplied_images.get(part_name)
@@ -198,6 +183,7 @@ def generate_report(
                     f"Master lacks Gated image Slot {slot!r} ({part_name})"
                 )
             continue
+        claimed_media_parts.add(part_name)
         if supplied is not None:
             _source_slot, source = supplied
             content = source.read_bytes()
@@ -259,15 +245,48 @@ def generate_report(
         for item, _content in entries:
             generated.writestr(item, parts[item.filename])
     try:
-        open_docx_package(output)
+        package = open_docx_package(output)
     except (OSError, ValueError) as error:
         output.unlink(missing_ok=True)
         raise ReportGenerationError(
             f"generated DOCX package is invalid: {error}"
         ) from error
+    for media in package.media:
+        if media.part_name in claimed_media_parts:
+            continue
+        if media.part_name in BOILERPLATE_MEDIA:
+            artifacts.append(
+                Artifact(
+                    digest=media.sha256,
+                    origin="boilerplate",
+                    label=media.part_name,
+                )
+            )
+            continue
+        artifacts.append(
+            Artifact(
+                digest=media.sha256,
+                origin="placeholder",
+                label=media.part_name,
+            )
+        )
+        pendencias.append(
+            Pendencia(
+                slot=f"capture:{media.part_name}",
+                classification="TOOL_BLOCKED",
+                reason="Capture ainda nao produzida nesta etapa",
+                evidence=media.sha256,
+            )
+        )
+    boilerplate_links = frozenset(
+        relationship.target
+        for relationship in package.relationships
+        if relationship.external
+    )
     context = RunContext(
         pasta=engagement.pasta,
         media=tuple(artifacts),
+        boilerplate_links=boilerplate_links,
         drop_folder=(
             None if gated.folder is None else str(gated.folder.resolve())
         ),
