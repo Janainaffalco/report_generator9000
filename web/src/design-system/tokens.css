@@ -1,0 +1,87 @@
+:root {
+  --primary: #e60023;
+  --on-primary: #ffffff;
+  --primary-pressed: #cc001f;
+  --ink: #000000;
+  --ink-soft: #211922;
+  --body: #33332e;
+  --charcoal: #262622;
+  --mute: #62625b;
+  --ash: #91918c;
+  --stone: #c8c8c1;
+  --hairline: #dadad3;
+  --hairline-soft: #e5e5e0;
+  --on-secondary: #000000;
+  --secondary-bg: #e5e5e0;
+  --secondary-pressed: #c8c8c1;
+  --canvas: #ffffff;
+  --surface-soft: #fbfbf9;
+  --surface-card: #f6f6f3;
+  --surface-elevated: #ffffff;
+  --on-dark: #ffffff;
+  --on-dark-mute: rgba(255, 255, 255, 0.7);
+  --surface-dark: #262622;
+  --focus-outer: #435ee5;
+  --focus-inner: #ffffff;
+  --success-deep: #103c25;
+  --success-pale: #c7f0da;
+  --error: #9e0a0a;
+  --error-deep: #cc001f;
+
+  --text-heading: var(--ink);
+  --text-body: var(--body);
+  --text-muted: var(--mute);
+  --text-link: var(--ink-soft);
+  --surface-page: var(--surface-soft);
+  --surface-card-default: var(--surface-card);
+  --surface-modal: var(--canvas);
+
+  --font-sans-token: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI",
+    sans-serif;
+  --font-display-token: "Manrope", "Inter", -apple-system, BlinkMacSystemFont,
+    "Segoe UI", sans-serif;
+
+  --display-lg-size: 44px;
+  --display-lg-weight: 700;
+  --display-lg-lh: 1.15;
+  --display-lg-ls: -0.8px;
+  --heading-xl-size: 28px;
+  --heading-xl-weight: 700;
+  --heading-xl-lh: 1.2;
+  --heading-xl-ls: -1.2px;
+  --heading-lg-size: 22px;
+  --heading-lg-weight: 600;
+  --heading-lg-lh: 1.25;
+  --heading-md-size: 18px;
+  --heading-md-weight: 600;
+  --heading-md-lh: 1.3;
+  --body-md-size: 16px;
+  --body-md-weight: 400;
+  --body-md-lh: 1.4;
+  --body-sm-size: 14px;
+  --body-sm-weight: 400;
+  --body-sm-lh: 1.4;
+  --caption-md-size: 12px;
+  --caption-md-weight: 500;
+  --caption-md-lh: 1.5;
+  --button-md-size: 14px;
+  --button-md-weight: 700;
+
+  --space-xxs: 4px;
+  --space-xs: 6px;
+  --space-sm: 8px;
+  --space-md: 12px;
+  --space-lg: 16px;
+  --space-xl: 24px;
+  --space-xxl: 32px;
+  --space-section: 64px;
+  --container-max: 1280px;
+
+  --ds-radius-sm: 8px;
+  --ds-radius-md: 16px;
+  --ds-radius-lg: 32px;
+  --ds-radius-full: 9999px;
+
+  --shadow-none: none;
+  --shadow-modal: 0 16px 40px rgba(0, 0, 0, 0.2);
+}

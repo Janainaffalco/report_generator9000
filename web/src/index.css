@@ -1,0 +1,72 @@
+@import "tailwindcss";
+@import "shadcn/tailwind.css";
+@import "@fontsource/inter/latin-400.css";
+@import "@fontsource/inter/latin-500.css";
+@import "@fontsource/inter/latin-600.css";
+@import "@fontsource/inter/latin-700.css";
+@import "@fontsource/manrope/latin-600.css";
+@import "@fontsource/manrope/latin-700.css";
+@import "./design-system/tokens.css";
+
+@theme inline {
+  --font-sans: var(--font-sans-token);
+  --font-display: var(--font-display-token);
+
+  --color-background: var(--surface-page);
+  --color-foreground: var(--text-body);
+  --color-card: var(--surface-card-default);
+  --color-card-foreground: var(--text-body);
+  --color-popover: var(--surface-modal);
+  --color-popover-foreground: var(--text-body);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--on-primary);
+  --color-primary-pressed: var(--primary-pressed);
+  --color-secondary: var(--secondary-bg);
+  --color-secondary-foreground: var(--on-secondary);
+  --color-secondary-pressed: var(--secondary-pressed);
+  --color-muted: var(--surface-card);
+  --color-muted-foreground: var(--text-muted);
+  --color-destructive: var(--error);
+  --color-border: var(--hairline);
+  --color-input: var(--hairline);
+  --color-ring: var(--focus-outer);
+  --color-canvas: var(--canvas);
+  --color-hairline-soft: var(--hairline-soft);
+  --color-heading: var(--text-heading);
+
+  --radius-sm: var(--ds-radius-sm);
+  --radius-md: var(--ds-radius-md);
+  --radius-lg: var(--ds-radius-lg);
+  --radius-full: var(--ds-radius-full);
+}
+
+@layer base {
+  * {
+    box-sizing: border-box;
+    border-color: var(--hairline);
+  }
+
+  html {
+    min-width: 320px;
+    background: var(--surface-page);
+    font-family: var(--font-sans-token);
+  }
+
+  body {
+    min-width: 320px;
+    min-height: 100vh;
+    margin: 0;
+    background: var(--surface-page);
+    color: var(--text-body);
+  }
+
+  button:not(:disabled),
+  [role="button"]:not(:disabled) {
+    cursor: pointer;
+  }
+
+  :focus-visible {
+    outline: 2px solid var(--focus-outer);
+    outline-offset: 3px;
+  }
+}

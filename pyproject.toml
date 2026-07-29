@@ -8,11 +8,13 @@ version = "0.1.0"
 description = "Deterministic SEBRAETEC final report generation toolkit"
 requires-python = ">=3.11"
 dependencies = [
+    "fastapi>=0.140,<0.141",
     "google-genai>=2.6,<3",
     "Pillow>=11",
-    "playwright>=1.50",
+    "playwright>=1.61,<1.62",
     "pydantic>=2.11,<3",
     "python-dotenv>=1.1,<2",
+    "uvicorn>=0.35,<1",
 ]
 
 [project.scripts]
@@ -25,13 +27,21 @@ gerar-relatorio = "report_generator9000.generate_cli:main"
 include = ["report_generator9000*"]
 
 [tool.setuptools.package-data]
-report_generator9000 = ["assets/*.ttf", "assets/*.txt", "assets/*.md", "assets/*.pb"]
+report_generator9000 = [
+    "assets/*.ttf",
+    "assets/*.txt",
+    "assets/*.md",
+    "assets/*.pb",
+    "web_dist/**/*",
+]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+pythonpath = [".", "tests"]
 
 [dependency-groups]
 dev = [
     "fonttools>=4.55",
+    "httpx2>=2,<3",
     "pytest>=8",
 ]

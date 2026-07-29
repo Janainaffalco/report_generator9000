@@ -1,58 +1,74 @@
 # report_generator9000
 
-CLI determinístico para gerar o `RELATÓRIO TÉCNICO FINAL` do SEBRAETEC.
-O Gemini é usado somente para os dois campos de prosa permitidos; Captures,
-substituições, Provenance e gates continuam determinísticos.
+Aplicação web que gera o `RELATÓRIO TÉCNICO FINAL` do SEBRAETEC. O fluxo de
+produção é executado sem interação durante a geração: enviar a planilha de
+controle, escolher um atendimento, revisar a prévia renderizada e baixar o
+arquivo `.docx`.
 
-## Preparação local
+O Gemini é usado somente para os dois campos de prosa permitidos. Capturas,
+substituições, proveniência e gates continuam determinísticos.
+
+## Executar a aplicação em contêiner
+
+Construa a imagem:
+
+```powershell
+docker build --tag report-generator9000 .
+```
+
+Inicie o serviço injetando a configuração pelo ambiente do processo:
+
+```powershell
+docker run --rm --publish 8000:8000 --env-file .env report-generator9000
+```
+
+A aplicação fica disponível em `http://localhost:8000`. A imagem contém o
+pipeline completo e o Chromium usado pelo Playwright. Nenhuma credencial é
+copiada durante o build; `.env.example` documenta o contrato de configuração.
+
+## Desenvolvimento
+
+Backend:
 
 ```powershell
 uv sync
-Copy-Item .env.example .env
+uv run uvicorn report_generator9000.web:app --reload
 ```
 
-Preencha `GEMINI_API_KEY` no `.env`. O arquivo `.env` é ignorado pelo Git.
-O projeto usa o SDK atual `google-genai`; não usa o pacote legado
-`google-generativeai`.
-
-Instale o Chromium do Playwright quando necessário:
+Frontend:
 
 ```powershell
-$env:PLAYWRIGHT_BROWSERS_PATH = "$PWD\.playwright-browsers"
-uv run playwright install chromium
+Set-Location web
+npm ci
+npm run dev
 ```
 
-## Gerar um relatório
-
-Com Gemini:
+Para produzir os arquivos estáticos servidos pelo backend:
 
 ```powershell
-$env:PLAYWRIGHT_BROWSERS_PATH = "$PWD\.playwright-browsers"
-uv run python .\gerar_relatorio.py --linha 115-2026
+Set-Location web
+npm run build
 ```
 
-Sem chamada ao modelo:
+## Testes
 
 ```powershell
-$env:PLAYWRIGHT_BROWSERS_PATH = "$PWD\.playwright-browsers"
-uv run python .\gerar_relatorio.py --linha 115-2026 --no-llm
+Set-Location web
+npm test
+npm run lint
+npm run typecheck
+npm run build
+
+Set-Location ..
+uv run pytest
 ```
 
-Valores da linha de comando `--prose-model` e
-`--prose-output-budget` substituem os defaults do ambiente. O parâmetro
-`--prose-provider` continua disponível para testes ou outro provedor.
-Quando o modelo primário responde especificamente com `503 UNAVAILABLE`, o
-provider tenta uma vez o `GEMINI_FALLBACK_MODEL`. Outros erros não acionam
-fallback.
+## Configuração da VPS
 
-## Implantação em VPS
+Use `.env.example` como contrato, mas injete valores reais pelo runtime de
+contêineres ou pelo gerenciador de processos. Não grave chaves na imagem, no
+repositório ou em uma unidade `systemd`.
 
-Use `.env.example` como contrato de configuração, mas injete os valores reais
-pelo gerenciador de processos ou runtime de containers. Não copie uma chave
-para a imagem, repositório ou unidade `systemd`.
-
-Para produção, mantenha um identificador estável em `GEMINI_MODEL`, e não um
-alias `*-latest`, preview ou experimental. O provider configura timeout,
-tentativas limitadas para falhas transitórias, saída JSON estruturada e baixo
-nível de thinking para esta tarefa curta. Qualquer resposta sem estrutura ou
-sem citação literal falha fechada ou vira Pendência.
+Em produção, mantenha um identificador estável em `GEMINI_MODEL`, sem aliases
+`*-latest`, preview ou experimental. Respostas sem estrutura ou sem citação
+literal falham de forma fechada ou viram Pendência.

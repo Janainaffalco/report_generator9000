@@ -1,0 +1,17 @@
+.git
+.github
+.venv
+.env
+.env.*
+.npm-cache*
+.uv-cache*
+.pytest_cache
+**/__pycache__
+**/*.pyc
+**/*.pyo
+*.docx
+*.xlsx
+web/node_modules
+web/dist
+report_generator9000/web_dist
+tests
