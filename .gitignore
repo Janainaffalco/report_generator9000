@@ -24,8 +24,14 @@ dist/
 !tests/**
 !.github/
 !.github/**
+!web/
+!web/**
 !.env.example
 !README.md
-!uv.lock
+uv.lock
 __pycache__/
 *.py[cod]
+
+# build output, not source
+web/node_modules/
+report_generator9000/web_dist/

@@ -69,6 +69,7 @@ def test_committed_workbook_exercises_every_control_sheet_outcome() -> None:
             capture_origin="https://gemea.example/",
             published_domain=None,
         ),
+        StopCondition(16, "Link is not a URL"),
     )
 
     first = outcomes[0]

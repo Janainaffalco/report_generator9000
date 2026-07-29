@@ -77,8 +77,13 @@ ROWS = (
         "EMPRESA GEMEA LTDA", "Christian Albuquerque Alonso",
         datetime(2026, 6, 12), "https://gemea.example/", "",
     ),
+    (
+        "012120/2026", "45-2026", IN_SCOPE, "20517958000180",
+        "LOJA SEM PROTOCOLO", "Bruno Henrique Santana Leal",
+        datetime(2026, 5, 20), "www.exemplo.com.br", "",
+    ),
 )
-ROW_NUMBERS = (2, 3, 4, 5, 6, 7, 8, 10, 11, 13, 14)
+ROW_NUMBERS = (2, 3, 4, 5, 6, 7, 8, 10, 11, 13, 14, 16)
 
 
 def _xml_cell(column: str, row: int, value: object) -> str:
@@ -91,19 +96,29 @@ def _xml_cell(column: str, row: int, value: object) -> str:
     )
 
 
-def _sheet_xml() -> str:
-    all_rows = ((1, HEADERS), *zip(ROW_NUMBERS, ROWS))
-    rows = []
+def _sheet_xml(rows: tuple, row_numbers: tuple, headers: tuple) -> str:
+    all_rows = ((1, headers), *zip(row_numbers, rows))
+    xml_rows = []
     for number, values in all_rows:
         cells = "".join(
             _xml_cell(chr(ord("A") + index), number, value)
             for index, value in enumerate(values)
         )
-        rows.append(f'<row r="{number}">{cells}</row>')
+        xml_rows.append(f'<row r="{number}">{cells}</row>')
     return (
         '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
         '<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">'
-        f'<sheetData>{"".join(rows)}</sheetData></worksheet>'
+        f'<sheetData>{"".join(xml_rows)}</sheetData></worksheet>'
+    )
+
+
+def _workbook_xml(sheet_name: str) -> str:
+    return (
+        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+        '<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" '
+        'xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">'
+        '<sheets><sheet name="Resumo" sheetId="1" r:id="rId1"/>'
+        f'<sheet name="{sheet_name}" sheetId="2" r:id="rId2"/></sheets></workbook>'
     )
 
 
@@ -125,13 +140,6 @@ PARTS = {
         '<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/>'
         '</Relationships>'
     ),
-    "xl/workbook.xml": (
-        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
-        '<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" '
-        'xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">'
-        '<sheets><sheet name="Resumo" sheetId="1" r:id="rId1"/>'
-        '<sheet name="LV e Site" sheetId="2" r:id="rId2"/></sheets></workbook>'
-    ),
     "xl/_rels/workbook.xml.rels": (
         '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
         '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
@@ -152,7 +160,14 @@ PARTS = {
 }
 
 
-def build(output: Path) -> Path:
+def build(
+    output: Path,
+    *,
+    sheet_name: str = "LV e Site",
+    rows: tuple = ROWS,
+    row_numbers: tuple = ROW_NUMBERS,
+    headers: tuple = HEADERS,
+) -> Path:
     output.parent.mkdir(parents=True, exist_ok=True)
     summary = (
         '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
@@ -162,8 +177,9 @@ def build(output: Path) -> Path:
     )
     parts = {
         **PARTS,
+        "xl/workbook.xml": _workbook_xml(sheet_name),
         "xl/worksheets/sheet1.xml": summary,
-        "xl/worksheets/sheet2.xml": _sheet_xml(),
+        "xl/worksheets/sheet2.xml": _sheet_xml(rows, row_numbers, headers),
     }
     with ZipFile(output, "w", compression=ZIP_STORED) as archive:
         for name, text in parts.items():

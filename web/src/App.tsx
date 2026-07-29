@@ -1,20 +1,13 @@
-import { useRef } from "react"
-import {
-  CheckCircle2Icon,
-  FileTextIcon,
-  ShieldCheckIcon,
-  UploadIcon,
-} from "lucide-react"
+import { useState } from "react"
+import { CheckCircle2Icon, FileTextIcon, ShieldCheckIcon } from "lucide-react"
 
-import { Badge } from "@/components/ui/badge"
-import { buttonVariants, Button } from "@/components/ui/button"
-import {
-  Card,
-  CardContent,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card"
+import { UploadPanel } from "@/components/UploadPanel"
+import { WorkGroups } from "@/components/WorkGroups"
+import { buttonVariants } from "@/components/ui/button"
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Separator } from "@/components/ui/separator"
+import type { ControlSheetResponse } from "@/lib/control-sheet"
+import { uploadControlSheet } from "@/lib/control-sheet"
 import { cn } from "@/lib/utils"
 
 const stages = [
@@ -44,14 +37,35 @@ const features = [
   },
 ]
 
+const CHOOSING_WORK_PATH = "/escolher"
+
 function currentStage(pathname: string) {
   const stage = stages.find((item) => pathname.startsWith(item.path))
   return stage?.number ?? 1
 }
 
 export function App() {
-  const fileInput = useRef<HTMLInputElement>(null)
-  const activeStage = currentStage(window.location.pathname)
+  const [status, setStatus] = useState<"idle" | "loading">("idle")
+  const [errorDetail, setErrorDetail] = useState<string | null>(null)
+  const [controlSheet, setControlSheet] = useState<ControlSheetResponse | null>(
+    null
+  )
+
+  const activeStage = currentStage(
+    controlSheet ? CHOOSING_WORK_PATH : window.location.pathname
+  )
+
+  async function handleFile(file: File) {
+    setStatus("loading")
+    setErrorDetail(null)
+    const result = await uploadControlSheet(file)
+    setStatus("idle")
+    if (result.ok) {
+      setControlSheet(result.data)
+      return
+    }
+    setErrorDetail(result.detail)
+  }
 
   return (
     <div className="flex min-h-screen min-w-0 flex-col bg-background">
@@ -75,10 +89,7 @@ export function App() {
             >
               Relatórios anteriores
             </a>
-            <a
-              className={buttonVariants({ variant: "ghost" })}
-              href="/enviar"
-            >
+            <a className={buttonVariants({ variant: "ghost" })} href="/enviar">
               Começar de novo
             </a>
           </div>
@@ -93,12 +104,14 @@ export function App() {
             {stages.map((stage) => (
               <li key={stage.number}>
                 <a
-                  aria-current={stage.number === activeStage ? "step" : undefined}
+                  aria-current={
+                    stage.number === activeStage ? "step" : undefined
+                  }
                   className={cn(
                     "block text-xs font-medium",
                     stage.number === activeStage
                       ? "text-primary"
-                      : "text-muted-foreground",
+                      : "text-muted-foreground"
                   )}
                   href={stage.path}
                 >
@@ -111,65 +124,42 @@ export function App() {
       </header>
 
       <main className="mx-auto flex w-full max-w-(--container-max) min-w-0 flex-1 flex-col items-center px-8 py-14">
-        <section className="flex w-full max-w-4xl flex-col items-center text-center">
-          <p className="text-sm text-muted-foreground">Comece aqui</p>
-          <h1 className="mt-4 max-w-3xl font-display text-[44px] leading-[1.15] font-bold tracking-[-0.8px] text-heading">
-            Arraste sua planilha de controle. O resto é com a gente.
-          </h1>
-          <p className="mt-5 max-w-2xl text-base leading-6 text-foreground">
-            A gente lê a planilha, visita o site do cliente, monta o relatório no
-            Master aprovado e devolve pronto para você conferir.
-          </p>
-
-          <div className="mt-10 flex min-h-80 w-full max-w-3xl flex-col items-center justify-center rounded-lg border border-border bg-canvas px-8 py-12">
-            <div className="flex size-16 items-center justify-center rounded-full bg-muted">
-              <UploadIcon aria-hidden="true" />
-            </div>
-            <h2 className="mt-5 font-display text-2xl font-semibold text-heading">
-              Solte a planilha aqui
-            </h2>
-            <p className="mt-2 text-base text-foreground">
-              ou clique para escolher o arquivo no seu computador
-            </p>
-            <div className="mt-5 flex items-center gap-3">
-              <Badge variant="secondary">.xlsx</Badge>
-              <span className="text-xs text-muted-foreground">
-                aba “LV e Site” · a mesma planilha que você já usa
-              </span>
-            </div>
-            <input
-              ref={fileInput}
-              aria-label="Arquivo de planilha"
-              className="sr-only"
-              type="file"
-              accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        {controlSheet ? (
+          <WorkGroups
+            key={controlSheet.sheet_id}
+            data={controlSheet}
+            status={status}
+            errorDetail={errorDetail}
+            onReplaceFile={handleFile}
+          />
+        ) : (
+          <>
+            <UploadPanel
+              status={status}
+              errorDetail={errorDetail}
+              onFile={handleFile}
             />
-            <Button
-              className="mt-7 rounded-full"
-              size="lg"
-              onClick={() => fileInput.current?.click()}
-            >
-              Escolher planilha
-            </Button>
-          </div>
-        </section>
 
-        <section
-          aria-label="Como funciona"
-          className="mt-10 grid w-full max-w-5xl grid-cols-3 gap-5"
-        >
-          {features.map(({ title, description, icon: Icon }) => (
-            <Card key={title}>
-              <CardHeader>
-                <Icon aria-hidden="true" />
-                <CardTitle>{title}</CardTitle>
-              </CardHeader>
-              <CardContent>
-                <p className="leading-5 text-muted-foreground">{description}</p>
-              </CardContent>
-            </Card>
-          ))}
-        </section>
+            <section
+              aria-label="Como funciona"
+              className="mt-10 grid w-full max-w-5xl grid-cols-3 gap-5"
+            >
+              {features.map(({ title, description, icon: Icon }) => (
+                <Card key={title}>
+                  <CardHeader>
+                    <Icon aria-hidden="true" />
+                    <CardTitle>{title}</CardTitle>
+                  </CardHeader>
+                  <CardContent>
+                    <p className="leading-5 text-muted-foreground">
+                      {description}
+                    </p>
+                  </CardContent>
+                </Card>
+              ))}
+            </section>
+          </>
+        )}
       </main>
 
       <footer className="border-t border-border bg-canvas">

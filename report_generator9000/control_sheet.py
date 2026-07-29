@@ -306,6 +306,22 @@ def read_control_sheet(path: str | Path) -> tuple[RowOutcome, ...]:
     return tuple(outcomes)
 
 
+def read_row_pastas(path: str | Path) -> dict[int, str]:
+    """Every data row's Pasta cell, including rows that stop or are skipped.
+
+    `StopCondition` and `SkippedRow` carry only a row number, but a row is addressed by
+    Pasta *and* row number, so callers presenting those rows need the Pasta separately.
+    """
+    rows = _rows(path)
+    if not rows:
+        return {}
+    columns = _headers(rows[0][1])
+    return {
+        row_number: _text(_value(row, columns, "pasta"))
+        for row_number, row in rows[1:]
+    }
+
+
 def read_control_sheet_for_pasta(
     path: str | Path, pasta: str
 ) -> tuple[RowOutcome, ...]:
