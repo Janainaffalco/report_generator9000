@@ -1,8 +1,8 @@
 FROM node:22-bookworm-slim AS frontend-builder
 
 WORKDIR /build/web
-COPY web/package.json web/package-lock.json ./
-RUN npm ci
+COPY web/package*.json ./
+RUN npm ci --frozen-lockfile
 
 COPY web/ ./
 RUN mkdir -p /build/report_generator9000 \
@@ -21,7 +21,7 @@ COPY pyproject.toml README.md ./
 COPY report_generator9000/ ./report_generator9000/
 COPY --from=frontend-builder /build/report_generator9000/web_dist ./report_generator9000/web_dist
 
-RUN python -m pip install --no-cache-dir . \
+RUN python -m pip install --no-cache-dir --no-warn-script-location . \
     && mkdir -p /app/data \
     && chown -R pwuser:pwuser /app/data
 
