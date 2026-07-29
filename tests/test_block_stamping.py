@@ -116,7 +116,8 @@ def test_blocks_are_stamped_from_lista_with_bound_provenant_images(
     ).passed
 
     with ZipFile(result.document) as archive:
-        assert "word/media/image2.png" not in archive.namelist()
+        assert "word/media/image2.png" in archive.namelist()
+        assert "word/media/image4.png" not in archive.namelist()
         document = ElementTree.fromstring(archive.read("word/document.xml"))
     body = document.find(f"{W}body")
     assert body is not None

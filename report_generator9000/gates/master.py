@@ -18,11 +18,7 @@ from ..docx_package import (
     DocxPackage,
     text_column_width_emu,
 )
-from ..logo import (
-    CLIENT_LOGO_HEIGHT_EMU,
-    CLIENT_LOGO_PART,
-    CLIENT_LOGO_WIDTH_EMU,
-)
+from ..logo import CLIENT_LOGO_PART
 from .results import GateResult, result, violation
 
 
@@ -289,18 +285,58 @@ def check_master_build(
                 f"expected 1, found {len(logo_slots)}",
             )
         )
-    elif (
-        logo_slots[0].width_emu != CLIENT_LOGO_WIDTH_EMU
-        or logo_slots[0].height_emu != CLIENT_LOGO_HEIGHT_EMU
-    ):
-        violations.append(
-            violation(
-                GATE,
-                "invalid-client-logo-slot-size",
-                CLIENT_LOGO_PART,
-                f"expected {CLIENT_LOGO_WIDTH_EMU}x{CLIENT_LOGO_HEIGHT_EMU} EMU",
+    else:
+        logo_slot = logo_slots[0]
+        preceding = [
+            paragraph.text.strip()
+            for paragraph in package.paragraphs
+            if paragraph.source_part == logo_slot.source_part
+            and paragraph.index < logo_slot.paragraph_index
+            and paragraph.text.strip()
+        ]
+        if not preceding or preceding[-1].casefold() != "logo":
+            violations.append(
+                violation(
+                    GATE,
+                    "client-logo-slot-outside-dedicated-section",
+                    CLIENT_LOGO_PART,
+                    "the immediately preceding label must be LOGO",
+                )
             )
-        )
+        if (
+            logo_slot.width_emu is None
+            or logo_slot.height_emu is None
+            or logo_slot.width_emu >= 3_000_000
+        ):
+            violations.append(
+                violation(
+                    GATE,
+                    "invalid-client-logo-slot-size",
+                    CLIENT_LOGO_PART,
+                    "must retain the dedicated section's compact geometry",
+                )
+            )
+        if source is not None:
+            source_logo_slots = [
+                slot
+                for slot in source.slots
+                if slot.media_part == CLIENT_LOGO_PART
+            ]
+            if len(source_logo_slots) != 1 or (
+                logo_slot.width_emu,
+                logo_slot.height_emu,
+            ) != (
+                source_logo_slots[0].width_emu,
+                source_logo_slots[0].height_emu,
+            ):
+                violations.append(
+                    violation(
+                        GATE,
+                        "client-logo-slot-geometry-changed",
+                        CLIENT_LOGO_PART,
+                        "Master must preserve the approved source Slot geometry",
+                    )
+                )
 
     for paragraph in package.paragraphs:
         for run in paragraph.runs:

@@ -13,9 +13,7 @@ from report_generator9000.docx_package import open_docx_package
 from report_generator9000.gates.blocks import check_block_integrity
 from report_generator9000.gates.master import MASTER_BLOCK_HEADINGS, check_master_build
 from report_generator9000.master import (
-    CLIENT_LOGO_HEIGHT_EMU,
     CLIENT_LOGO_PART,
-    CLIENT_LOGO_WIDTH_EMU,
     EXPECTED_TOKENS,
     build_master,
     clone_block_stamp,
@@ -92,36 +90,46 @@ def _base_paragraphs() -> list:
             paragraph("PLATAFORMA | WORDPRESS"),
             paragraph("PLUGINS"),
             paragraph("IDENTIDADE VISUAL"),
+            paragraph("LOGO"),
+            paragraph(
+                image="rIdImage2",
+                extent=(1_271_270, 1_362_075),
+            ),
+            paragraph("PALETA DE CORES"),
+            paragraph(
+                image="rIdImage3",
+                extent=(4_653_280, 953_135),
+            ),
             paragraph("PÁGINA HOME E SEÇÕES"),
             paragraph(),
             paragraph("PÁGINA HOME"),
             paragraph(),
-            paragraph(image="rIdImage2"),
+            paragraph(image="rIdImage4"),
             paragraph(),
             paragraph("SEÇÃO PRODUTOS"),
             paragraph(),
-            paragraph(image="rIdImage2"),
+            paragraph(image="rIdImage4"),
             paragraph(),
             paragraph("SEÇÃO VÍDEOS"),
             paragraph(),
-            paragraph(image="rIdImage2"),
+            paragraph(image="rIdImage4"),
             paragraph(),
             paragraph("SEÇÃO CONTATO"),
-            paragraph(image="rIdImage2"),
+            paragraph(image="rIdImage4"),
             paragraph("SEÇÃO SOBRE"),
-            paragraph(image="rIdImage2"),
+            paragraph(image="rIdImage4"),
             paragraph(),
             paragraph("POLÍTICAS DE PRIVACIDADE"),
             paragraph(),
-            paragraph(image="rIdImage2"),
+            paragraph(image="rIdImage4"),
             paragraph(),
             paragraph("CABEÇALHO"),
             paragraph(),
-            paragraph(image="rIdImage2"),
+            paragraph(image="rIdImage4"),
             paragraph(),
             paragraph("RODAPÉ"),
             paragraph(),
-            paragraph(image="rIdImage2"),
+            paragraph(image="rIdImage4"),
             paragraph(),
             paragraph("PAINEL DE CONFIGURAÇÃO WORDPRESS"),
             paragraph("PAINEL DE CONFIGURAÇÃO WORDPRESS"),
@@ -165,7 +173,9 @@ def _base_paragraphs() -> list:
 def _base_media() -> dict:
     return {
         "media/image1.png": png_bytes(8, 8, blue=0xFF),
-        "media/image2.png": png_bytes(16, 9, green=0xC0),
+        "media/image2.png": png_bytes(158, 166, green=0xC0),
+        "media/image3.png": png_bytes(978, 179, red=0x80, green=0xC0),
+        "media/image4.png": png_bytes(16, 9, green=0xC0),
     }
 
 
@@ -173,6 +183,8 @@ def _base_relationships() -> list:
     return [
         RelationshipSpec(id="rIdImage1", target="media/image1.png"),
         RelationshipSpec(id="rIdImage2", target="media/image2.png"),
+        RelationshipSpec(id="rIdImage3", target="media/image3.png"),
+        RelationshipSpec(id="rIdImage4", target="media/image4.png"),
         RelationshipSpec(
             id="rId25",
             target="https://ondviajar.com.br/wp-admin/",
@@ -428,7 +440,7 @@ def test_master_blocks_are_two_paragraph_bound_and_cloneable(
         }
 
 
-def test_master_contains_one_sensibly_sized_client_logo_slot(
+def test_master_reuses_the_dedicated_logo_section_without_a_briefing_box(
     tmp_path: Path,
 ) -> None:
     built = build_master(
@@ -444,9 +456,30 @@ def test_master_contains_one_sensibly_sized_client_logo_slot(
     ]
 
     assert len(slots) == 1
-    assert slots[0].width_emu == CLIENT_LOGO_WIDTH_EMU
-    assert slots[0].height_emu == CLIENT_LOGO_HEIGHT_EMU
-    assert CLIENT_LOGO_WIDTH_EMU < 3_000_000
+    logo_slot = slots[0]
+    preceding = [
+        paragraph.text.strip()
+        for paragraph in package.paragraphs
+        if paragraph.source_part == logo_slot.source_part
+        and paragraph.index < logo_slot.paragraph_index
+        and paragraph.text.strip()
+    ]
+    assert preceding[-1] == "LOGO"
+    assert logo_slot.width_emu == 1_271_270
+    assert logo_slot.height_emu == 1_362_075
+    briefing = next(
+        paragraph
+        for paragraph in package.paragraphs
+        if paragraph.text.strip()
+        == "BRIEFING INICIAL PARA DEFINIÇÃO DO ESCOPO"
+    )
+    assert not any(
+        slot.paragraph_index == briefing.index + 1
+        for slot in package.slots
+    )
+    assert "word/media/client-logo.png" not in {
+        media.part_name for media in package.media
+    }
     assert built.validation.passed
 
     cloned_heading, cloned_image = clone_block_stamp(

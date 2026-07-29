@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+from io import BytesIO
 import json
 from pathlib import Path
 from zipfile import ZipFile
@@ -149,9 +150,20 @@ def test_one_engagement_directory_contains_the_complete_handoff_package(
     assert logo_artifact.source is not None
     assert Path(logo_artifact.source).parent.name == "capturas"
     with ZipFile(package.report.document) as archive:
-        assert archive.read(CLIENT_LOGO_PART) == Path(
-            logo_artifact.source
-        ).read_bytes()
+        logo_content = archive.read(CLIENT_LOGO_PART)
+        assert logo_content == Path(logo_artifact.source).read_bytes()
+    logo_slot = next(
+        slot
+        for slot in document_package.slots
+        if slot.media_part == CLIENT_LOGO_PART
+    )
+    with Image.open(BytesIO(logo_content)) as logo_image:
+        assert logo_slot.width_emu is not None
+        assert logo_slot.height_emu is not None
+        assert abs(
+            logo_image.width / logo_image.height
+            - logo_slot.width_emu / logo_slot.height_emu
+        ) < 0.01
     assert package.report.context.blocks == tuple(
         page.titulo_bloco for page in package.pages
     )

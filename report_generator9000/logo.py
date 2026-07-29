@@ -23,9 +23,7 @@ from playwright.sync_api import (
 from .run_context import Artifact, Pendencia
 
 
-CLIENT_LOGO_PART = "word/media/client-logo.png"
-CLIENT_LOGO_WIDTH_EMU = 1_828_800
-CLIENT_LOGO_HEIGHT_EMU = 914_400
+CLIENT_LOGO_PART = "word/media/image2.png"
 CLIENT_LOGO_PIXEL_SIZE = (1200, 600)
 _LOGO_FILENAME = "client-logo.png"
 _VOID_ELEMENTS = frozenset(
@@ -498,10 +496,8 @@ def capture_client_logo(
 
 
 __all__ = [
-    "CLIENT_LOGO_HEIGHT_EMU",
     "CLIENT_LOGO_PART",
     "CLIENT_LOGO_PIXEL_SIZE",
-    "CLIENT_LOGO_WIDTH_EMU",
     "DeclaredLogo",
     "LogoCapture",
     "LogoFailure",

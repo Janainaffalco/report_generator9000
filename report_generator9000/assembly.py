@@ -33,10 +33,10 @@ from .gated_inputs import (
     load_gated_inputs,
 )
 from .lista_paginas import Pagina, derive_lista_paginas
-from .logo import LogoCapture, capture_client_logo
+from .logo import CLIENT_LOGO_PART, LogoCapture, capture_client_logo
 from .palette import PaletteCollectionError, derive_palette_from_site
 from .prose import ProseConfig, ProseProvider
-from .placeholders import render_placeholder
+from .placeholders import render_placeholder, slot_pixel_dimensions
 from .previews import DocumentPreviewRenderer, PreviewRenderer
 from .run_context import Pendencia
 
@@ -95,9 +95,26 @@ def _assemble_staged_package(
         directory / "capturas",
         config=capture_config,
     )
+    master_package = open_docx_package(master)
+    logo_slots = [
+        slot
+        for slot in master_package.slots
+        if slot.media_part == CLIENT_LOGO_PART
+        and slot.width_emu is not None
+        and slot.height_emu is not None
+    ]
+    if len(logo_slots) != 1:
+        raise StopCondition(
+            "STOP CONDITION: Master lacks the dedicated client logo Slot"
+        )
+    logo_slot = logo_slots[0]
     client_logo = capture_client_logo(
         engagement.capture_origin,
         captures.folder,
+        slot_pixel_size=slot_pixel_dimensions(
+            logo_slot.width_emu,
+            logo_slot.height_emu,
+        ),
     )
     captures_by_page = {
         capture.pagina: capture for capture in captures.captures
