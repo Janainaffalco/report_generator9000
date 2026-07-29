@@ -1,37 +1,26 @@
-*.xlsx
-*.docx
-!tests/fixtures/*.docx
+# Environment
+.env
+!.env.example
+
+# Python
 __pycache__/
 *.py[cod]
 *.egg-info/
 .pytest_cache/
 .venv/
-.env
-!.env.example
-
-# .graphifyignore
-node_modules/
-dist/
-*.generated.py
-
-# only index source and test trees; ignore everything else
-*
-!src/
-!src/**
-!report_generator9000/
-!report_generator9000/**
-!tests/
-!tests/**
-!.github/
-!.github/**
-!web/
-!web/**
-!.env.example
-!README.md
 uv.lock
-__pycache__/
-*.py[cod]
+.uv-cache*/
+.npm-cache*/
 
-# build output, not source
-web/node_modules/
+# Generated documents
+*.xlsx
+*.docx
+!tests/fixtures/*.docx
+
+# Build output (web/node_modules and web/dist handled by web/.gitignore)
 report_generator9000/web_dist/
+
+# Local scratch output from manual report generation/testing
+.tmp/
+master-build-check/
+relatorios-gerados/
