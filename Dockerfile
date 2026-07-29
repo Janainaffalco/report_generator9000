@@ -1,12 +1,14 @@
 FROM node:22-bookworm-slim AS frontend-builder
 
+RUN corepack enable
+
 WORKDIR /build/web
-COPY web/package*.json ./
-RUN npm ci --frozen-lockfile
+COPY web/package.json web/pnpm-lock.yaml ./
+RUN pnpm install --frozen-lockfile
 
 COPY web/ ./
 RUN mkdir -p /build/report_generator9000 \
-    && npm run build
+    && pnpm run build
 
 
 FROM mcr.microsoft.com/playwright/python:v1.61.0-noble

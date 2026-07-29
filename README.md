@@ -39,25 +39,25 @@ Frontend:
 
 ```powershell
 Set-Location web
-npm ci
-npm run dev
+pnpm install
+pnpm dev
 ```
 
 Para produzir os arquivos estáticos servidos pelo backend:
 
 ```powershell
 Set-Location web
-npm run build
+pnpm build
 ```
 
 ## Testes
 
 ```powershell
 Set-Location web
-npm test
-npm run lint
-npm run typecheck
-npm run build
+pnpm test
+pnpm lint
+pnpm typecheck
+pnpm build
 
 Set-Location ..
 uv run pytest
