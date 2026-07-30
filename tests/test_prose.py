@@ -347,6 +347,64 @@ def test_grounded_claim_without_exact_site_excerpt_becomes_a_gap() -> None:
     )
 
 
+def test_citation_with_collapsed_whitespace_keeps_prose_and_exact_grounding(
+    recording_sink,
+) -> None:
+    source_excerpt = (
+        "Simplificamos a gestão de energia para empresas que buscam liberdade "
+        "e independência,\ntrazendo maior controle sobre suas decisões."
+    )
+    gemini_excerpt = (
+        "Simplificamos a gestão de energia para empresas que buscam liberdade "
+        "e independência, trazendo maior controle sobre suas decisões."
+    )
+    site_text = (
+        ExtractedPageText(
+            capture_origin="https://example.test/",
+            text=f"{COMPANY_CITATION.excerpt}\n{source_excerpt}",
+        ),
+    )
+    objective = "O site apresenta as soluções de gestão de energia da Acme."
+    provider = CannedProvider(
+        ProseResponse(
+            company_description=GroundedField(
+                "A Acme fabrica componentes industriais.",
+                True,
+                (COMPANY_CITATION,),
+            ),
+            briefing_objective=GroundedField(
+                objective,
+                True,
+                (
+                    GroundingCitation(
+                        source_id="page-1",
+                        excerpt=gemini_excerpt,
+                    ),
+                ),
+            ),
+        )
+    )
+
+    drafted = draft_prose(
+        PAGES,
+        site_text,
+        provider,
+        ProseConfig(model="m", output_budget=500),
+    )
+
+    assert drafted.token_values["{{BRIEFING_INICIAL}}"] == objective
+    objective_grounding = next(
+        item
+        for item in drafted.grounding
+        if item.field == "objetivo_briefing"
+    )
+    assert objective_grounding.excerpt == source_excerpt
+    assert not any(
+        event.name == "prose_field_rejected"
+        for event in recording_sink.events
+    )
+
+
 def _engagement() -> Engagement:
     return Engagement(
         row_number=2,

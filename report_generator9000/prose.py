@@ -151,6 +151,46 @@ def _gap(
     )
 
 
+def _whitespace_normalized_with_spans(
+    text: str,
+) -> tuple[str, tuple[tuple[int, int], ...]]:
+    """Collapse whitespace while retaining each character's source span."""
+    normalized: list[str] = []
+    spans: list[tuple[int, int]] = []
+    position = 0
+    while position < len(text):
+        if text[position].isspace():
+            start = position
+            while position < len(text) and text[position].isspace():
+                position += 1
+            if normalized and position < len(text):
+                normalized.append(" ")
+                spans.append((start, position))
+            continue
+        normalized.append(text[position])
+        spans.append((position, position + 1))
+        position += 1
+    return "".join(normalized), tuple(spans)
+
+
+def _exact_source_excerpt(excerpt: str, source: str) -> str | None:
+    """Resolve a whitespace-normalized citation back to literal source text."""
+    stripped = excerpt.strip()
+    exact_start = source.find(stripped)
+    if exact_start >= 0:
+        return source[exact_start : exact_start + len(stripped)]
+
+    normalized_source, source_spans = _whitespace_normalized_with_spans(source)
+    normalized_excerpt, _ = _whitespace_normalized_with_spans(stripped)
+    normalized_start = normalized_source.find(normalized_excerpt)
+    if normalized_start < 0:
+        return None
+    normalized_end = normalized_start + len(normalized_excerpt) - 1
+    source_start = source_spans[normalized_start][0]
+    source_end = source_spans[normalized_end][1]
+    return source[source_start:source_end]
+
+
 def _field_value(
     field: GroundedField,
     *,
@@ -161,6 +201,7 @@ def _field_value(
     extracted_pages: dict[str, ExtractedPageText],
 ) -> tuple[str, Pendencia, tuple[Grounding, ...]]:
     rejection_reason: str | None = None
+    exact_excerpts: tuple[str, ...] = ()
     if field.value is None or not field.value.strip():
         rejection_reason = "missing_value"
     elif not field.citations:
@@ -172,12 +213,21 @@ def _field_value(
         rejection_reason = "unknown_source_id"
     elif any(not citation.excerpt.strip() for citation in field.citations):
         rejection_reason = "empty_excerpt"
-    elif any(
-        citation.excerpt not in provider_pages[citation.source_id].text
-        for citation in field.citations
-    ):
-        rejection_reason = "excerpt_not_found"
-    elif not field.grounded:
+    else:
+        resolved = tuple(
+            _exact_source_excerpt(
+                citation.excerpt,
+                provider_pages[citation.source_id].text,
+            )
+            for citation in field.citations
+        )
+        if any(excerpt is None for excerpt in resolved):
+            rejection_reason = "excerpt_not_found"
+        else:
+            exact_excerpts = tuple(
+                excerpt for excerpt in resolved if excerpt is not None
+            )
+    if rejection_reason is None and not field.grounded:
         rejection_reason = "provider_marked_ungrounded"
 
     if rejection_reason is not None:
@@ -200,9 +250,13 @@ def _field_value(
         Grounding(
             field=slot,
             capture_origin=extracted_pages[citation.source_id].capture_origin,
-            excerpt=citation.excerpt,
+            excerpt=exact_excerpt,
         )
-        for citation in field.citations
+        for citation, exact_excerpt in zip(
+            field.citations,
+            exact_excerpts,
+            strict=True,
+        )
     )
     return (
         text,
