@@ -99,28 +99,54 @@ describe("resumable generation screens", () => {
         "RELATÓRIO TÉCNICO FINAL - 40-2026_DENISE BARROS DE ALMEIDA.docx",
       download_url: "/api/runs/persisted-run/download",
     }
-    vi.mocked(fetch).mockResolvedValueOnce(response(finished))
+    const report = {
+      run_id: "persisted-run",
+      status: "draft",
+      page_count: 5,
+      filename: finished.filename,
+      download_url: finished.download_url,
+      pendencias: [
+        {
+          classification: "GATED",
+          classification_label: "NÃO FORNECIDO",
+          classification_explanation:
+            "Normal e esperado: nenhuma automação consegue obter este conteúdo sozinha.",
+          name: "logo do cliente",
+          required_action: "Fornecer logo do cliente no valores.json",
+          page: "documento",
+        },
+      ],
+      checks: [
+        { label: "Nenhuma imagem de outro cliente no arquivo", passed: true },
+      ],
+    }
+    vi.mocked(fetch)
+      .mockResolvedValueOnce(response(finished))
+      .mockResolvedValueOnce(response(report))
 
     render(<App />)
 
-    await screen.findByText("Relatório gerado")
-    expect(screen.getByText("Rascunho com Pendências")).toBeInTheDocument()
+    expect(
+      await screen.findByText("Rascunho com Pendências")
+    ).toBeInTheDocument()
     expect(screen.getByText(finished.filename!)).toBeInTheDocument()
     expect(screen.getByRole("link", { name: "Baixar .docx" })).toHaveAttribute(
       "href",
-      finished.download_url,
+      finished.download_url
     )
+    expect(screen.getByText("logo do cliente")).toBeInTheDocument()
+    expect(fetch).toHaveBeenCalledWith("/api/runs/persisted-run/report")
   })
 
   it("names a Stop Condition and offers the row list with no download", async () => {
     vi.mocked(fetch)
       .mockResolvedValueOnce(
         response({
-        ...base,
-        outcome: "stopped",
-        current_stage: null,
-        reason: "STOP CONDITION: Capture Origin indisponível",
-        }),
+          ...base,
+          outcome: "stopped",
+          current_stage: null,
+          reason: "STOP CONDITION: Capture Origin indisponível",
+        })
       )
       .mockResolvedValueOnce(response(retainedSheet))
 
@@ -128,18 +154,16 @@ describe("resumable generation screens", () => {
 
     await screen.findByText("A geração foi interrompida")
     expect(
-      screen.getByText("STOP CONDITION: Capture Origin indisponível"),
+      screen.getByText("STOP CONDITION: Capture Origin indisponível")
     ).toBeInTheDocument()
     fireEvent.click(
-      screen.getByRole("button", { name: "Voltar à lista de trabalhos" }),
+      screen.getByRole("button", { name: "Voltar à lista de trabalhos" })
     )
     await screen.findByText("Pronto para gerar")
-    expect(fetch).toHaveBeenLastCalledWith(
-      "/api/control-sheet/retained-sheet",
-    )
+    expect(fetch).toHaveBeenLastCalledWith("/api/control-sheet/retained-sheet")
     expect(window.location.pathname).toBe("/escolher")
     expect(
-      screen.queryByRole("link", { name: "Baixar .docx" }),
+      screen.queryByRole("link", { name: "Baixar .docx" })
     ).not.toBeInTheDocument()
   })
 
@@ -150,16 +174,20 @@ describe("resumable generation screens", () => {
         outcome: "rejected",
         current_stage: null,
         reason: "block-integrity recusou o documento",
-      }),
+      })
     )
 
     render(<App />)
 
     await screen.findByText("A geração encontrou um defeito")
-    expect(screen.getByText(/isso é um defeito da geração/i)).toBeInTheDocument()
-    expect(screen.getByText("Nenhum documento foi produzido.")).toBeInTheDocument()
     expect(
-      screen.queryByRole("link", { name: "Baixar .docx" }),
+      screen.getByText(/isso é um defeito da geração/i)
+    ).toBeInTheDocument()
+    expect(
+      screen.getByText("Nenhum documento foi produzido.")
+    ).toBeInTheDocument()
+    expect(
+      screen.queryByRole("link", { name: "Baixar .docx" })
     ).not.toBeInTheDocument()
   })
 })
