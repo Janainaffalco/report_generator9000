@@ -21,13 +21,12 @@ export function UploadPanel({ status, errorDetail, onFile }: UploadPanelProps) {
 
   return (
     <section className="flex w-full max-w-4xl flex-col items-center text-center">
-      <p className="text-sm text-muted-foreground">Comece aqui</p>
       <h1 className="mt-4 max-w-3xl font-display text-[44px] leading-[1.15] font-bold tracking-[-0.8px] text-heading">
-        Arraste sua planilha de controle. O resto é com a gente.
+        Arraste sua <span className="text-gradient-red">planilha</span> de controle. O resto é com a gente.
       </h1>
       <p className="mt-5 max-w-2xl text-base leading-6 text-foreground">
-        A gente lê a planilha, visita o site do cliente, monta o relatório no
-        Master aprovado e devolve pronto para você conferir.
+        A gente lê a planilha, visita o site do cliente e prepara o relatório
+        para você conferir.
       </p>
 
       <div

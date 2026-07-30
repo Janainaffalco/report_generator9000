@@ -89,3 +89,28 @@ export async function uploadControlSheet(
   }
   return { ok: false, detail }
 }
+
+export async function getRetainedControlSheet(
+  sheetId: string,
+): Promise<ControlSheetResult> {
+  try {
+    const response = await fetch(`/api/control-sheet/${sheetId}`)
+    if (response.ok) {
+      return {
+        ok: true,
+        data: (await response.json()) as ControlSheetResponse,
+      }
+    }
+    const body = (await response.json()) as { detail?: unknown }
+    return {
+      ok: false,
+      detail:
+        typeof body.detail === "string" ? body.detail : GENERIC_ERROR_DETAIL,
+    }
+  } catch {
+    return {
+      ok: false,
+      detail: "Não foi possível recuperar a planilha desta geração.",
+    }
+  }
+}

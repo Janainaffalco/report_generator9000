@@ -1,4 +1,5 @@
 import { useState } from "react"
+import { FileSpreadsheetIcon } from "lucide-react"
 
 import { SheetFileInput } from "@/components/SheetFileInput"
 import { Badge } from "@/components/ui/badge"
@@ -17,9 +18,10 @@ import { cn } from "@/lib/utils"
 
 interface WorkGroupsProps {
   data: ControlSheetResponse
-  status: "idle" | "loading"
+  status: "idle" | "loading" | "starting"
   errorDetail: string | null
   onReplaceFile: (file: File) => void
+  onGenerate: (rowNumber: number) => void
 }
 
 export function WorkGroups({
@@ -27,37 +29,41 @@ export function WorkGroups({
   status,
   errorDetail,
   onReplaceFile,
+  onGenerate,
 }: WorkGroupsProps) {
-  const [selected, setSelected] = useState<Set<string>>(() => new Set())
-  const isLoading = status === "loading"
+  const [selected, setSelected] = useState<string | null>(null)
+  const isLoading = status !== "idle"
 
   function toggle(key: string) {
-    setSelected((previous) => {
-      const next = new Set(previous)
-      if (next.has(key)) {
-        next.delete(key)
-      } else {
-        next.add(key)
-      }
-      return next
-    })
+    setSelected((previous) => (previous === key ? null : key))
   }
 
-  const count = selected.size
+  const engagement = data.engagements.find(
+    (item) => rowKey(item.row) === selected,
+  )
   const generateLabel =
-    count === 0
-      ? "Selecione ao menos um trabalho"
-      : count === 1
+    status === "starting"
+      ? "Iniciando geração…"
+      : engagement
         ? "Gerar relatório"
-        : `Gerar ${count} relatórios`
+        : "Selecione um trabalho"
 
   return (
     <div className="mt-10 flex w-full max-w-4xl min-w-0 flex-col gap-10">
       <div className="flex w-full min-w-0 flex-wrap items-center justify-between gap-3">
-        <p className="min-w-0 truncate text-sm text-muted-foreground">
-          Planilha enviada:{" "}
-          <span className="font-medium text-foreground">{data.filename}</span>
-        </p>
+        <div className="flex min-w-0 items-center gap-3">
+          <span className="flex size-10 shrink-0 items-center justify-center rounded-md bg-primary/10 text-primary">
+            <FileSpreadsheetIcon aria-hidden="true" className="size-5" />
+          </span>
+          <div className="min-w-0">
+            <p className="text-xs font-semibold tracking-wide text-primary uppercase">
+              Planilha enviada
+            </p>
+            <p className="truncate text-base font-semibold text-foreground">
+              {data.filename}
+            </p>
+          </div>
+        </div>
         <SheetFileInput
           label="Enviar outra planilha"
           size="sm"
@@ -72,7 +78,9 @@ export function WorkGroups({
         aria-live="polite"
         className="min-h-4 text-sm text-muted-foreground"
       >
-        {isLoading ? "Lendo a planilha, isso pode levar um instante…" : ""}
+        {status === "loading"
+          ? "Lendo a planilha, isso pode levar um instante…"
+          : ""}
       </p>
       {errorDetail && (
         <p role="alert" className="text-sm font-medium text-destructive">
@@ -83,16 +91,14 @@ export function WorkGroups({
       <ReadySection
         engagements={data.engagements}
         selected={selected}
+        engagement={engagement}
+        generateLabel={generateLabel}
+        isLoading={isLoading}
         onToggle={toggle}
+        onGenerate={onGenerate}
       />
       <StopConditionSection stopConditions={data.stop_conditions} />
       <SkippedSection skipped={data.skipped_rows} />
-
-      <div className="flex justify-end">
-        <Button size="lg" className="rounded-full" disabled={count === 0}>
-          {generateLabel}
-        </Button>
-      </div>
     </div>
   )
 }
@@ -108,19 +114,43 @@ function Field({ label, value }: { label: string; value: string }) {
 
 interface ReadySectionProps {
   engagements: Engagement[]
-  selected: Set<string>
+  selected: string | null
+  engagement: Engagement | undefined
+  generateLabel: string
+  isLoading: boolean
   onToggle: (key: string) => void
+  onGenerate: (rowNumber: number) => void
 }
 
-function ReadySection({ engagements, selected, onToggle }: ReadySectionProps) {
+function ReadySection({
+  engagements,
+  selected,
+  engagement,
+  generateLabel,
+  isLoading,
+  onToggle,
+  onGenerate,
+}: ReadySectionProps) {
   return (
     <section aria-labelledby="ready-heading" className="text-left">
-      <h2
-        id="ready-heading"
-        className="font-display text-2xl font-semibold text-heading"
-      >
-        Pronto para gerar
-      </h2>
+      <div className="sticky top-0 z-10 -mx-2 flex items-center justify-between gap-4 border-b border-border/80 bg-background/95 px-2 py-3 backdrop-blur-sm">
+        <h2
+          id="ready-heading"
+          className="font-display text-2xl font-semibold text-heading"
+        >
+          Pronto para gerar
+        </h2>
+        <Button
+          size="lg"
+          className="rounded-full"
+          disabled={!engagement || isLoading}
+          onClick={() =>
+            engagement && onGenerate(engagement.row.row_number)
+          }
+        >
+          {generateLabel}
+        </Button>
+      </div>
       {engagements.length === 0 ? (
         <p className="mt-3 text-base text-muted-foreground">
           Nenhuma linha desta planilha está pronta para gerar.
@@ -129,7 +159,7 @@ function ReadySection({ engagements, selected, onToggle }: ReadySectionProps) {
         <ul className="mt-4 flex flex-col gap-3">
           {engagements.map((engagement) => {
             const key = rowKey(engagement.row)
-            const checked = selected.has(key)
+            const checked = selected === key
             return (
               <li key={key}>
                 <Card
@@ -150,7 +180,7 @@ function ReadySection({ engagements, selected, onToggle }: ReadySectionProps) {
                         value={engagement.razao_social}
                       />
                       <Field
-                        label="Capture Origin"
+                        label="Link do site"
                         value={engagement.capture_origin}
                       />
                       <Field
@@ -162,7 +192,7 @@ function ReadySection({ engagements, selected, onToggle }: ReadySectionProps) {
                         label="Especialista"
                         value={engagement.especialista}
                       />
-                      <Field label="Kick off" value={engagement.kick_off} />
+                      <Field label="Início" value={engagement.kick_off} />
                     </div>
                   </CardContent>
                 </Card>
@@ -213,9 +243,6 @@ function StopConditionSection({
                   </p>
                   <p className="mt-1 text-sm text-muted-foreground">
                     {stop.solucao}
-                  </p>
-                  <p className="mt-2 text-xs text-muted-foreground/80">
-                    Causa original (biblioteca): {stop.cause}
                   </p>
                 </CardContent>
               </Card>

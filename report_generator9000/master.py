@@ -890,6 +890,203 @@ def _ensure_discoverable_parts(
     )
 
 
+_SIGNATURE_SECTION = "DECLARAÇÃO DE RECEBIMENTO E FINALIZAÇÃO"
+_SIGNATURE_NEXT_SECTION = "TERMO DE CESSÃO DE DIREITOS"
+_SIGNATURE_ROLE = "Assinatura do representante legal"
+# ~3 cm of indent on each side, so the rule reads as a signature line rather
+# than a full-width border.
+_SIGNATURE_LINE_INDENT = "1701"
+
+
+def _is_blank_spacer(paragraph: ElementTree.Element) -> bool:
+    """True for a paragraph typed only to push content down the page."""
+    return (
+        paragraph.tag == f"{W}p"
+        and not _paragraph_text(paragraph).strip()
+        and paragraph.find(f".//{W}drawing") is None
+        and paragraph.find(f".//{W}br") is None
+        and paragraph.find(f"{W}pPr/{W}sectPr") is None
+    )
+
+
+def _centered(paragraph: ElementTree.Element, *, keep_next: bool) -> None:
+    properties = _paragraph_properties(paragraph)
+    if keep_next:
+        keep = _ordered_child(
+            properties, f"{W}keepNext", _PARAGRAPH_PROPERTIES_CHILD_ORDER
+        )
+        keep.set(f"{W}val", "true")
+    justification = _ordered_child(
+        properties, f"{W}jc", _PARAGRAPH_PROPERTIES_CHILD_ORDER
+    )
+    justification.set(f"{W}val", "center")
+
+
+def _signature_rule_paragraph() -> ElementTree.Element:
+    """The ruled line the client signs on."""
+    paragraph = ElementTree.Element(f"{W}p")
+    properties = _paragraph_properties(paragraph)
+    borders = _ordered_child(
+        properties, f"{W}pBdr", _PARAGRAPH_PROPERTIES_CHILD_ORDER
+    )
+    ElementTree.SubElement(
+        borders,
+        f"{W}bottom",
+        {
+            f"{W}val": "single",
+            f"{W}sz": "6",
+            f"{W}space": "1",
+            f"{W}color": "404040",
+        },
+    )
+    _set_spacing(paragraph, before=960, after=0)
+    indentation = _ordered_child(
+        properties, f"{W}ind", _PARAGRAPH_PROPERTIES_CHILD_ORDER
+    )
+    for attribute in ("start", "left", "end", "right"):
+        indentation.set(f"{W}{attribute}", _SIGNATURE_LINE_INDENT)
+    _centered(paragraph, keep_next=True)
+    return paragraph
+
+
+def _signature_caption_paragraph(
+    template: ElementTree.Element, *lines: str
+) -> ElementTree.Element:
+    """Who signs, as one paragraph so *lines* can never split across pages.
+
+    Two paragraphs bound with `keepNext` would read as a Block heading to the
+    Block integrity gate, which requires an image below every bound
+    paragraph; one paragraph with line breaks holds together on its own.
+    *template* is a run from the section being closed, so the signature is set
+    in the same face as the declaration above it rather than the Calibri the
+    source's document defaults fall back to.
+    """
+    paragraph = ElementTree.Element(f"{W}p")
+    _set_spacing(paragraph, before=0, after=0)
+    properties = _paragraph_properties(paragraph)
+    keep_lines = _ordered_child(
+        properties, f"{W}keepLines", _PARAGRAPH_PROPERTIES_CHILD_ORDER
+    )
+    keep_lines.set(f"{W}val", "true")
+    _centered(paragraph, keep_next=False)
+    for index, text in enumerate(lines):
+        run = _run_with_text(template, text)
+        if index:
+            run.insert(len(run) - 1, ElementTree.Element(f"{W}br"))
+        paragraph.append(run)
+    return paragraph
+
+
+def _page_break_paragraph() -> ElementTree.Element:
+    paragraph = ElementTree.Element(f"{W}p")
+    run = ElementTree.SubElement(paragraph, f"{W}r")
+    ElementTree.SubElement(run, f"{W}br", {f"{W}type": "page"})
+    return paragraph
+
+
+def _add_signature_line(
+    parts: dict[str, bytes], changes: list[_Change]
+) -> None:
+    """Close the declaration with a signature line, not typed blank lines.
+
+    The source pushed the following section onto a fresh page with a run of
+    empty paragraphs before its page break, which is what produced the stray
+    blank page: any reflow above them spills the spacers onto a page of their
+    own. A signature line plus a single page break says the same thing
+    structurally and cannot grow a blank page.
+    """
+    original_document = parts["word/document.xml"]
+    document = ElementTree.fromstring(original_document)
+    body = document.find(f"{W}body")
+    if body is None:
+        raise MasterBuildError("word/document.xml has no body")
+
+    def section_bounds() -> tuple[int, int]:
+        children = list(body)
+        start = next(
+            (
+                index
+                for index, item in enumerate(children)
+                if item.tag == f"{W}p"
+                and _paragraph_text(item).strip().casefold()
+                == _SIGNATURE_SECTION.casefold()
+            ),
+            None,
+        )
+        if start is None:
+            raise MasterBuildError(
+                f"declaration section not found: {_SIGNATURE_SECTION}"
+            )
+        end = next(
+            (
+                index
+                for index, item in enumerate(children[start + 1 :], start + 1)
+                if item.tag == f"{W}p"
+                and _paragraph_text(item).strip().casefold()
+                == _SIGNATURE_NEXT_SECTION.casefold()
+            ),
+            len(children),
+        )
+        return start, end
+
+    start, end = section_bounds()
+    for spacer in [
+        item for item in list(body)[start + 1 : end] if _is_blank_spacer(item)
+    ]:
+        body.remove(spacer)
+        changes.append(
+            _Change(
+                "declaration spacer removed",
+                "word/document.xml",
+                "empty paragraph",
+                "signature line and one page break",
+            )
+        )
+
+    start, end = section_bounds()
+    children = list(body)
+    template_run = next(
+        (
+            run
+            for item in children[start + 1 : end]
+            if _paragraph_text(item).strip()
+            for run in item.findall(f"{W}r")
+        ),
+        ElementTree.Element(f"{W}r"),
+    )
+    existing_break = next(
+        (
+            item
+            for item in children[start + 1 : end]
+            if item.find(f".//{W}br[@{W}type='page']") is not None
+        ),
+        None,
+    )
+    insertion_index = (
+        children.index(existing_break) if existing_break is not None else end
+    )
+    signature = (
+        _signature_rule_paragraph(),
+        _signature_caption_paragraph(
+            template_run, "{{RAZAO_SOCIAL}}", _SIGNATURE_ROLE
+        ),
+    )
+    for offset, paragraph in enumerate(signature):
+        body.insert(insertion_index + offset, paragraph)
+    if existing_break is None:
+        body.insert(insertion_index + len(signature), _page_break_paragraph())
+    changes.append(
+        _Change(
+            "signature line added",
+            "word/document.xml",
+            _SIGNATURE_SECTION,
+            f"ruled signature line; {{{{RAZAO_SOCIAL}}}}; {_SIGNATURE_ROLE}; "
+            "page break",
+        )
+    )
+    parts["word/document.xml"] = serialize_xml(document, original_document)
+
+
 def _add_signoff_structure(
     parts: dict[str, bytes], changes: list[_Change]
 ) -> None:
@@ -1356,6 +1553,7 @@ def build_master(source: str | Path, destination: str | Path) -> MasterBuild:
 
     _add_signoff_structure(parts, changes)
     _canonicalize_blocks(parts, changes)
+    _add_signature_line(parts, changes)
     _embed_montserrat(parts, changes)
     master_path.parent.mkdir(parents=True, exist_ok=True)
     _deterministic_zip(master_path, parts)

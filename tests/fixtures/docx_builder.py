@@ -54,6 +54,7 @@ class ParagraphSpec:
     font: str | None = None
     direct_numbering: tuple[int, int] | None = None
     dot_leader_tab: bool = False
+    page_break: bool = False
 
 
 @dataclass(frozen=True)
@@ -146,6 +147,8 @@ def _paragraph_xml(spec: ParagraphSpec, drawing_id: int) -> str:
     runs_xml = "".join(
         f"<w:r>{run_properties}<w:t>{_escape(run)}</w:t></w:r>" for run in spec.runs
     )
+    if spec.page_break:
+        runs_xml += '<w:r><w:br w:type="page"/></w:r>'
     if spec.hyperlink is not None:
         runs_xml = (
             f'<w:hyperlink r:id="{spec.hyperlink}">{runs_xml}</w:hyperlink>'

@@ -1,14 +1,32 @@
+import json
 import sys
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from threading import Event
+from time import monotonic, sleep
+from types import SimpleNamespace
 
+import pytest
 from fastapi.testclient import TestClient
 
+from report_generator9000.generate import StopCondition
+from report_generator9000.master import build_master
+from report_generator9000.prose import (
+    GroundedField,
+    ProseConfig,
+    ProseRequest,
+    ProseResponse,
+)
 from report_generator9000.sheet_store import SheetStore
+from report_generator9000.control_sheet import Engagement
+from report_generator9000.runs import GateRejected, RunService, RunStore, STAGES
 from report_generator9000.web import DEFAULT_STATIC_DIR, create_app
 
 
 sys.path.insert(0, str(Path(__file__).with_name("fixtures")))
 import generate_control_sheet  # noqa: E402
+from tests.test_lista_paginas import serve_fixture_site  # noqa: E402
+from tests.test_master_build import approved_source  # noqa: E402
 
 
 FIXTURE = Path(__file__).parent / "fixtures" / "control-sheet-cases.xlsx"
@@ -307,3 +325,291 @@ def test_the_same_pasta_on_two_rows_is_disambiguated_by_row_number(
         {"pasta": "40-2026", "row_number": 2},
         {"pasta": "40-2026", "row_number": 14},
     ]
+
+
+def test_starting_one_engagement_returns_immediately_then_polls_and_downloads(
+    tmp_path: Path,
+) -> None:
+    sheet_store = SheetStore(tmp_path / "sheets")
+    app = create_app(
+        static_dir=tmp_path / "missing-web",
+        sheet_store=sheet_store,
+    )
+    release = Event()
+    entered = Event()
+
+    def assemble(master, output_root, engagement, gated_root, **options):
+        progress = options["progress"]
+        for stage in STAGES:
+            if stage == "capture":
+                entered.set()
+                release.wait(timeout=5)
+            progress(stage, 3 if stage == "derive_pages" else None)
+        document = (
+            Path(output_root)
+            / f"RELATÃ“RIO TÃ‰CNICO FINAL - {engagement.pasta}_{engagement.razao_social}.docx"
+        )
+        document.parent.mkdir(parents=True, exist_ok=True)
+        document.write_bytes(b"generated docx")
+        return SimpleNamespace(
+            pages=(object(), object(), object()),
+            report=SimpleNamespace(status="draft", document=document),
+        )
+
+    service = RunService(
+        store=RunStore(tmp_path / "runs"),
+        master=tmp_path / "MASTER.docx",
+        output_root=tmp_path / "outputs",
+        gated_drop_root=tmp_path / "gated",
+        assembler=assemble,
+        no_llm=True,
+    )
+    app.state.run_service = service
+    client = TestClient(app)
+    uploaded = _upload(client, FIXTURE)
+
+    started_at = monotonic()
+    response = client.post(
+        "/api/runs",
+        json={
+            "sheet_id": uploaded.json()["sheet_id"],
+            "row_number": 2,
+        },
+    )
+    elapsed = monotonic() - started_at
+
+    assert response.status_code == 202
+    assert elapsed < 1
+    assert response.headers["location"] == (
+        f"/api/runs/{response.json()['run_id']}"
+    )
+    assert entered.wait(timeout=2)
+    running = client.get(response.headers["location"]).json()
+    assert running["outcome"] == "running"
+    assert running["current_stage"] == "capture"
+    assert running["page_count"] == 3
+    assert [stage["name"] for stage in running["stages"]] == list(STAGES)
+    assert running["stage_history"] == [
+        "read_row",
+        "open_origin",
+        "derive_pages",
+    ]
+    assert [stage["state"] for stage in running["stages"][:4]] == [
+        "done",
+        "done",
+        "done",
+        "current",
+    ]
+
+    release.set()
+    deadline = monotonic() + 3
+    finished = running
+    while finished["outcome"] == "running" and monotonic() < deadline:
+        sleep(0.01)
+        finished = client.get(response.headers["location"]).json()
+
+    assert finished["outcome"] == "finished"
+    assert finished["status"] == "draft"
+    assert finished["page_count"] == 3
+    assert finished["filename"] == (
+        "RELATÃ“RIO TÃ‰CNICO FINAL - 40-2026_DENISE BARROS DE ALMEIDA.docx"
+    )
+    download = client.get(finished["download_url"])
+    assert download.status_code == 200
+    assert download.content == b"generated docx"
+    disposition = download.headers["content-disposition"]
+    assert "40-2026_DENISE%20BARROS%20DE%20ALMEIDA.docx" in disposition
+    service.shutdown()
+
+
+@pytest.mark.parametrize(
+    ("error", "outcome"),
+    [
+        (StopCondition("Capture Origin indisponÃ­vel"), "stopped"),
+        (GateRejected("block-integrity recusou o documento"), "rejected"),
+    ],
+)
+def test_failed_runs_name_the_terminal_outcome_and_never_offer_a_document(
+    tmp_path: Path,
+    error: Exception,
+    outcome: str,
+) -> None:
+    sheet_store = SheetStore(tmp_path / "sheets")
+    app = create_app(
+        static_dir=tmp_path / "missing-web",
+        sheet_store=sheet_store,
+    )
+
+    def fail(*args, **options):
+        options["progress"]("read_row", None)
+        raise error
+
+    service = RunService(
+        store=RunStore(tmp_path / "runs"),
+        master=tmp_path / "MASTER.docx",
+        output_root=tmp_path / "outputs",
+        gated_drop_root=tmp_path / "gated",
+        assembler=fail,
+        no_llm=True,
+    )
+    app.state.run_service = service
+    client = TestClient(app)
+    uploaded = _upload(client, FIXTURE)
+    started = client.post(
+        "/api/runs",
+        json={"sheet_id": uploaded.json()["sheet_id"], "row_number": 2},
+    )
+    location = started.headers["location"]
+    deadline = monotonic() + 2
+    record = client.get(location).json()
+    while record["outcome"] == "running" and monotonic() < deadline:
+        sleep(0.01)
+        record = client.get(location).json()
+
+    assert record["outcome"] == outcome
+    assert record["reason"] == str(error)
+    assert record["filename"] is None
+    assert record["download_url"] is None
+    assert client.get(f"/api/runs/{record['run_id']}/download").status_code == 404
+    service.shutdown()
+
+
+def test_http_run_drives_real_workbook_master_cloning_and_gates(
+    tmp_path: Path,
+) -> None:
+    class ProseProvider:
+        def generate(
+            self,
+            request: ProseRequest,
+            config: ProseConfig,
+        ) -> ProseResponse:
+            assert request.site_text
+            return ProseResponse(
+                company_description=GroundedField("Texto para revisão", False),
+                briefing_objective=GroundedField("Objetivo para revisão", False),
+            )
+
+    master = build_master(
+        approved_source(tmp_path / "approved.docx"),
+        tmp_path / "master",
+    ).master
+    sheet_store = SheetStore(tmp_path / "sheets")
+    app = create_app(
+        static_dir=tmp_path / "missing-web",
+        sheet_store=sheet_store,
+    )
+    service = RunService(
+        store=RunStore(tmp_path / "runs"),
+        master=master,
+        output_root=tmp_path / "outputs",
+        gated_drop_root=tmp_path / "gated",
+        prose_provider=ProseProvider(),
+        prose_config=ProseConfig("test-provider", 200),
+    )
+    app.state.run_service = service
+    client = TestClient(app)
+
+    with serve_fixture_site() as origin:
+        workbook = generate_control_sheet.build(
+            tmp_path / "one-engagement.xlsx",
+            rows=(
+                (
+                    "011616/2026",
+                    "40-2026",
+                    generate_control_sheet.IN_SCOPE,
+                    "52052612000121",
+                    "CLIENTE",
+                    "Especialista",
+                    datetime(2026, 4, 15),
+                    origin,
+                    "",
+                ),
+            ),
+            row_numbers=(2,),
+        )
+        gated_folder = tmp_path / "gated" / "40-2026_CLIENTE"
+        gated_folder.mkdir(parents=True)
+        (gated_folder / "valores.json").write_text(
+            json.dumps(
+                {
+                    "pasta": "40-2026",
+                    "razao_social": "CLIENTE",
+                    "lista_paginas": [
+                        {
+                            "tipo": "pagina_principal",
+                            "rotulo": "Home",
+                            "url": "/",
+                        }
+                    ],
+                }
+            ),
+            encoding="utf-8",
+        )
+        uploaded = _upload(client, workbook)
+        started = client.post(
+            "/api/runs",
+            json={
+                "sheet_id": uploaded.json()["sheet_id"],
+                "row_number": 2,
+            },
+        )
+        location = started.headers["location"]
+        deadline = monotonic() + 30
+        record = client.get(location).json()
+        while record["outcome"] == "running" and monotonic() < deadline:
+            sleep(0.05)
+            record = client.get(location).json()
+
+    assert record["outcome"] == "finished", record["reason"]
+    assert record["page_count"] == 3
+    assert [stage["name"] for stage in record["stages"]] == list(STAGES)
+    assert {stage["state"] for stage in record["stages"]} == {"done"}
+    assert record["stage_history"] == list(STAGES)
+    assert record["status"] == "draft"
+    downloaded = client.get(record["download_url"])
+    assert downloaded.status_code == 200
+    assert downloaded.content[:2] == b"PK"
+    assert "40-2026_CLIENTE.docx" in record["filename"]
+    service.shutdown()
+
+
+def test_expired_run_is_gone_even_when_no_new_run_was_submitted(
+    tmp_path: Path,
+) -> None:
+    app = create_app(
+        static_dir=tmp_path / "missing-web",
+        sheet_store=SheetStore(tmp_path / "sheets"),
+    )
+    store = RunStore(tmp_path / "runs")
+    service = RunService(
+        store=store,
+        master=tmp_path / "MASTER.docx",
+        output_root=tmp_path / "outputs",
+        gated_drop_root=tmp_path / "gated",
+        no_llm=True,
+    )
+    app.state.run_service = service
+    record = store.create(
+        Engagement(
+            row_number=2,
+            demanda="011616/2026",
+            pasta="40-2026",
+            razao_social="CLIENTE",
+            cnpj="52.052.612/0001-21",
+            kick_off=datetime(2026, 4, 15),
+            especialista="Especialista",
+            capture_origin="https://example.test/",
+            published_domain=None,
+        ),
+        "retained-sheet",
+    )
+    path = tmp_path / "runs" / f"{record.run_id}.json"
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    payload["updated_at"] = (datetime.now(UTC) - timedelta(days=8)).isoformat()
+    path.write_text(json.dumps(payload), encoding="utf-8")
+
+    client = TestClient(app)
+    assert client.get(f"/api/runs/{record.run_id}").status_code == 404
+    assert client.get(f"/api/runs/{record.run_id}/download").status_code == 404
+    assert not path.exists()
+    service.shutdown()

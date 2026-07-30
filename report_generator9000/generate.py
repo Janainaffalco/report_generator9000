@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import tempfile
 from dataclasses import asdict, dataclass, replace
 from pathlib import Path
@@ -13,6 +14,7 @@ from zipfile import BadZipFile, ZipFile
 from .artifact_paths import engagement_artifact_key
 from .control_sheet import Engagement
 from .docx_package import DocxPackage, open_docx_package
+from .domains import derive_published_domain
 from .gates import GateReport, run_gates
 from .gates.master import BOILERPLATE_MEDIA
 from .gated_inputs import (
@@ -37,9 +39,17 @@ from .run_context import (
     Grounding,
     Pendencia,
     RunContext,
+    classification_label,
     is_within,
+    pendencia_marker,
 )
 
+
+# Only the bracketed markers this pipeline writes -- a Pendência marker or the
+# provisional-domain tag -- are emphasised. Brackets that happen to occur in
+# generated prose are left exactly as the provider wrote them.
+_GAP = re.compile(r"(\[(?:PENDÊNCIA|DOMÍNIO PROVISÓRIO)[^\[\]]*\])")
+_GAP_COLOR = "C00000"
 
 SPREADSHEET_TOKENS = {
     "{{DEMANDA}}": "demanda",
@@ -84,6 +94,10 @@ class ReportGenerationError(ValueError):
 
 class StopCondition(ReportGenerationError):
     """A gate rejected the staged package, so the row produces nothing."""
+
+
+class GateRejected(StopCondition):
+    """The correctness gates rejected a staged document as defective."""
 
 
 def _media_location(
@@ -133,6 +147,32 @@ def _placeholder_pixel_dimensions(
         item for item in package.media if item.part_name == part_name
     )
     return media.width, media.height
+
+
+def _emphasized_value(value: str) -> bytes:
+    """Substitute *value* so each `[bracketed]` gap renders bold and red.
+
+    The Master gate proves every Token is the whole text of its own run
+    (`token-not-one-run`), so a Token's bytes always sit alone inside one
+    `<w:t>`: closing that run at the Token's position, emitting the emphasised
+    run, and reopening a plain run is well-formed for every Slot in the
+    package. Anything outside the brackets -- a derived domain, say -- keeps
+    the surrounding run's own formatting.
+    """
+    fragments: list[str] = []
+    for segment in _GAP.split(value):
+        if not segment:
+            continue
+        if segment.startswith("[") and segment.endswith("]"):
+            fragments.append(
+                "</w:t></w:r>"
+                f'<w:r><w:rPr><w:b/><w:color w:val="{_GAP_COLOR}"/></w:rPr>'
+                f'<w:t xml:space="preserve">{escape(segment)}</w:t></w:r>'
+                '<w:r><w:t xml:space="preserve">'
+            )
+        else:
+            fragments.append(escape(segment))
+    return "".join(fragments).encode("utf-8")
 
 
 def report_output_path(output_root: str | Path, engagement: Engagement) -> Path:
@@ -219,7 +259,7 @@ def _write_sidecars(
         )
         lines.extend(
             f"| {item.slot} | {item.name} | {item.page} | "
-            f"{item.classification} | {item.reason} | "
+            f"{classification_label(item.classification)} | {item.reason} | "
             f"{item.required_action} |"
             for item in context.pendencias
         )
@@ -293,11 +333,43 @@ def generate_report(
         *drafted.pendencias,
     ]
     replacement_text.update(drafted.token_values)
+    emphasized_tokens: set[str] = set()
+    published_domain = derive_published_domain(
+        engagement.capture_origin, engagement.published_domain
+    )
     for slot, tokens in GATED_VALUE_SLOTS:
         if all(token in supplied_gated_values for token in tokens):
             continue
-        evidence = f"[PEND\u00caNCIA GATED: {slot}]"
+        if slot == "dominio_publicado" and published_domain is not None:
+            replacement_text.update(
+                {
+                    "{{DOMINIO_PUBLICADO}}": published_domain.display,
+                    "{{WP_ADMIN_URL}}": published_domain.wp_admin_url,
+                }
+            )
+            if published_domain.provisional:
+                emphasized_tokens.add("{{DOMINIO_PUBLICADO}}")
+                pendencias.append(
+                    Pendencia(
+                        slot=slot,
+                        classification="REVIEW",
+                        reason=(
+                            "site publicado em dom\u00ednio provis\u00f3rio de "
+                            "hospedagem, derivado do Link deste relat\u00f3rio"
+                        ),
+                        evidence=published_domain.display,
+                        name="dom\u00ednio publicado",
+                        page="HOSPEDAGEM E DADOS T\u00c9CNICOS",
+                        required_action=(
+                            "Confirmar o dom\u00ednio definitivo e republicar o "
+                            "site antes da entrega"
+                        ),
+                    )
+                )
+            continue
+        evidence = pendencia_marker("GATED", slot)
         replacement_text.update({token: evidence for token in tokens})
+        emphasized_tokens.update(tokens)
         pendencias.append(
             Pendencia(
                 slot=slot,
@@ -311,8 +383,15 @@ def generate_report(
                 ),
             )
         )
+    for token, value in drafted.token_values.items():
+        if _GAP.search(value):
+            emphasized_tokens.add(token)
     values = {
-        token: escape(value).encode("utf-8")
+        token: (
+            _emphasized_value(value)
+            if token in emphasized_tokens
+            else escape(value).encode("utf-8")
+        )
         for token, value in replacement_text.items()
     }
     token_bytes = {token: token.encode("ascii") for token in values}
@@ -379,7 +458,7 @@ def generate_report(
             )
             content = render_placeholder(
                 parts[CLIENT_LOGO_PART],
-                failure.classification,
+                classification_label(failure.classification),
                 "logo do cliente",
                 width,
                 height,
@@ -464,7 +543,11 @@ def generate_report(
                 master_package, part_name
             )
             content = render_placeholder(
-                parts[part_name], classification, slot, width, height
+                parts[part_name],
+                classification_label(classification),
+                slot,
+                width,
+                height,
             )
             parts[part_name] = content
             digest = hashlib.sha256(content).hexdigest()
@@ -521,7 +604,7 @@ def generate_report(
         )
         content = render_placeholder(
             parts[media.part_name],
-            "TOOL_BLOCKED",
+            classification_label("TOOL_BLOCKED"),
             page,
             width,
             height,

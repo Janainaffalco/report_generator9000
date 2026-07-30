@@ -12,6 +12,7 @@ from google import genai
 from google.genai import types
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
+from . import events
 from .prose import (
     GroundingCitation,
     GroundedField,
@@ -23,7 +24,7 @@ from .prose import (
 
 DEFAULT_GEMINI_MODEL = "gemini-3.5-flash"
 DEFAULT_GEMINI_FALLBACK_MODEL = "gemini-3.5-flash-lite"
-DEFAULT_OUTPUT_BUDGET = 1024
+DEFAULT_OUTPUT_BUDGET = 5096
 DEFAULT_TIMEOUT_SECONDS = 60
 DEFAULT_MAX_ATTEMPTS = 3
 _RETRYABLE_STATUS_CODES = (408, 429, 500, 502, 503, 504)
@@ -189,6 +190,27 @@ def _is_overloaded(error: Exception) -> bool:
     return code == 503 and status == "UNAVAILABLE"
 
 
+def _error_details(error: Exception) -> dict[str, events.Scalar]:
+    """Transport status only; the provider's own message is not metadata."""
+    code = getattr(error, "code", None)
+    if code is not None and not isinstance(code, (str, int, float, bool)):
+        code = str(code)
+    status = getattr(error, "status", None)
+    if status is not None:
+        status = str(status)
+    return {"status": status, "code": code}
+
+
+def _truncated_response(response: Any, limit: int = 500) -> str:
+    try:
+        text = getattr(response, "text", None)
+        if text is None:
+            text = repr(response)
+        return str(text)[:limit]
+    except Exception as error:  # never mask the parse failure being reported
+        return f"<unreadable response: {type(error).__name__}>"
+
+
 def _grounded_field(payload: _FieldPayload) -> GroundedField:
     citations = tuple(
         GroundingCitation(
@@ -249,15 +271,37 @@ class GeminiProseProvider:
             response_mime_type="application/json",
             response_json_schema=_GeminiPayload.model_json_schema(),
         )
+        prompt_text = _source_prompt(request)
+        prompt_chars = len(prompt_text)
+        source_count = len(request.site_text)
 
         def request_model(model: str) -> Any:
-            response = self._client.models.generate_content(
+            with events.operation(
+                "gemini_call",
                 model=model,
-                contents=_source_prompt(request),
-                config=generation_config,
-            )
-            self.last_model_used = model
-            return response
+                source_count=source_count,
+                prompt_chars=prompt_chars,
+                output_budget=config.output_budget,
+            ) as result:
+                try:
+                    response = self._client.models.generate_content(
+                        model=model,
+                        contents=prompt_text,
+                        config=generation_config,
+                    )
+                except Exception as error:
+                    details = _error_details(error)
+                    result.update(details)
+                    events.notice(
+                        "gemini_call_failed",
+                        severity="error",
+                        model=model,
+                        **details,
+                        detail={"message": str(error)[:500]},
+                    )
+                    raise
+                self.last_model_used = model
+                return response
 
         try:
             response = request_model(config.model)
@@ -273,12 +317,24 @@ class GeminiProseProvider:
                         "Gemini request failed for both primary and "
                         f"fallback models: {type(fallback_error).__name__}"
                     ) from fallback_error
+                events.notice(
+                    "gemini_fallback_succeeded",
+                    severity="warning",
+                    primary_model=config.model,
+                    fallback_model=self._fallback_model,
+                )
             else:
                 raise GeminiProviderError(
                     f"Gemini request failed: {type(error).__name__}"
                 ) from error
 
         if _budget_exhausted(response):
+            events.notice(
+                "gemini_budget_exhausted",
+                severity="warning",
+                model=self.last_model_used,
+                output_budget=config.output_budget,
+            )
             empty = GroundedField(value=None, grounded=False)
             return ProseResponse(
                 company_description=empty,
@@ -294,6 +350,13 @@ class GeminiProseProvider:
                 else _GeminiPayload.model_validate_json(response.text)
             )
         except (AttributeError, TypeError, ValidationError, ValueError) as error:
+            events.notice(
+                "gemini_response_unparseable",
+                severity="error",
+                model=self.last_model_used,
+                error=type(error).__name__,
+                detail={"response_excerpt": _truncated_response(response)},
+            )
             raise GeminiProviderError(
                 "Gemini returned an invalid structured response"
             ) from error

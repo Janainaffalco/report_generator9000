@@ -1,0 +1,66 @@
+services:
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile.dev
+      target: backend
+    environment:
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      GEMINI_MODEL: ${GEMINI_MODEL:-gemini-3.5-flash}
+      GEMINI_FALLBACK_MODEL: ${GEMINI_FALLBACK_MODEL:-gemini-3.5-flash-lite}
+      GEMINI_OUTPUT_BUDGET: ${GEMINI_OUTPUT_BUDGET:-1024}
+      GEMINI_TIMEOUT_SECONDS: ${GEMINI_TIMEOUT_SECONDS:-60}
+      GEMINI_MAX_ATTEMPTS: ${GEMINI_MAX_ATTEMPTS:-3}
+      REPORT_DATA_ROOT: /app/data
+      REPORT_MASTER_PATH: /app/data/master/MASTER.docx
+      REPORT_GATED_DROP_ROOT: /app/data/gated
+      WATCHFILES_FORCE_POLLING: "true"
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./report_generator9000:/app/report_generator9000
+      - ./.data:/app/data
+      - type: bind
+        source: ${REPORT_DEV_MASTER_PATH:-./master-build-check/MASTER.docx}
+        target: /app/data/master/MASTER.docx
+        read_only: true
+        bind:
+          create_host_path: false
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/health', timeout=3).read()",
+        ]
+      interval: 10s
+      timeout: 5s
+      start_period: 10s
+      retries: 3
+
+  frontend:
+    build:
+      context: .
+      dockerfile: Dockerfile.dev
+      target: frontend
+    environment:
+      CHOKIDAR_USEPOLLING: "true"
+      VITE_API_PROXY_TARGET: http://backend:8000
+    depends_on:
+      backend:
+        condition: service_healthy
+    ports:
+      - "5173:5173"
+    volumes:
+      - ./web:/app/web
+      - frontend_node_modules:/app/web/node_modules
+    command:
+      [
+        "sh",
+        "-c",
+        "pnpm install --frozen-lockfile && exec pnpm dev --host 0.0.0.0",
+      ]
+
+volumes:
+  frontend_node_modules:
