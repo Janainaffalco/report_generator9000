@@ -714,6 +714,7 @@ def test_finished_report_returns_pendencias_checks_and_download_filename(
                     ),
                 ),
             ),
+            GateResult(gate="token-residue"),
         )
     )
     pendencias = (
@@ -754,14 +755,15 @@ def test_finished_report_returns_pendencias_checks_and_download_filename(
     assert response.status_code == 200
     body = response.json()
     assert body["status"] == "draft"
-    assert body["page_count"] == 3
+    assert body["page_count"] == 5
     assert body["filename"].endswith(".docx")
     assert body["download_url"] == f"/api/runs/{run_id}/download"
-    assert [check["passed"] for check in body["checks"]] == [True, False]
+    assert [check["passed"] for check in body["checks"]] == [True, False, True]
     check_labels = [check["label"] for check in body["checks"]]
     assert "media-provenance" not in check_labels
     assert "block-integrity" not in check_labels
-    assert len(set(check_labels)) == 2
+    assert "Nenhum campo do Master ficou por preencher" in check_labels
+    assert len(set(check_labels)) == 3
 
     by_classification = {
         item["classification"]: item for item in body["pendencias"]
@@ -864,18 +866,19 @@ def test_every_page_of_the_document_is_reachable_in_the_preview(
     rendered = sorted(tmp_path.glob("outputs/*/previews/preview-*.png"))
 
     body = client.get(f"/api/runs/{run_id}/report").json()
+    run = client.get(f"/api/runs/{run_id}").json()
 
     assert rendered, "the fake assembler rendered no preview pages"
-    assert body["preview_page_count"] == len(rendered)
-    assert body["preview_page_count"] != body["page_count"]
+    assert body["page_count"] == len(rendered)
+    assert body["page_count"] != run["page_count"]
     served = [
         client.get(f"/api/runs/{run_id}/previews/{page}")
-        for page in range(1, body["preview_page_count"] + 1)
+        for page in range(1, body["page_count"] + 1)
     ]
     assert [response.status_code for response in served] == [200] * len(rendered)
     assert (
         client.get(
-            f"/api/runs/{run_id}/previews/{body['preview_page_count'] + 1}"
+            f"/api/runs/{run_id}/previews/{body['page_count'] + 1}"
         ).status_code
         == 404
     )

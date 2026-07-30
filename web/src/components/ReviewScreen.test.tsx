@@ -1,6 +1,12 @@
 import "@testing-library/jest-dom/vitest"
 
-import { cleanup, fireEvent, render, screen, within } from "@testing-library/react"
+import {
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  within,
+} from "@testing-library/react"
 import { afterEach, describe, expect, it, vi } from "vitest"
 
 import { ReviewScreen } from "@/components/ReviewScreen"
@@ -43,8 +49,7 @@ describe("ReviewScreen", () => {
         response({
           run_id: "run-1",
           status: "draft",
-          preview_page_count: 5,
-          page_count: 3,
+          page_count: 5,
           filename: run.filename,
           download_url: run.download_url,
           pendencias: [
@@ -77,8 +82,8 @@ describe("ReviewScreen", () => {
             },
           ],
           checks: [],
-        }),
-      ),
+        })
+      )
     )
 
     render(<ReviewScreen run={run} />)
@@ -92,17 +97,17 @@ describe("ReviewScreen", () => {
 
     expect(within(gated).getByText("NÃO FORNECIDO")).toBeInTheDocument()
     expect(
-      within(gated).getByText(/nenhuma automação consegue obter/i),
+      within(gated).getByText(/nenhuma automação consegue obter/i)
     ).toBeInTheDocument()
     expect(
-      within(toolBlocked).getByText("FALHA NA AUTOMAÇÃO"),
+      within(toolBlocked).getByText("FALHA NA AUTOMAÇÃO")
     ).toBeInTheDocument()
     expect(
-      within(toolBlocked).getByText(/gerar de novo pode resolver/i),
+      within(toolBlocked).getByText(/gerar de novo pode resolver/i)
     ).toBeInTheDocument()
     expect(within(undeclared).getByText("NÃO DECLARADO")).toBeInTheDocument()
     expect(
-      within(undeclared).getByText(/característica do site/i),
+      within(undeclared).getByText(/característica do site/i)
     ).toBeInTheDocument()
 
     // The three classes must never read as the same thing.
@@ -114,7 +119,7 @@ describe("ReviewScreen", () => {
     expect(new Set(labels).size).toBe(3)
 
     expect(
-      screen.getByText(/podem ser resolvidas aqui na revisão ou/i),
+      screen.getByText(/podem ser resolvidas agora ou depois, direto no Word/i)
     ).toBeInTheDocument()
   })
 
@@ -125,23 +130,25 @@ describe("ReviewScreen", () => {
         response({
           run_id: "run-1",
           status: "complete",
-          preview_page_count: 4,
-          page_count: 2,
+          page_count: 4,
           filename: run.filename,
           download_url: run.download_url,
           pendencias: [],
           checks: [
-            { label: "Nenhuma imagem de outro cliente no arquivo", passed: true },
+            {
+              label: "Nenhuma imagem de outro cliente no arquivo",
+              passed: true,
+            },
           ],
-        }),
-      ),
+        })
+      )
     )
 
     render(<ReviewScreen run={run} />)
 
-    expect(await screen.findByText("Pronto para assinatura")).toBeInTheDocument()
+    expect(await screen.findByText("Completo")).toBeInTheDocument()
     expect(
-      screen.getAllByText(/pronto para assinatura/i).length,
+      screen.getAllByText(/pronto para assinatura/i).length
     ).toBeGreaterThanOrEqual(2)
   })
 
@@ -152,8 +159,7 @@ describe("ReviewScreen", () => {
         response({
           run_id: "run-1",
           status: "complete",
-          preview_page_count: 5,
-          page_count: 3,
+          page_count: 5,
           filename: run.filename,
           download_url: run.download_url,
           pendencias: [],
@@ -161,22 +167,19 @@ describe("ReviewScreen", () => {
             { label: "Os links apontam para o cliente certo", passed: true },
             { label: "Todo título de Bloco tem sua imagem", passed: false },
           ],
-        }),
-      ),
+        })
+      )
     )
 
     render(<ReviewScreen run={run} />)
 
     await screen.findByText("Os links apontam para o cliente certo")
     expect(
-      screen.getByText("Todo título de Bloco tem sua imagem"),
+      screen.getByText("Todo título de Bloco tem sua imagem")
     ).toBeInTheDocument()
-    // The rail and the counter follow the document's own pages, never the
-    // Lista de Páginas — the response deliberately disagrees on the two.
+    // The report resource's page_count is the document's own count.
     expect(screen.getByText("Página 1 de 5")).toBeInTheDocument()
-    expect(
-      screen.getByText(/aproximada da paginação/i),
-    ).toBeInTheDocument()
+    expect(screen.getByText(/aproximada da paginação/i)).toBeInTheDocument()
 
     const pageButtons = screen.getAllByRole("button")
     expect(pageButtons).toHaveLength(5)
@@ -190,7 +193,7 @@ describe("ReviewScreen", () => {
     expect(pageButtons[4]).toHaveAttribute("aria-current", "page")
     expect(document.querySelector(".preview-frame img")).toHaveAttribute(
       "src",
-      "/api/runs/run-1/previews/5",
+      "/api/runs/run-1/previews/5"
     )
   })
 })

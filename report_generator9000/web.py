@@ -127,7 +127,7 @@ _CLASSIFICATION_EXPLANATIONS = {
 _GATE_LABELS = {
     "media-provenance": "Nenhuma imagem de outro cliente no arquivo",
     "link-provenance": "Os links apontam para o cliente certo",
-    "token-residue": "Nenhum campo do modelo ficou por preencher",
+    "token-residue": "Nenhum campo do Master ficou por preencher",
     "engagement-scope": "Os arquivos usados pertencem a este cliente",
     "block-integrity": "Todo título de Bloco tem sua imagem",
     "pendencias-agreement": "A lista de Pendências bate com o documento",
@@ -221,10 +221,9 @@ class CheckOut(BaseModel):
 class FinishedReportResponse(BaseModel):
     run_id: str
     status: str
-    # How many pages the *document* has, which is what the review screen pages
-    # through. Distinct from the run's page_count, which is the size of the
-    # Lista de Páginas — see RunRecord.
-    preview_page_count: int
+    # This resource describes the finished document, so its page count is the
+    # rendered document's count. RunResponse.page_count separately narrates
+    # the size of the client's Lista de Páginas while generation is running.
     page_count: int
     filename: str
     download_url: str
@@ -270,8 +269,7 @@ def _report_response(record: RunRecord) -> FinishedReportResponse:
     return FinishedReportResponse(
         run_id=record.run_id,
         status=record.report_status or "draft",
-        preview_page_count=len(record.previews),
-        page_count=record.page_count or 0,
+        page_count=len(record.previews),
         filename=record.filename or "",
         download_url=f"/api/runs/{record.run_id}/download",
         pendencias=[

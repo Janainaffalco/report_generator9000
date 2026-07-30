@@ -64,7 +64,10 @@ export function ReviewScreen({ run }: ReviewScreenProps) {
 
   if (errorDetail) {
     return (
-      <section className="mt-10 w-full max-w-3xl" aria-labelledby="review-error">
+      <section
+        className="mt-10 w-full max-w-3xl"
+        aria-labelledby="review-error"
+      >
         <h1 id="review-error" className="font-display text-2xl font-semibold">
           Não foi possível carregar a revisão
         </h1>
@@ -84,6 +87,12 @@ export function ReviewScreen({ run }: ReviewScreenProps) {
   }
 
   const readyForSignature = report.pendencias.length === 0
+  const statusLabel =
+    report.status === "complete"
+      ? "Completo"
+      : report.status === "draft"
+        ? "Rascunho com Pendências"
+        : report.status
 
   return (
     <section
@@ -98,39 +107,33 @@ export function ReviewScreen({ run }: ReviewScreenProps) {
       <nav aria-label="Páginas do documento" className="min-w-0">
         <ol className="flex flex-col gap-2">
           {Array.from(
-            { length: report.preview_page_count },
-            (_, index) => index + 1,
-          ).map(
-            (page) => (
-              <li key={page}>
-                <button
-                  type="button"
-                  aria-current={page === currentPage ? "page" : undefined}
-                  onClick={() => setCurrentPage(page)}
-                  className={cn(
-                    "block w-full overflow-hidden rounded-sm border-2",
-                    page === currentPage
-                      ? "border-primary"
-                      : "border-border",
-                  )}
-                >
-                  <img
-                    src={previewPageUrl(run.run_id, page)}
-                    alt={`Página ${page}`}
-                    loading="lazy"
-                    className="aspect-[1240/1754] w-full object-cover"
-                  />
-                </button>
-              </li>
-            ),
-          )}
+            { length: report.page_count },
+            (_, index) => index + 1
+          ).map((page) => (
+            <li key={page}>
+              <button
+                type="button"
+                aria-current={page === currentPage ? "page" : undefined}
+                onClick={() => setCurrentPage(page)}
+                className={cn(
+                  "block w-full overflow-hidden rounded-sm border-2",
+                  page === currentPage ? "border-primary" : "border-border"
+                )}
+              >
+                <img
+                  src={previewPageUrl(run.run_id, page)}
+                  alt={`Página ${page}`}
+                  loading="lazy"
+                  className="aspect-[1240/1754] w-full object-cover"
+                />
+              </button>
+            </li>
+          ))}
         </ol>
       </nav>
 
       <div className="flex min-w-0 flex-col items-center gap-3">
-        <div
-          className="preview-frame w-full max-w-md overflow-hidden rounded-sm bg-canvas"
-        >
+        <div className="preview-frame w-full max-w-md overflow-hidden rounded-sm bg-canvas">
           <img
             src={previewPageUrl(run.run_id, currentPage)}
             alt={`Prévia da página ${currentPage} do relatório`}
@@ -138,7 +141,7 @@ export function ReviewScreen({ run }: ReviewScreenProps) {
           />
         </div>
         <p className="text-sm font-medium">
-          Página {currentPage} de {report.preview_page_count}
+          Página {currentPage} de {report.page_count}
         </p>
         <p className="max-w-md text-center text-xs text-muted-foreground">
           Prévia aproximada da paginação — confira a paginação final no Word.
@@ -148,20 +151,14 @@ export function ReviewScreen({ run }: ReviewScreenProps) {
       <div className="flex min-w-0 flex-col gap-6">
         <Card>
           <CardHeader>
-            <CardTitle>
-              {readyForSignature
-                ? "Pronto para assinatura"
-                : "Rascunho com Pendências"}
-            </CardTitle>
+            <CardTitle>{statusLabel}</CardTitle>
           </CardHeader>
           <CardContent className="flex flex-col gap-3">
             <p className="text-sm text-muted-foreground">
               {readyForSignature
                 ? "Nenhuma Pendência foi encontrada — o relatório está pronto para assinatura."
                 : `Ainda há ${report.pendencias.length} ${
-                    report.pendencias.length === 1
-                      ? "Pendência"
-                      : "Pendências"
+                    report.pendencias.length === 1 ? "Pendência" : "Pendências"
                   } antes do envio ao cliente.`}
             </p>
             <p className="text-sm font-medium">{report.filename}</p>
@@ -186,9 +183,8 @@ export function ReviewScreen({ run }: ReviewScreenProps) {
             ) : (
               <>
                 <p className="text-xs text-muted-foreground">
-                  Estas Pendências podem ser resolvidas aqui na revisão ou
-                  depois, direto no Word — nenhum dos dois caminhos está
-                  errado.
+                  Estas Pendências podem ser resolvidas agora ou depois, direto
+                  no Word.
                 </p>
                 <ul className="flex flex-col gap-3">
                   {report.pendencias.map((pendencia, index) => (
@@ -241,7 +237,11 @@ function PendenciaItem({ pendencia }: { pendencia: Pendencia }) {
       <div className="flex items-center justify-between gap-2">
         <p className="font-medium">{pendencia.name}</p>
         <Badge variant={style.badge} className="gap-1">
-          <Icon aria-hidden="true" data-icon="inline-start" className="size-3" />
+          <Icon
+            aria-hidden="true"
+            data-icon="inline-start"
+            className="size-3"
+          />
           {pendencia.classification_label}
         </Badge>
       </div>

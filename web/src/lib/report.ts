@@ -18,8 +18,6 @@ export interface FinishedReport {
   run_id: string
   status: string
   /** Pages of the generated document — what the review screen pages through. */
-  preview_page_count: number
-  /** Size of the Lista de Páginas: pages of the client's site, not of the document. */
   page_count: number
   filename: string
   download_url: string
@@ -28,8 +26,7 @@ export interface FinishedReport {
 }
 
 export type ReportResult =
-  | { ok: true; data: FinishedReport }
-  | { ok: false; detail: string }
+  { ok: true; data: FinishedReport } | { ok: false; detail: string }
 
 export function previewPageUrl(runId: string, page: number): string {
   return `/api/runs/${runId}/previews/${page}`
