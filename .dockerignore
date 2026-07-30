@@ -6,10 +6,12 @@
 .npm-cache*
 .uv-cache*
 .pytest_cache
+build
 **/__pycache__
 **/*.pyc
 **/*.pyo
 *.docx
+!report_generator9000/assets/MASTER.docx
 *.xlsx
 web/node_modules
 web/dist

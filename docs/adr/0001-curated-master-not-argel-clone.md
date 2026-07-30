@@ -4,6 +4,10 @@ status: accepted
 
 # Reports are generated from a curated Master, not by cloning RELATÓRIO ARGEL.docx
 
+> Amended by ADR 0003: the transformation from Argel records how the first
+> Master was bootstrapped, but Argel is not an ongoing source of truth. The
+> signed-off Master is now the versioned runtime asset.
+
 The prior architecture brief made "clone the ARGEL binary and substitute strings" a
 non-negotiable, on the reasoning that rebuilding the document would lose its Montserrat
 runs, cover shape, and header/footer pairs. Inspecting the binary showed the premise was

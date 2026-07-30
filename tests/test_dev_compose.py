@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import os
 from pathlib import Path
 import shutil
 import subprocess
@@ -11,16 +10,14 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 COMPOSE_FILE = ROOT / "compose.dev.yaml"
-MASTER = ROOT / "master-build-check" / "MASTER.docx"
+MASTER = ROOT / "report_generator9000" / "assets" / "MASTER.docx"
 
 
-def test_dev_compose_mounts_approved_master_read_only() -> None:
+def test_dev_compose_uses_the_versioned_master_from_the_source_mount() -> None:
     docker = shutil.which("docker")
     if docker is None:
         pytest.skip("Docker CLI is not installed")
 
-    environment = os.environ.copy()
-    environment["REPORT_DEV_MASTER_PATH"] = str(MASTER)
     result = subprocess.run(
         [
             docker,
@@ -32,7 +29,6 @@ def test_dev_compose_mounts_approved_master_read_only() -> None:
             "json",
         ],
         cwd=ROOT,
-        env=environment,
         capture_output=True,
         text=True,
         check=False,
@@ -40,14 +36,11 @@ def test_dev_compose_mounts_approved_master_read_only() -> None:
     assert result.returncode == 0, result.stderr
 
     config = json.loads(result.stdout)
-    master_mount = next(
-        (
-            volume
-            for volume in config["services"]["backend"]["volumes"]
-            if volume["target"] == "/app/data/master/MASTER.docx"
-        ),
-        None,
+    assert MASTER.is_file()
+    assert config["services"]["backend"]["environment"].get(
+        "REPORT_MASTER_PATH"
+    ) is None
+    assert not any(
+        volume["target"] == "/app/data/master/MASTER.docx"
+        for volume in config["services"]["backend"]["volumes"]
     )
-    assert master_mount is not None
-    assert Path(master_mount["source"]).resolve() == MASTER.resolve()
-    assert master_mount["read_only"] is True

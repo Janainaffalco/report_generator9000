@@ -19,6 +19,7 @@ from report_generator9000.master import (
     clone_block_stamp,
 )
 from report_generator9000.run_context import RunContext
+from report_generator9000.runs import PACKAGED_MASTER_PATH
 
 
 W = "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}"
@@ -282,6 +283,12 @@ def test_master_build_is_reproducible_and_auditable(tmp_path: Path) -> None:
     assert "orphaned hand-typed `2.10 Indicadores14` entry was deliberately" in audit
     assert "2.10 ORIENTAÇÕES AO CLIENTE" in audit
     assert "A portal web" in first.diff.read_text(encoding="utf-8")
+
+
+def test_versioned_master_is_present_and_passes_its_standalone_gate() -> None:
+    package = open_docx_package(PACKAGED_MASTER_PATH)
+
+    assert check_master_build(package).passed
 
 
 def test_master_contains_a_two_level_toc_embedded_font_and_named_headings(

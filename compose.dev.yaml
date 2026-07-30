@@ -12,7 +12,6 @@ services:
       GEMINI_TIMEOUT_SECONDS: ${GEMINI_TIMEOUT_SECONDS:-60}
       GEMINI_MAX_ATTEMPTS: ${GEMINI_MAX_ATTEMPTS:-3}
       REPORT_DATA_ROOT: /app/data
-      REPORT_MASTER_PATH: /app/data/master/MASTER.docx
       REPORT_GATED_DROP_ROOT: /app/data/gated
       WATCHFILES_FORCE_POLLING: "true"
     ports:
@@ -20,12 +19,6 @@ services:
     volumes:
       - ./report_generator9000:/app/report_generator9000
       - ./.data:/app/data
-      - type: bind
-        source: ${REPORT_DEV_MASTER_PATH:-./master-build-check/MASTER.docx}
-        target: /app/data/master/MASTER.docx
-        read_only: true
-        bind:
-          create_host_path: false
     healthcheck:
       test:
         [

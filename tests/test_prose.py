@@ -30,6 +30,7 @@ from report_generator9000.prose import (
     ProseResponse,
     draft_prose,
 )
+from report_generator9000.runs import PACKAGED_MASTER_PATH
 from report_generator9000.docx_package import open_docx_package
 from tests.test_master_build import approved_source
 from tests.test_lista_paginas import serve_fixture_site
@@ -408,6 +409,7 @@ def test_cli_exposes_no_llm_model_and_budget_configuration() -> None:
     )
 
     assert no_llm.no_llm is True
+    assert no_llm.master == PACKAGED_MASTER_PATH
     assert configured.prose_model == "configured-model"
     assert configured.prose_output_budget == 730
     assert isinstance(

@@ -25,9 +25,9 @@ docker run --rm --publish 8000:8000 --env-file .env report-generator9000
 A aplicação fica disponível em `http://localhost:8000`. A imagem contém o
 pipeline completo e o Chromium usado pelo Playwright. Nenhuma credencial é
 copiada durante o build; `.env.example` documenta o contrato de configuração.
-Monte um volume persistente em `/app/data`, com o Master aprovado em
-`/app/data/master/MASTER.docx` e os Gated Drop Folders em `/app/data/gated`.
-Os registros e artefatos de cada geração ficam nesse volume por sete dias.
+O Master aprovado faz parte da aplicação como um asset versionado e somente para
+leitura. Monte um volume persistente em `/app/data` para os Gated Drop Folders,
+registros e artefatos de cada geração, que ficam nesse volume por sete dias.
 
 ## Desenvolvimento
 
@@ -41,9 +41,9 @@ docker compose -f compose.dev.yaml up --build
 A interface de desenvolvimento fica em `http://localhost:5173`; a API também
 pode ser acessada diretamente em `http://localhost:8000`. O Vite encaminha
 requisições `/api` ao backend. O código-fonte é montado nos contêineres e os
-dados persistentes ficam em `.data/`. O Master aprovado é montado, somente para
-leitura, de `master-build-check/MASTER.docx`; defina `REPORT_DEV_MASTER_PATH` se
-ele estiver em outro local. Coloque os Gated Drop Folders em `.data/gated`.
+dados persistentes ficam em `.data/`. O mesmo Master versionado usado em
+produção é servido diretamente de `report_generator9000/assets/MASTER.docx`.
+Coloque os Gated Drop Folders em `.data/gated`.
 
 Para encerrar e remover os contêineres (mantendo `.data/`):
 

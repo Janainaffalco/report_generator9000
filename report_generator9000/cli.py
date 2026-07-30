@@ -65,9 +65,9 @@ def build_parser() -> argparse.ArgumentParser:
     master = commands.add_parser(
         "master-build",
         aliases=["build-master"],
-        help="build a client-neutral MASTER.docx from the approved source",
+        help="migration tool: derive a candidate Master from a filled DOCX",
     )
-    master.add_argument("source", type=Path, help="approved filled source DOCX")
+    master.add_argument("source", type=Path, help="filled source DOCX")
     master.add_argument(
         "output",
         type=Path,

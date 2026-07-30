@@ -23,6 +23,7 @@ from .gemini_provider import (
 )
 from .lista_paginas import derive_lista_paginas
 from .prose import ProseConfig, ProseProvider
+from .runs import PACKAGED_MASTER_PATH
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -42,8 +43,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--master",
         type=Path,
-        default=Path("master-build-check") / "MASTER.docx",
-        help="approved built Master package",
+        default=PACKAGED_MASTER_PATH,
+        help="signed-off Master (defaults to the versioned application asset)",
     )
     parser.add_argument(
         "--saida",

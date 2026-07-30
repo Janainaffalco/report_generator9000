@@ -51,6 +51,7 @@ STAGES: tuple[StageName, ...] = (
     "gate",
 )
 RETENTION = timedelta(days=7)
+PACKAGED_MASTER_PATH = Path(__file__).with_name("assets") / "MASTER.docx"
 
 
 @dataclass(frozen=True)
@@ -370,14 +371,17 @@ class RunService:
 
 def default_run_service() -> RunService:
     data_root = Path(os.environ.get("REPORT_DATA_ROOT", "/app/data"))
+    master = Path(
+        os.environ.get("REPORT_MASTER_PATH", str(PACKAGED_MASTER_PATH))
+    )
+    if not master.is_file():
+        raise RuntimeError(
+            f"configured Master does not exist or is not a file: {master}"
+        )
     configure_logging(run_log_directory=data_root / "runs")
     return RunService(
         store=RunStore(data_root / "runs"),
-        master=Path(
-            os.environ.get(
-                "REPORT_MASTER_PATH", str(data_root / "master" / "MASTER.docx")
-            )
-        ),
+        master=master,
         output_root=data_root / "outputs",
         gated_drop_root=Path(
             os.environ.get(
@@ -393,5 +397,6 @@ __all__ = [
     "RunService",
     "RunStore",
     "STAGES",
+    "PACKAGED_MASTER_PATH",
     "default_run_service",
 ]

@@ -8,6 +8,7 @@ __pycache__/
 *.egg-info/
 .pytest_cache/
 .venv/
+build/
 uv.lock
 .uv-cache*/
 .npm-cache*/
@@ -17,6 +18,7 @@ uv.lock
 *.xlsx
 *.docx
 !tests/fixtures/*.docx
+!report_generator9000/assets/MASTER.docx
 
 # Build output (web/node_modules and web/dist handled by web/.gitignore)
 report_generator9000/web_dist/

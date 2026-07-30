@@ -1,4 +1,4 @@
-"""Build the client-neutral Master from the approved filled source DOCX."""
+"""Migration tooling for deriving a client-neutral Master from a filled DOCX."""
 
 from __future__ import annotations
 
@@ -1458,7 +1458,7 @@ def _format_diff(
 
 
 def build_master(source: str | Path, destination: str | Path) -> MasterBuild:
-    """Transform approved *source* into ``MASTER.docx`` and ``MASTER-DIFF.md``.
+    """Transform *source* into candidate ``MASTER.docx`` and ``MASTER-DIFF.md``.
 
     ``destination`` may be an output directory or the explicit Master DOCX path.
     The result is byte-reproducible for identical source bytes.

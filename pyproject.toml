@@ -29,6 +29,7 @@ include = ["report_generator9000*"]
 
 [tool.setuptools.package-data]
 report_generator9000 = [
+    "assets/*.docx",
     "assets/*.ttf",
     "assets/*.txt",
     "assets/*.md",

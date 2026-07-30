@@ -8,7 +8,13 @@ from types import SimpleNamespace
 import pytest
 
 from report_generator9000.control_sheet import Engagement
-from report_generator9000.runs import RunService, RunStore, STAGES
+from report_generator9000.runs import (
+    PACKAGED_MASTER_PATH,
+    RunService,
+    RunStore,
+    STAGES,
+    default_run_service,
+)
 
 
 def _engagement() -> Engagement:
@@ -34,6 +40,30 @@ def _service(tmp_path: Path, assembler) -> RunService:
         assembler=assembler,
         no_llm=True,
     )
+
+
+def test_default_run_service_uses_the_versioned_master(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("REPORT_DATA_ROOT", str(tmp_path / "data"))
+    monkeypatch.delenv("REPORT_MASTER_PATH", raising=False)
+
+    service = default_run_service()
+    try:
+        assert service.master == PACKAGED_MASTER_PATH
+        assert service.master.is_file()
+    finally:
+        service.shutdown()
+
+
+def test_default_run_service_fails_at_startup_for_a_missing_master_override(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    missing = tmp_path / "missing-MASTER.docx"
+    monkeypatch.setenv("REPORT_MASTER_PATH", str(missing))
+
+    with pytest.raises(RuntimeError, match="configured Master does not exist"):
+        default_run_service()
 
 
 def test_unexpected_exception_puts_traceback_in_run_log_and_keeps_reason(
