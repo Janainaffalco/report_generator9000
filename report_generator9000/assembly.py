@@ -21,6 +21,7 @@ from .capture import (
 )
 from .control_sheet import Engagement
 from .docx_package import open_docx_package
+from .events import operation
 from .generate import (
     GateRejected,
     GeneratedReport,
@@ -95,11 +96,14 @@ def _assemble_staged_package(
     report_progress("open_origin")
     report_progress("derive_pages", len(pages))
     capture_config = capture_config_from_master(master)
-    captures = capture_site(
-        pages,
-        directory / "capturas",
-        config=capture_config,
-    )
+    with operation("capture_site", page_count=len(pages)) as result:
+        captures = capture_site(
+            pages,
+            directory / "capturas",
+            config=capture_config,
+        )
+        result["captured"] = len(captures.captures)
+        result["failed"] = len(captures.failures)
     report_progress("capture")
     derived_palette = None
     if palette_part not in gated.images_by_part():
@@ -188,41 +192,43 @@ def _assemble_staged_package(
             replace(failure.pendencia, evidence=digest)
         )
     block_images = tuple(block_images_list)
-    site_text = (
-        ()
-        if no_llm
-        else extract_site_text(pages)
-    )
+    if no_llm:
+        site_text = ()
+    else:
+        with operation("extract_site_text", page_count=len(pages)):
+            site_text = extract_site_text(pages)
 
     with tempfile.TemporaryDirectory(
         prefix="assembly-",
         dir=directory,
     ) as temporary:
-        stamped = stamp_blocks(
-            master,
-            Path(temporary) / "stamped-master.docx",
-            pages,
-            block_images,
-            capture_folder=captures.folder,
-            drop_folder=gated.folder,
-        )
-        generated = generate_report(
-            stamped.document,
-            output_root,
-            engagement,
-            gated_drop_root,
-            pages=pages,
-            site_text=site_text,
-            prose_provider=prose_provider,
-            prose_config=prose_config,
-            no_llm=no_llm,
-            run_artifacts=stamped.artifacts,
-            blocks=stamped.headings,
-            capture_folder=captures.folder,
-            run_pendencias=tuple(capture_pendencias),
-            derived_palette=derived_palette,
-            client_logo=client_logo,
-        )
+        with operation("assemble_docx", page_count=len(pages)) as result:
+            stamped = stamp_blocks(
+                master,
+                Path(temporary) / "stamped-master.docx",
+                pages,
+                block_images,
+                capture_folder=captures.folder,
+                drop_folder=gated.folder,
+            )
+            generated = generate_report(
+                stamped.document,
+                output_root,
+                engagement,
+                gated_drop_root,
+                pages=pages,
+                site_text=site_text,
+                prose_provider=prose_provider,
+                prose_config=prose_config,
+                no_llm=no_llm,
+                run_artifacts=stamped.artifacts,
+                blocks=stamped.headings,
+                capture_folder=captures.folder,
+                run_pendencias=tuple(capture_pendencias),
+                derived_palette=derived_palette,
+                client_logo=client_logo,
+            )
+            result["status"] = generated.status
         report_progress("draft_prose")
         report_progress("assemble")
 
@@ -363,7 +369,9 @@ def assemble_output_package(
             ),
         )
         package = open_docx_package(staged.report.document)
-        gate_report = run_gates(package, final_context)
+        with operation("gate_run") as result:
+            gate_report = run_gates(package, final_context)
+            result["passed"] = gate_report.passed
         if not gate_report.passed:
             raise GateRejected(
                 "STOP CONDITION: correctness gates rejected the staged "

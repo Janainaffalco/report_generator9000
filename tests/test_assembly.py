@@ -13,6 +13,7 @@ from PIL import Image
 from report_generator9000.assembly import assemble_output_package
 from report_generator9000.control_sheet import Engagement
 from report_generator9000.docx_package import open_docx_package
+from report_generator9000.events import run_scope
 from report_generator9000.gates import GATES
 from report_generator9000.gates.blocks import check_block_integrity
 from report_generator9000.generate import StopCondition
@@ -394,3 +395,153 @@ def test_mis_keyed_gated_folder_produces_no_package(
         )
 
     assert not (tmp_path / "outputs" / "40-2026_CLIENTE").exists()
+
+
+def _gated_root(tmp_path: Path) -> Path:
+    gated_root = tmp_path / "gated"
+    gated_folder = gated_root / "40-2026_CLIENTE"
+    gated_folder.mkdir(parents=True)
+    (gated_folder / "valores.json").write_text(
+        json.dumps(
+            {
+                "pasta": "40-2026",
+                "razao_social": "CLIENTE",
+                "lista_paginas": [
+                    {
+                        "tipo": "pagina_principal",
+                        "rotulo": "Home",
+                        "url": "/",
+                    }
+                ],
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    return gated_root
+
+
+def test_successful_assembly_emits_timed_operations_for_each_wrapper(
+    tmp_path: Path,
+    recording_sink,
+) -> None:
+    master = build_master(
+        approved_source(tmp_path / "approved.docx"),
+        tmp_path / "master",
+    ).master
+    gated_root = _gated_root(tmp_path)
+
+    with serve_fixture_site() as origin:
+        assemble_output_package(
+            master,
+            tmp_path / "outputs",
+            _engagement(origin),
+            gated_root,
+            no_llm=True,
+        )
+
+    for operation_name in ("capture_site", "assemble_docx", "gate_run"):
+        starts = [
+            event
+            for event in recording_sink.events
+            if event.kind == "operation_start" and event.name == operation_name
+        ]
+        ends = [
+            event
+            for event in recording_sink.events
+            if event.kind == "operation_end" and event.name == operation_name
+        ]
+        assert len(starts) == 1
+        assert len(ends) == 1
+        assert ends[0].duration_ms is not None
+
+
+def test_capture_site_events_carry_the_ambient_run_id(
+    tmp_path: Path,
+    recording_sink,
+) -> None:
+    master = build_master(
+        approved_source(tmp_path / "approved.docx"),
+        tmp_path / "master",
+    ).master
+    gated_root = _gated_root(tmp_path)
+
+    with serve_fixture_site() as origin:
+        with run_scope("some-run-id"):
+            assemble_output_package(
+                master,
+                tmp_path / "outputs",
+                _engagement(origin),
+                gated_root,
+                no_llm=True,
+            )
+
+    capture_events = [
+        event
+        for event in recording_sink.events
+        if event.name == "capture_site"
+    ]
+    assert capture_events
+    assert all(event.run_id == "some-run-id" for event in capture_events)
+
+
+def test_failure_inside_a_wrapped_operation_emits_error_end_and_reraises(
+    tmp_path: Path,
+    recording_sink,
+) -> None:
+    master = build_master(
+        approved_source(tmp_path / "approved.docx"),
+        tmp_path / "master",
+    ).master
+    provider = _Provider(
+        ProseResponse(
+            company_description=GroundedField("Parcial", True),
+            briefing_objective=GroundedField("Parcial", True),
+            output_budget_exhausted=True,
+        )
+    )
+
+    with serve_fixture_site() as origin, pytest.raises(StopCondition):
+        assemble_output_package(
+            master,
+            tmp_path / "outputs",
+            _engagement(origin),
+            tmp_path / "absent-gated",
+            prose_provider=provider,
+            prose_config=ProseConfig("configured", 20),
+        )
+
+    ends = [
+        event
+        for event in recording_sink.events
+        if event.kind == "operation_end" and event.name == "assemble_docx"
+    ]
+    assert len(ends) == 1
+    assert ends[0].severity == "error"
+    assert ends[0].fields["error"] == "StopCondition"
+    assert "traceback" in ends[0].detail
+    assert "StopCondition" in ends[0].detail["traceback"]
+
+
+def test_extract_site_text_emits_no_events_when_no_llm(
+    tmp_path: Path,
+    recording_sink,
+) -> None:
+    master = build_master(
+        approved_source(tmp_path / "approved.docx"),
+        tmp_path / "master",
+    ).master
+    gated_root = _gated_root(tmp_path)
+
+    with serve_fixture_site() as origin:
+        assemble_output_package(
+            master,
+            tmp_path / "outputs",
+            _engagement(origin),
+            gated_root,
+            no_llm=True,
+        )
+
+    assert not any(
+        event.name == "extract_site_text" for event in recording_sink.events
+    )

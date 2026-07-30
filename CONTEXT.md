@@ -15,7 +15,8 @@ _Avoid_: ticket, job, order
 
 **Pasta**:
 The folder number tracking an engagement, e.g. `115-2026`. Names the output directory and is
-how a human refers to a run.
+how a human refers to the engagement. It identifies the engagement and not a single Run —
+every Run of one Pasta shares the same output directory.
 _Avoid_: linha, row id
 
 **Tema**:
@@ -27,6 +28,20 @@ _Avoid_: report type, category
 **Especialista**:
 The consultant responsible for the engagement, named on the cover.
 _Avoid_: author, owner
+
+### Execution
+
+**Run**:
+One attempt at producing the report for one engagement, identified separately from the Pasta.
+Many Runs may exist for one Pasta — reruns are expected — and a later Run overwrites the
+earlier one's document.
+_Avoid_: job, execution, generation
+
+**Stage**:
+One of the nine named steps a Run passes through, from reading the spreadsheet row to the
+final gate. The sequence is fixed and exhaustive: a Run that does not report every Stage in
+order is rejected rather than delivered.
+_Avoid_: step, phase, task
 
 ### The document
 

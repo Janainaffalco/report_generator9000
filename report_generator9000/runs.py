@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import shutil
+import traceback
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict, dataclass, replace
 from datetime import UTC, datetime, timedelta
@@ -15,6 +16,8 @@ from uuid import uuid4
 
 from .assembly import OutputPackage, ProgressCallback, assemble_output_package
 from .control_sheet import Engagement
+from .events import configure_logging, notice, run_scope
+from .events import stage as emit_stage
 from .generate import GateRejected, StopCondition
 from .gemini_provider import (
     GeminiProseProvider,
@@ -109,6 +112,13 @@ class RunStore:
             datetime.now(UTC) - RETENTION
         ):
             path.unlink(missing_ok=True)
+            path.with_suffix(".log").unlink(missing_ok=True)
+            notice(
+                "run_expired_on_read",
+                severity="info",
+                expired_run_id=record.run_id,
+                path=str(path),
+            )
             return None
         return record
 
@@ -116,7 +126,15 @@ class RunStore:
         with self._lock:
             try:
                 payload = json.loads(path.read_text(encoding="utf-8"))
-            except (FileNotFoundError, json.JSONDecodeError, OSError):
+            except FileNotFoundError:
+                return None
+            except (json.JSONDecodeError, OSError) as error:
+                notice(
+                    "run_record_load_failed",
+                    severity="warning",
+                    path=str(path),
+                    error=type(error).__name__,
+                )
                 return None
         payload["completed_stages"] = tuple(payload["completed_stages"])
         payload["stage_history"] = tuple(payload["stage_history"])
@@ -154,6 +172,13 @@ class RunStore:
             if datetime.fromisoformat(record.updated_at) < cutoff:
                 expired.append(record)
                 path.unlink(missing_ok=True)
+                path.with_suffix(".log").unlink(missing_ok=True)
+                notice(
+                    "run_discarded_expired",
+                    severity="info",
+                    expired_run_id=record.run_id,
+                    path=str(path),
+                )
         return tuple(expired)
 
     def _write(self, record: RunRecord) -> None:
@@ -214,6 +239,12 @@ class RunService:
                 document.is_relative_to(output_root)
                 and str(document) not in active_documents
             ):
+                notice(
+                    "run_output_directory_removed",
+                    severity="info",
+                    expired_run_id=expired.run_id,
+                    path=str(document.parent),
+                )
                 shutil.rmtree(document.parent, ignore_errors=True)
         record = self.store.create(engagement, sheet_id)
         record = self.store.update(record.run_id, current_stage=STAGES[0])
@@ -224,6 +255,12 @@ class RunService:
         self._executor.shutdown(wait=True)
 
     def _execute(self, run_id: str, engagement: Engagement) -> None:
+        with run_scope(run_id):
+            self._execute_within_scope(run_id, engagement)
+
+    def _execute_within_scope(
+        self, run_id: str, engagement: Engagement
+    ) -> None:
         def progress(stage: str, page_count: int | None = None) -> None:
             if stage not in STAGES:
                 raise ValueError(f"unknown progress stage: {stage}")
@@ -251,6 +288,10 @@ class RunService:
                     else current.page_count
                 ),
             )
+            if page_count is not None:
+                emit_stage(stage_name, page_count=page_count)
+            else:
+                emit_stage(stage_name)
 
         provider = self.prose_provider
         config = self.prose_config
@@ -276,6 +317,12 @@ class RunService:
         except StopCondition as error:
             self._terminal(run_id, "stopped", str(error))
         except Exception as error:
+            notice(
+                "run_failed_unexpectedly",
+                severity="error",
+                error=type(error).__name__,
+                detail={"traceback": traceback.format_exc()},
+            )
             self._terminal(run_id, "rejected", str(error))
         else:
             current = self.store.get(run_id)
@@ -323,6 +370,7 @@ class RunService:
 
 def default_run_service() -> RunService:
     data_root = Path(os.environ.get("REPORT_DATA_ROOT", "/app/data"))
+    configure_logging(run_log_directory=data_root / "runs")
     return RunService(
         store=RunStore(data_root / "runs"),
         master=Path(
