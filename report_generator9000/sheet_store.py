@@ -20,6 +20,12 @@ class StoredSheet:
     uploaded_at: datetime
 
 
+@dataclass(frozen=True)
+class _SheetMetadata:
+    filename: str
+    uploaded_at: datetime
+
+
 @dataclass
 class SheetStore:
     """Retains uploaded workbooks without a process-local index."""
@@ -34,8 +40,16 @@ class SheetStore:
         sheet_id = uuid4().hex
         path = self.directory / f"{sheet_id}.xlsx"
         path.write_bytes(data)
+        uploaded_at = datetime.now(UTC)
         self._metadata_path(sheet_id).write_text(
-            json.dumps({"filename": filename}, ensure_ascii=False) + "\n",
+            json.dumps(
+                {
+                    "filename": filename,
+                    "uploaded_at": uploaded_at.isoformat(),
+                },
+                ensure_ascii=False,
+            )
+            + "\n",
             encoding="utf-8",
         )
         return sheet_id, path
@@ -47,21 +61,17 @@ class SheetStore:
         path = self.directory / f"{sheet_id}.xlsx"
         if not path.is_file():
             return None
-        if self._is_expired(path):
+        if self._is_expired(self._metadata(sheet_id, path).uploaded_at):
             self.discard(sheet_id)
             return None
         return path
 
     def filename(self, sheet_id: str) -> str:
         """Return the workbook's original upload filename."""
-        try:
-            payload = json.loads(
-                self._metadata_path(sheet_id).read_text(encoding="utf-8")
-            )
-        except (FileNotFoundError, json.JSONDecodeError, OSError):
+        path = self.directory / f"{sheet_id}.xlsx"
+        if not path.is_file():
             return "planilha.xlsx"
-        filename = payload.get("filename")
-        return filename if isinstance(filename, str) else "planilha.xlsx"
+        return self._metadata(sheet_id, path).filename
 
     def all(self) -> tuple[StoredSheet, ...]:
         """List the workbooks found on disk, most recent first."""
@@ -70,17 +80,16 @@ class SheetStore:
         for path in self.directory.glob("*.xlsx"):
             if not self._valid_id(path.stem):
                 continue
-            if self._is_expired(path):
+            metadata = self._metadata(path.stem, path)
+            if self._is_expired(metadata.uploaded_at):
                 self.discard(path.stem)
                 continue
             sheets.append(
                 StoredSheet(
                     sheet_id=path.stem,
                     path=path,
-                    filename=self.filename(path.stem),
-                    uploaded_at=datetime.fromtimestamp(
-                        path.stat().st_mtime, UTC
-                    ),
+                    filename=metadata.filename,
+                    uploaded_at=metadata.uploaded_at,
                 )
             )
         return tuple(
@@ -98,9 +107,32 @@ class SheetStore:
         return self.directory / f"{sheet_id}.json"
 
     @staticmethod
-    def _is_expired(path: Path) -> bool:
-        uploaded_at = datetime.fromtimestamp(path.stat().st_mtime, UTC)
+    def _is_expired(uploaded_at: datetime) -> bool:
         return uploaded_at < datetime.now(UTC) - RETENTION
+
+    def _metadata(self, sheet_id: str, path: Path) -> _SheetMetadata:
+        fallback_uploaded_at = datetime.fromtimestamp(path.stat().st_mtime, UTC)
+        try:
+            payload = json.loads(
+                self._metadata_path(sheet_id).read_text(encoding="utf-8")
+            )
+        except (FileNotFoundError, json.JSONDecodeError, OSError):
+            return _SheetMetadata("planilha.xlsx", fallback_uploaded_at)
+
+        filename = payload.get("filename")
+        if not isinstance(filename, str):
+            filename = "planilha.xlsx"
+        uploaded_at = payload.get("uploaded_at")
+        if isinstance(uploaded_at, str):
+            try:
+                parsed_uploaded_at = datetime.fromisoformat(uploaded_at)
+                if parsed_uploaded_at.tzinfo is not None:
+                    return _SheetMetadata(
+                        filename, parsed_uploaded_at.astimezone(UTC)
+                    )
+            except ValueError:
+                pass
+        return _SheetMetadata(filename, fallback_uploaded_at)
 
     @staticmethod
     def _valid_id(sheet_id: str) -> bool:

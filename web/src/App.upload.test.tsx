@@ -396,6 +396,35 @@ describe("control sheet upload", () => {
     )
   })
 
+  it("returns to the drop area when the working sheet expires before a run starts", async () => {
+    vi.mocked(fetch)
+      .mockResolvedValueOnce(jsonResponse(200, fixture))
+      .mockResolvedValueOnce(
+        jsonResponse(404, {
+          detail:
+            "Esta planilha expirou ou não é conhecida. Envie-a novamente.",
+        })
+      )
+
+    render(<App />)
+    fireEvent.change(screen.getByLabelText("Arquivo de planilha"), {
+      target: { files: [makeFile()] },
+    })
+    await screen.findByText("Pronto para gerar")
+    fireEvent.click(
+      screen.getByRole("checkbox", {
+        name: /DENISE BARROS DE ALMEIDA.*linha 2/,
+      })
+    )
+    fireEvent.click(screen.getByRole("button", { name: "Gerar relatório" }))
+
+    expect(
+      await screen.findByTestId("control-sheet-dropzone")
+    ).toBeInTheDocument()
+    expect(screen.getByRole("alert")).toHaveTextContent(/expirou/i)
+    expect(window.location.pathname).toBe("/enviar")
+  })
+
   it("shows Stop Condition rows with no checkbox and only Portuguese consultant copy", async () => {
     vi.mocked(fetch).mockResolvedValueOnce(jsonResponse(200, fixture))
 

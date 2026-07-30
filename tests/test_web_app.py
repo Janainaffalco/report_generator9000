@@ -1,5 +1,4 @@
 import json
-import os
 import sys
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -38,6 +37,17 @@ FIXTURE = Path(__file__).parent / "fixtures" / "control-sheet-cases.xlsx"
 def _client(tmp_path: Path) -> TestClient:
     store = SheetStore(tmp_path / "sheets")
     return TestClient(create_app(static_dir=tmp_path / "missing-web", sheet_store=store))
+
+
+def _set_uploaded_at(
+    sheet_directory: Path, sheet_id: str, uploaded_at: datetime
+) -> None:
+    metadata_path = sheet_directory / f"{sheet_id}.json"
+    metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+    metadata["uploaded_at"] = uploaded_at.isoformat()
+    metadata_path.write_text(
+        json.dumps(metadata, ensure_ascii=False) + "\n", encoding="utf-8"
+    )
 
 
 def _upload(client: TestClient, path: Path, filename: str = "planilha.xlsx"):
@@ -331,6 +341,7 @@ def test_retained_sheet_rows_are_rederived_from_the_workbook_on_every_read(
     empty = generate_control_sheet.build(
         tmp_path / "edited.xlsx", rows=(), row_numbers=()
     )
+    uploaded_at = client.get("/api/control-sheets").json()[0]["uploaded_at"]
 
     (sheet_directory / f"{uploaded['sheet_id']}.xlsx").write_bytes(
         empty.read_bytes()
@@ -341,6 +352,7 @@ def test_retained_sheet_rows_are_rederived_from_the_workbook_on_every_read(
 
     assert reread.status_code == 200
     assert reread.json()["engagements"] == []
+    assert client.get("/api/control-sheets").json()[0]["uploaded_at"] == uploaded_at
 
 
 def test_retained_sheet_listing_is_most_recent_first_with_ready_counts(
@@ -361,13 +373,13 @@ def test_retained_sheet_listing_is_most_recent_first_with_ready_counts(
     older = _upload(client, FIXTURE, "controle junho.xlsx").json()
     newer = _upload(client, empty, "controle julho.xlsx").json()
     now = datetime.now(UTC)
-    os.utime(
-        sheet_directory / f"{older['sheet_id']}.xlsx",
-        (now.timestamp() - 3600, now.timestamp() - 3600),
+    older_uploaded_at = now - timedelta(hours=1)
+    newer_uploaded_at = now
+    _set_uploaded_at(
+        sheet_directory, older["sheet_id"], older_uploaded_at
     )
-    os.utime(
-        sheet_directory / f"{newer['sheet_id']}.xlsx",
-        (now.timestamp(), now.timestamp()),
+    _set_uploaded_at(
+        sheet_directory, newer["sheet_id"], newer_uploaded_at
     )
 
     response = client.get("/api/control-sheets")
@@ -377,25 +389,19 @@ def test_retained_sheet_listing_is_most_recent_first_with_ready_counts(
         {
             "sheet_id": newer["sheet_id"],
             "filename": "controle julho.xlsx",
-            "uploaded_at": datetime.fromtimestamp(
-                (sheet_directory / f"{newer['sheet_id']}.xlsx").stat().st_mtime,
-                UTC,
-            ).isoformat(),
+            "uploaded_at": newer_uploaded_at.isoformat(),
             "ready_count": 0,
         },
         {
             "sheet_id": older["sheet_id"],
             "filename": "controle junho.xlsx",
-            "uploaded_at": datetime.fromtimestamp(
-                (sheet_directory / f"{older['sheet_id']}.xlsx").stat().st_mtime,
-                UTC,
-            ).isoformat(),
+            "uploaded_at": older_uploaded_at.isoformat(),
             "ready_count": 4,
         },
     ]
 
 
-def test_seven_day_sheet_boundary_is_enforced_from_file_age(
+def test_seven_day_sheet_boundary_is_enforced_from_stored_upload_time(
     tmp_path: Path,
 ) -> None:
     sheet_directory = tmp_path / "sheets"
@@ -407,14 +413,16 @@ def test_seven_day_sheet_boundary_is_enforced_from_file_age(
     )
     retained = _upload(client, FIXTURE, "ainda-retida.xlsx").json()
     expired = _upload(client, FIXTURE, "expirada.xlsx").json()
-    now = datetime.now(UTC).timestamp()
-    os.utime(
-        sheet_directory / f"{retained['sheet_id']}.xlsx",
-        (now - timedelta(days=7).total_seconds() + 5,) * 2,
+    now = datetime.now(UTC)
+    _set_uploaded_at(
+        sheet_directory,
+        retained["sheet_id"],
+        now - timedelta(days=7) + timedelta(seconds=5),
     )
-    os.utime(
-        sheet_directory / f"{expired['sheet_id']}.xlsx",
-        (now - timedelta(days=7).total_seconds() - 5,) * 2,
+    _set_uploaded_at(
+        sheet_directory,
+        expired["sheet_id"],
+        now - timedelta(days=7) - timedelta(seconds=5),
     )
 
     listing = client.get("/api/control-sheets")

@@ -153,6 +153,11 @@ export function App() {
     setStatus("idle")
     if (!result.ok) {
       setErrorDetail(result.detail)
+      if (result.status === 404) {
+        setControlSheet(null)
+        setRetainedSheets([])
+        window.history.replaceState({}, "", "/enviar")
+      }
       return
     }
     window.history.pushState({}, "", `/relatorios/${result.data.run_id}`)
