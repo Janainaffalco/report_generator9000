@@ -5,7 +5,8 @@ from pathlib import Path
 from xml.etree.ElementTree import ParseError
 from zipfile import BadZipFile
 
-from fastapi import FastAPI, File, HTTPException, UploadFile
+from fastapi import FastAPI, File, HTTPException, Response, UploadFile
+from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
 from .control_sheet import (
@@ -17,6 +18,7 @@ from .control_sheet import (
     read_control_sheet,
     read_row_pastas,
 )
+from .runs import RunRecord, STAGES, default_run_service
 from .sheet_store import SheetStore, default_sheet_store
 
 
@@ -142,6 +144,65 @@ class ControlSheetResponse(BaseModel):
     skipped_rows: SkippedRowsOut
 
 
+class StartRunRequest(BaseModel):
+    sheet_id: str
+    row_number: int
+
+
+class StageOut(BaseModel):
+    name: str
+    state: str
+
+
+class RunResponse(BaseModel):
+    run_id: str
+    sheet_id: str
+    engagement: dict[str, object]
+    outcome: str
+    current_stage: str | None
+    stages: list[StageOut]
+    stage_history: list[str]
+    page_count: int | None
+    status: str | None
+    filename: str | None
+    reason: str | None
+    download_url: str | None
+
+
+def _run_response(record: RunRecord) -> RunResponse:
+    completed = set(record.completed_stages)
+    return RunResponse(
+        run_id=record.run_id,
+        sheet_id=record.sheet_id,
+        engagement=record.engagement,
+        outcome=record.outcome,
+        current_stage=record.current_stage,
+        stages=[
+            StageOut(
+                name=name,
+                state=(
+                    "current"
+                    if name == record.current_stage
+                    else "done"
+                    if name in completed
+                    else "pending"
+                ),
+            )
+            for name in STAGES
+        ],
+        stage_history=list(record.stage_history),
+        page_count=record.page_count,
+        status=record.report_status,
+        filename=record.filename,
+        reason=record.reason,
+        download_url=(
+            f"/api/runs/{record.run_id}/download"
+            if record.outcome == "finished" and record.document
+            else None
+        ),
+    )
+
+
 def _unreadable_detail(error: ValueError) -> str:
     message = str(error)
     if CONTROL_SHEET_NAME in message:
@@ -237,6 +298,7 @@ def create_app(
 ) -> FastAPI:
     app = FastAPI(title="Relatórios SEBRAETEC")
     store = sheet_store if sheet_store is not None else default_sheet_store()
+    app.state.run_service = default_run_service()
 
     @app.get("/api/health")
     def health() -> dict[str, str]:
@@ -252,6 +314,71 @@ def create_app(
             raise
         return _build_response(
             sheet_id, file.filename or "planilha.xlsx", outcomes, pasta_by_row
+        )
+
+    @app.get("/api/control-sheet/{sheet_id}")
+    def retained_control_sheet(sheet_id: str) -> ControlSheetResponse:
+        path = store.path(sheet_id)
+        if path is None:
+            raise HTTPException(404, "A planilha enviada não está mais disponível.")
+        outcomes, pasta_by_row = _read_sheet(path)
+        return _build_response(
+            sheet_id, "planilha enviada anteriormente.xlsx", outcomes, pasta_by_row
+        )
+
+    @app.post("/api/runs", status_code=202)
+    def start_run(request: StartRunRequest, response: Response) -> RunResponse:
+        path = store.path(request.sheet_id)
+        if path is None:
+            raise HTTPException(404, "A planilha enviada não está mais disponível.")
+        outcomes, _pasta_by_row = _read_sheet(path)
+        engagement = next(
+            (
+                outcome
+                for outcome in outcomes
+                if isinstance(outcome, Engagement)
+                and outcome.row_number == request.row_number
+            ),
+            None,
+        )
+        if engagement is None:
+            raise HTTPException(
+                422,
+                "A linha escolhida não é um Engagement pronto para gerar.",
+            )
+        record = app.state.run_service.submit(engagement, request.sheet_id)
+        response.headers["Location"] = f"/api/runs/{record.run_id}"
+        return _run_response(record)
+
+    @app.get("/api/runs/{run_id}")
+    def get_run(run_id: str) -> RunResponse:
+        record = app.state.run_service.store.get(run_id)
+        if record is None:
+            raise HTTPException(404, "Esta geração não existe ou expirou.")
+        return _run_response(record)
+
+    @app.get("/api/runs/{run_id}/download")
+    def download_run(run_id: str) -> FileResponse:
+        record = app.state.run_service.store.get(run_id)
+        if (
+            record is None
+            or record.outcome != "finished"
+            or record.document is None
+            or record.filename is None
+        ):
+            raise HTTPException(
+                404, "Esta geração não tem um documento para baixar."
+            )
+        document = Path(record.document)
+        if not document.is_file():
+            raise HTTPException(404, "O documento desta geração expirou.")
+        return FileResponse(
+            document,
+            media_type=(
+                "application/vnd.openxmlformats-officedocument."
+                "wordprocessingml.document"
+            ),
+            filename=record.filename,
         )
 
     app.frontend(

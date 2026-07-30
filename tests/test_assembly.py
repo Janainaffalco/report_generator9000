@@ -61,6 +61,7 @@ def _engagement(origin: str) -> Engagement:
 def test_one_engagement_directory_contains_the_complete_handoff_package(
     tmp_path: Path,
 ) -> None:
+    progress: list[tuple[str, int | None]] = []
     master = build_master(
         approved_source(tmp_path / "approved.docx"),
         tmp_path / "master",
@@ -104,8 +105,22 @@ def test_one_engagement_directory_contains_the_complete_handoff_package(
             _engagement(origin),
             gated_root,
             no_llm=True,
+            progress=lambda stage, page_count=None: progress.append(
+                (stage, page_count)
+            ),
         )
 
+    assert progress == [
+        ("read_row", None),
+        ("open_origin", None),
+        ("derive_pages", 3),
+        ("capture", None),
+        ("derive_palette", None),
+        ("capture_logo", None),
+        ("draft_prose", None),
+        ("assemble", None),
+        ("gate", None),
+    ]
     assert [item for item in (tmp_path / "outputs").iterdir()] == [
         package.directory
     ]

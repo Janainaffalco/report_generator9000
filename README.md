@@ -25,6 +25,9 @@ docker run --rm --publish 8000:8000 --env-file .env report-generator9000
 A aplicação fica disponível em `http://localhost:8000`. A imagem contém o
 pipeline completo e o Chromium usado pelo Playwright. Nenhuma credencial é
 copiada durante o build; `.env.example` documenta o contrato de configuração.
+Monte um volume persistente em `/app/data`, com o Master aprovado em
+`/app/data/master/MASTER.docx` e os Gated Drop Folders em `/app/data/gated`.
+Os registros e artefatos de cada geração ficam nesse volume por sete dias.
 
 ## Desenvolvimento
 

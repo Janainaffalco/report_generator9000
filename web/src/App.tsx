@@ -1,13 +1,19 @@
-import { useState } from "react"
+import { useCallback, useEffect, useState } from "react"
 import { CheckCircle2Icon, FileTextIcon, ShieldCheckIcon } from "lucide-react"
 
+import { GenerationRun } from "@/components/GenerationRun"
 import { UploadPanel } from "@/components/UploadPanel"
 import { WorkGroups } from "@/components/WorkGroups"
 import { buttonVariants } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Separator } from "@/components/ui/separator"
 import type { ControlSheetResponse } from "@/lib/control-sheet"
-import { uploadControlSheet } from "@/lib/control-sheet"
+import {
+  getRetainedControlSheet,
+  uploadControlSheet,
+} from "@/lib/control-sheet"
+import type { RunResponse } from "@/lib/runs"
+import { getRun, startRun } from "@/lib/runs"
 import { cn } from "@/lib/utils"
 
 const stages = [
@@ -45,14 +51,21 @@ function currentStage(pathname: string) {
 }
 
 export function App() {
-  const [status, setStatus] = useState<"idle" | "loading">("idle")
+  const [status, setStatus] = useState<"idle" | "loading" | "starting">(
+    "idle",
+  )
   const [errorDetail, setErrorDetail] = useState<string | null>(null)
   const [controlSheet, setControlSheet] = useState<ControlSheetResponse | null>(
     null
   )
+  const [run, setRun] = useState<RunResponse | null>(null)
 
   const activeStage = currentStage(
-    controlSheet ? CHOOSING_WORK_PATH : window.location.pathname
+    run
+      ? "/conferir"
+      : controlSheet
+        ? CHOOSING_WORK_PATH
+        : window.location.pathname,
   )
 
   async function handleFile(file: File) {
@@ -65,6 +78,74 @@ export function App() {
       return
     }
     setErrorDetail(result.detail)
+  }
+
+  const refreshRun = useCallback(async (runId: string) => {
+    const result = await getRun(runId)
+    if (result.ok) {
+      setRun(result.data)
+      setErrorDetail(null)
+      return
+    }
+    setErrorDetail(result.detail)
+  }, [])
+
+  useEffect(() => {
+    const match = window.location.pathname.match(/^\/relatorios\/([^/]+)$/)
+    if (match) {
+      void getRun(match[1]).then((result) => {
+        if (result.ok) {
+          setRun(result.data)
+          setErrorDetail(null)
+        } else {
+          setErrorDetail(result.detail)
+        }
+      })
+    }
+  }, [refreshRun])
+
+  useEffect(() => {
+    if (!run || run.outcome !== "running") {
+      return
+    }
+    const timer = window.setInterval(() => {
+      void refreshRun(run.run_id)
+    }, 1500)
+    return () => window.clearInterval(timer)
+  }, [refreshRun, run])
+
+  async function handleGenerate(rowNumber: number) {
+    if (!controlSheet) {
+      return
+    }
+    setStatus("starting")
+    setErrorDetail(null)
+    const result = await startRun(controlSheet.sheet_id, rowNumber)
+    setStatus("idle")
+    if (!result.ok) {
+      setErrorDetail(result.detail)
+      return
+    }
+    window.history.pushState(
+      {},
+      "",
+      `/relatorios/${result.data.run_id}`,
+    )
+    setRun(result.data)
+  }
+
+  async function handleBackToRows() {
+    if (!controlSheet && run) {
+      const result = await getRetainedControlSheet(run.sheet_id)
+      if (!result.ok) {
+        setErrorDetail(result.detail)
+        return
+      }
+      setControlSheet(result.data)
+    }
+    setErrorDetail(null)
+    setRun(null)
+    window.history.pushState({}, "", CHOOSING_WORK_PATH)
   }
 
   return (
@@ -124,18 +205,26 @@ export function App() {
       </header>
 
       <main className="mx-auto flex w-full max-w-(--container-max) min-w-0 flex-1 flex-col items-center px-8 py-14">
-        {controlSheet ? (
+        {run ? (
+          <GenerationRun
+            run={run}
+            errorDetail={errorDetail}
+            onRefresh={() => void refreshRun(run.run_id)}
+            onBackToRows={() => void handleBackToRows()}
+          />
+        ) : controlSheet ? (
           <WorkGroups
             key={controlSheet.sheet_id}
             data={controlSheet}
             status={status}
             errorDetail={errorDetail}
             onReplaceFile={handleFile}
+            onGenerate={handleGenerate}
           />
         ) : (
           <>
             <UploadPanel
-              status={status}
+              status={status === "loading" ? "loading" : "idle"}
               errorDetail={errorDetail}
               onFile={handleFile}
             />

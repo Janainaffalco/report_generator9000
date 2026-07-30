@@ -86,6 +86,10 @@ class StopCondition(ReportGenerationError):
     """A gate rejected the staged package, so the row produces nothing."""
 
 
+class GateRejected(StopCondition):
+    """The correctness gates rejected a staged document as defective."""
+
+
 def _media_location(
     package: DocxPackage, part_name: str
 ) -> tuple[str, str]:

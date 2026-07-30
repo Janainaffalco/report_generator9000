@@ -12,6 +12,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 
 import { App } from "@/App"
 import type { ControlSheetResponse } from "@/lib/control-sheet"
+import type { RunResponse } from "@/lib/runs"
 
 function jsonResponse(status: number, body: unknown) {
   return {
@@ -83,8 +84,38 @@ const fixture: ControlSheetResponse = {
   },
 }
 
+const runningFixture: RunResponse = {
+  run_id: "run-24",
+  sheet_id: fixture.sheet_id,
+  engagement: {
+    row_number: 2,
+    pasta: "40-2026",
+    razao_social: "DENISE BARROS DE ALMEIDA",
+  },
+  outcome: "running",
+  current_stage: "capture",
+  stages: [
+    { name: "read_row", state: "done" },
+    { name: "open_origin", state: "done" },
+    { name: "derive_pages", state: "done" },
+    { name: "capture", state: "current" },
+    { name: "derive_palette", state: "pending" },
+    { name: "capture_logo", state: "pending" },
+    { name: "draft_prose", state: "pending" },
+    { name: "assemble", state: "pending" },
+    { name: "gate", state: "pending" },
+  ],
+  stage_history: ["read_row", "open_origin", "derive_pages"],
+  page_count: 7,
+  status: null,
+  filename: null,
+  reason: null,
+  download_url: null,
+}
+
 describe("control sheet upload", () => {
   beforeEach(() => {
+    window.history.replaceState({}, "", "/")
     vi.stubGlobal("fetch", vi.fn())
   })
 
@@ -171,7 +202,7 @@ describe("control sheet upload", () => {
     expect(screen.getAllByText("40-2026").length).toBeGreaterThan(0)
   })
 
-  it("selects and deselects rows, updating the generate control's label", async () => {
+  it("restricts generation to one selected Engagement", async () => {
     vi.mocked(fetch).mockResolvedValueOnce(jsonResponse(200, fixture))
 
     render(<App />)
@@ -181,7 +212,7 @@ describe("control sheet upload", () => {
     await screen.findByText("Pronto para gerar")
 
     const generateButton = screen.getByRole("button", {
-      name: "Selecione ao menos um trabalho",
+      name: "Selecione um trabalho",
     })
     expect(generateButton).toBeDisabled()
 
@@ -200,17 +231,17 @@ describe("control sheet upload", () => {
     })
     fireEvent.click(secondCheckbox)
 
-    const generateTwo = await screen.findByRole("button", {
-      name: "Gerar 2 relatórios",
-    })
-    expect(generateTwo).toBeEnabled()
+    expect(secondCheckbox).toBeChecked()
+    expect(firstCheckbox).not.toBeChecked()
+    expect(
+      screen.getByRole("button", { name: "Gerar relatório" }),
+    ).toBeEnabled()
 
-    fireEvent.click(firstCheckbox)
     fireEvent.click(secondCheckbox)
 
     expect(
       await screen.findByRole("button", {
-        name: "Selecione ao menos um trabalho",
+        name: "Selecione um trabalho",
       })
     ).toBeDisabled()
   })
@@ -238,6 +269,47 @@ describe("control sheet upload", () => {
     expect(
       screen.getByRole("button", { name: "Gerar relatório" })
     ).toBeEnabled()
+  })
+
+  it("starts the selected Engagement and shows real resumable progress", async () => {
+    vi.mocked(fetch)
+      .mockResolvedValueOnce(jsonResponse(200, fixture))
+      .mockResolvedValueOnce(jsonResponse(202, runningFixture))
+
+    render(<App />)
+    fireEvent.change(screen.getByLabelText("Arquivo de planilha"), {
+      target: { files: [makeFile()] },
+    })
+    await screen.findByText("Pronto para gerar")
+    fireEvent.click(
+      screen.getByRole("checkbox", {
+        name: /DENISE BARROS DE ALMEIDA.*linha 2/,
+      }),
+    )
+    fireEvent.click(screen.getByRole("button", { name: "Gerar relatório" }))
+
+    await screen.findByText("Gerando agora")
+    expect(
+      screen.getByText("40-2026 · DENISE BARROS DE ALMEIDA"),
+    ).toBeInTheDocument()
+    expect(screen.getByText("Lista de Páginas: 7 itens")).toBeInTheDocument()
+    expect(
+      screen.getByText("Capturando páginas, Cabeçalho e Rodapé"),
+    ).toBeInTheDocument()
+    expect(
+      screen.getByText(/fechar esta aba e voltar depois/i),
+    ).toBeInTheDocument()
+    expect(window.location.pathname).toBe("/relatorios/run-24")
+    expect(fetch).toHaveBeenLastCalledWith(
+      "/api/runs",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({
+          sheet_id: fixture.sheet_id,
+          row_number: 2,
+        }),
+      }),
+    )
   })
 
   it("shows Stop Condition rows with no checkbox, Portuguese copy and the original cause", async () => {
@@ -379,7 +451,7 @@ describe("control sheet upload", () => {
       expect(screen.getAllByRole("checkbox")).toHaveLength(1)
     })
     expect(
-      screen.getByRole("button", { name: "Selecione ao menos um trabalho" })
+      screen.getByRole("button", { name: "Selecione um trabalho" })
     ).toBeDisabled()
   })
 

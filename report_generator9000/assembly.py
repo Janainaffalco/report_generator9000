@@ -7,6 +7,7 @@ import tempfile
 from io import BytesIO
 from dataclasses import dataclass, replace
 from pathlib import Path
+from typing import Callable
 
 from PIL import Image
 
@@ -21,6 +22,7 @@ from .capture import (
 from .control_sheet import Engagement
 from .docx_package import open_docx_package
 from .generate import (
+    GateRejected,
     GeneratedReport,
     StopCondition,
     _write_sidecars,
@@ -39,6 +41,9 @@ from .prose import ProseConfig, ProseProvider
 from .placeholders import render_placeholder, slot_pixel_dimensions
 from .previews import DocumentPreviewRenderer, PreviewRenderer
 from .run_context import Pendencia
+
+
+ProgressCallback = Callable[[str, int | None], None]
 
 
 @dataclass(frozen=True)
@@ -62,8 +67,13 @@ def _assemble_staged_package(
     prose_config: ProseConfig | None = None,
     no_llm: bool = False,
     preview_renderer: PreviewRenderer | None = None,
+    progress: ProgressCallback | None = None,
 ) -> OutputPackage:
     """Build an engagement package below a disposable staging root."""
+    def report_progress(stage: str, page_count: int | None = None) -> None:
+        if progress is not None:
+            progress(stage, page_count)
+
     directory = (
         Path(output_root) / engagement_artifact_key(engagement)
     ).resolve()
@@ -72,11 +82,25 @@ def _assemble_staged_package(
         gated = load_gated_inputs(gated_drop_root, engagement)
     except GatedInputError as error:
         raise StopCondition(f"STOP CONDITION: {error}") from error
+    report_progress("read_row")
     palette_part = next(
         part_name
         for slot, _filename, part_name in GATED_IMAGE_PARTS
         if slot == "paleta"
     )
+    pages = derive_lista_paginas(
+        engagement.capture_origin,
+        gated.declared_pages,
+    )
+    report_progress("open_origin")
+    report_progress("derive_pages", len(pages))
+    capture_config = capture_config_from_master(master)
+    captures = capture_site(
+        pages,
+        directory / "capturas",
+        config=capture_config,
+    )
+    report_progress("capture")
     derived_palette = None
     if palette_part not in gated.images_by_part():
         try:
@@ -85,16 +109,7 @@ def _assemble_staged_package(
             )
         except PaletteCollectionError as error:
             raise StopCondition(f"STOP CONDITION: {error}") from error
-    pages = derive_lista_paginas(
-        engagement.capture_origin,
-        gated.declared_pages,
-    )
-    capture_config = capture_config_from_master(master)
-    captures = capture_site(
-        pages,
-        directory / "capturas",
-        config=capture_config,
-    )
+    report_progress("derive_palette")
     master_package = open_docx_package(master)
     logo_slots = [
         slot
@@ -116,6 +131,7 @@ def _assemble_staged_package(
             logo_slot.height_emu,
         ),
     )
+    report_progress("capture_logo")
     captures_by_page = {
         capture.pagina: capture for capture in captures.captures
     }
@@ -207,6 +223,8 @@ def _assemble_staged_package(
             derived_palette=derived_palette,
             client_logo=client_logo,
         )
+        report_progress("draft_prose")
+        report_progress("assemble")
 
     renderer = (
         DocumentPreviewRenderer()
@@ -277,6 +295,7 @@ def assemble_output_package(
     prose_config: ProseConfig | None = None,
     no_llm: bool = False,
     preview_renderer: PreviewRenderer | None = None,
+    progress: ProgressCallback | None = None,
 ) -> OutputPackage:
     """Build, certify, then promote one self-contained engagement package."""
     output_root_path = Path(output_root).resolve()
@@ -298,6 +317,7 @@ def assemble_output_package(
             prose_config=prose_config,
             no_llm=no_llm,
             preview_renderer=preview_renderer,
+            progress=progress,
         )
 
         def promoted(path: str | Path) -> Path:
@@ -345,11 +365,13 @@ def assemble_output_package(
         package = open_docx_package(staged.report.document)
         gate_report = run_gates(package, final_context)
         if not gate_report.passed:
-            raise StopCondition(
+            raise GateRejected(
                 "STOP CONDITION: correctness gates rejected the staged "
                 "output package:\n"
                 + gate_report.format()
             )
+        if progress is not None:
+            progress("gate", None)
         _write_sidecars(staged.report.document, final_context)
 
         previous_directory = staging_root / ".previous-output"
@@ -409,5 +431,6 @@ def assemble_output_package(
 __all__ = [
     "OutputPackage",
     "PreviewRenderer",
+    "ProgressCallback",
     "assemble_output_package",
 ]
