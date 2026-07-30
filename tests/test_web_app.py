@@ -39,6 +39,17 @@ def _client(tmp_path: Path) -> TestClient:
     return TestClient(create_app(static_dir=tmp_path / "missing-web", sheet_store=store))
 
 
+def _set_uploaded_at(
+    sheet_directory: Path, sheet_id: str, uploaded_at: datetime
+) -> None:
+    metadata_path = sheet_directory / f"{sheet_id}.json"
+    metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+    metadata["uploaded_at"] = uploaded_at.isoformat()
+    metadata_path.write_text(
+        json.dumps(metadata, ensure_ascii=False) + "\n", encoding="utf-8"
+    )
+
+
 def _upload(client: TestClient, path: Path, filename: str = "planilha.xlsx"):
     with path.open("rb") as handle:
         return client.post(
@@ -285,6 +296,151 @@ def test_two_sequential_uploads_both_succeed_and_are_independently_retained(
     assert first_id != second_id
     assert first.json()["engagements"]
     assert second.json()["engagements"] == []
+    assert client.get(f"/api/control-sheet/{first_id}").status_code == 200
+    assert client.get(f"/api/control-sheet/{second_id}").status_code == 200
+
+
+def test_uploaded_sheet_is_retrievable_after_sheet_store_restarts(
+    tmp_path: Path,
+) -> None:
+    sheet_directory = tmp_path / "sheets"
+    first_client = TestClient(
+        create_app(
+            static_dir=tmp_path / "missing-web",
+            sheet_store=SheetStore(sheet_directory),
+        )
+    )
+    uploaded = _upload(first_client, FIXTURE, "controle julho.xlsx")
+
+    restarted_client = TestClient(
+        create_app(
+            static_dir=tmp_path / "missing-web",
+            sheet_store=SheetStore(sheet_directory),
+        )
+    )
+    retained = restarted_client.get(
+        f"/api/control-sheet/{uploaded.json()['sheet_id']}"
+    )
+
+    assert retained.status_code == 200
+    assert retained.json()["filename"] == "controle julho.xlsx"
+    assert retained.json()["engagements"] == uploaded.json()["engagements"]
+
+
+def test_retained_sheet_rows_are_rederived_from_the_workbook_on_every_read(
+    tmp_path: Path,
+) -> None:
+    sheet_directory = tmp_path / "sheets"
+    client = TestClient(
+        create_app(
+            static_dir=tmp_path / "missing-web",
+            sheet_store=SheetStore(sheet_directory),
+        )
+    )
+    uploaded = _upload(client, FIXTURE, "controle.xlsx").json()
+    empty = generate_control_sheet.build(
+        tmp_path / "edited.xlsx", rows=(), row_numbers=()
+    )
+    uploaded_at = client.get("/api/control-sheets").json()[0]["uploaded_at"]
+
+    (sheet_directory / f"{uploaded['sheet_id']}.xlsx").write_bytes(
+        empty.read_bytes()
+    )
+    reread = client.get(
+        f"/api/control-sheet/{uploaded['sheet_id']}"
+    )
+
+    assert reread.status_code == 200
+    assert reread.json()["engagements"] == []
+    assert client.get("/api/control-sheets").json()[0]["uploaded_at"] == uploaded_at
+
+
+def test_retained_sheet_listing_is_most_recent_first_with_ready_counts(
+    tmp_path: Path,
+) -> None:
+    sheet_directory = tmp_path / "sheets"
+    static_directory = tmp_path / "missing-web"
+    static_directory.mkdir()
+    client = TestClient(
+        create_app(
+            static_dir=static_directory,
+            sheet_store=SheetStore(sheet_directory),
+        )
+    )
+    empty = generate_control_sheet.build(
+        tmp_path / "empty.xlsx", rows=(), row_numbers=()
+    )
+    older = _upload(client, FIXTURE, "controle junho.xlsx").json()
+    newer = _upload(client, empty, "controle julho.xlsx").json()
+    now = datetime.now(UTC)
+    older_uploaded_at = now - timedelta(hours=1)
+    newer_uploaded_at = now
+    _set_uploaded_at(
+        sheet_directory, older["sheet_id"], older_uploaded_at
+    )
+    _set_uploaded_at(
+        sheet_directory, newer["sheet_id"], newer_uploaded_at
+    )
+
+    response = client.get("/api/control-sheets")
+
+    assert response.status_code == 200
+    assert response.json() == [
+        {
+            "sheet_id": newer["sheet_id"],
+            "filename": "controle julho.xlsx",
+            "uploaded_at": newer_uploaded_at.isoformat(),
+            "ready_count": 0,
+        },
+        {
+            "sheet_id": older["sheet_id"],
+            "filename": "controle junho.xlsx",
+            "uploaded_at": older_uploaded_at.isoformat(),
+            "ready_count": 4,
+        },
+    ]
+
+
+def test_seven_day_sheet_boundary_is_enforced_from_stored_upload_time(
+    tmp_path: Path,
+) -> None:
+    sheet_directory = tmp_path / "sheets"
+    client = TestClient(
+        create_app(
+            static_dir=tmp_path / "missing-web",
+            sheet_store=SheetStore(sheet_directory),
+        )
+    )
+    retained = _upload(client, FIXTURE, "ainda-retida.xlsx").json()
+    expired = _upload(client, FIXTURE, "expirada.xlsx").json()
+    now = datetime.now(UTC)
+    _set_uploaded_at(
+        sheet_directory,
+        retained["sheet_id"],
+        now - timedelta(days=7) + timedelta(seconds=5),
+    )
+    _set_uploaded_at(
+        sheet_directory,
+        expired["sheet_id"],
+        now - timedelta(days=7) - timedelta(seconds=5),
+    )
+
+    listing = client.get("/api/control-sheets")
+    expired_read = client.get(
+        f"/api/control-sheet/{expired['sheet_id']}"
+    )
+    unknown_read = client.get("/api/control-sheet/" + ("0" * 32))
+
+    assert [sheet["sheet_id"] for sheet in listing.json()] == [
+        retained["sheet_id"]
+    ]
+    assert expired_read.status_code == 404
+    assert "expirou" in expired_read.json()["detail"].casefold()
+    assert unknown_read.status_code == 404
+    assert "expirou" in unknown_read.json()["detail"].casefold()
+    assert not (sheet_directory / f"{expired['sheet_id']}.xlsx").exists()
+    assert not (sheet_directory / f"{expired['sheet_id']}.json").exists()
+    assert (sheet_directory / f"{retained['sheet_id']}.xlsx").is_file()
 
 
 def test_copy_never_claims_two_addresses_in_one_cell_are_an_error(

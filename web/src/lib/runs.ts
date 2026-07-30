@@ -27,7 +27,7 @@ export interface RunResponse {
 
 export type RunResult =
   | { ok: true; data: RunResponse }
-  | { ok: false; detail: string }
+  | { ok: false; detail: string; status?: number }
 
 async function readRunResponse(response: Response): Promise<RunResult> {
   if (response.ok) {
@@ -36,7 +36,7 @@ async function readRunResponse(response: Response): Promise<RunResult> {
   try {
     const body = (await response.json()) as { detail?: unknown }
     if (typeof body.detail === "string") {
-      return { ok: false, detail: body.detail }
+      return { ok: false, detail: body.detail, status: response.status }
     }
   } catch {
     // use the stable fallback below
@@ -44,12 +44,13 @@ async function readRunResponse(response: Response): Promise<RunResult> {
   return {
     ok: false,
     detail: "Não foi possível consultar esta geração. Tente novamente.",
+    status: response.status,
   }
 }
 
 export async function startRun(
   sheetId: string,
-  rowNumber: number,
+  rowNumber: number
 ): Promise<RunResult> {
   try {
     return readRunResponse(
@@ -60,7 +61,7 @@ export async function startRun(
           sheet_id: sheetId,
           row_number: rowNumber,
         }),
-      }),
+      })
     )
   } catch {
     return {

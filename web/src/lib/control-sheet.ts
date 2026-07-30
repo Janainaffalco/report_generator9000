@@ -43,9 +43,18 @@ export interface ControlSheetResponse {
   skipped_rows: SkippedRows
 }
 
+export interface RetainedSheet {
+  sheet_id: string
+  filename: string
+  uploaded_at: string
+  ready_count: number
+}
+
 export type ControlSheetResult =
-  | { ok: true; data: ControlSheetResponse }
-  | { ok: false; detail: string }
+  { ok: true; data: ControlSheetResponse } | { ok: false; detail: string }
+
+export type RetainedSheetsResult =
+  { ok: true; data: RetainedSheet[] } | { ok: false; detail: string }
 
 const GENERIC_ERROR_DETAIL =
   "Não foi possível ler essa planilha. Tente novamente."
@@ -55,7 +64,7 @@ export function rowKey(row: RowRef) {
 }
 
 export async function uploadControlSheet(
-  file: File,
+  file: File
 ): Promise<ControlSheetResult> {
   const formData = new FormData()
   formData.append("file", file)
@@ -91,7 +100,7 @@ export async function uploadControlSheet(
 }
 
 export async function getRetainedControlSheet(
-  sheetId: string,
+  sheetId: string
 ): Promise<ControlSheetResult> {
   try {
     const response = await fetch(`/api/control-sheet/${sheetId}`)
@@ -111,6 +120,27 @@ export async function getRetainedControlSheet(
     return {
       ok: false,
       detail: "Não foi possível recuperar a planilha desta geração.",
+    }
+  }
+}
+
+export async function listRetainedControlSheets(): Promise<RetainedSheetsResult> {
+  try {
+    const response = await fetch("/api/control-sheets")
+    if (response.ok) {
+      return {
+        ok: true,
+        data: (await response.json()) as RetainedSheet[],
+      }
+    }
+    return {
+      ok: false,
+      detail: "Não foi possível procurar planilhas enviadas anteriormente.",
+    }
+  } catch {
+    return {
+      ok: false,
+      detail: "Não foi possível procurar planilhas enviadas anteriormente.",
     }
   }
 }

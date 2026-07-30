@@ -8,7 +8,7 @@ import shutil
 import traceback
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict, dataclass, replace
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from pathlib import Path
 from threading import RLock
 from typing import Callable, Literal
@@ -25,6 +25,7 @@ from .gemini_provider import (
     GeminiSettings,
 )
 from .prose import ProseConfig, ProseProvider
+from .retention import RETENTION
 from .run_context import Pendencia
 
 
@@ -52,7 +53,6 @@ STAGES: tuple[StageName, ...] = (
     "assemble",
     "gate",
 )
-RETENTION = timedelta(days=7)
 PACKAGED_MASTER_PATH = Path(__file__).with_name("assets") / "MASTER.docx"
 
 

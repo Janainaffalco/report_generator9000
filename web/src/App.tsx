@@ -2,14 +2,16 @@ import { useCallback, useEffect, useState, type CSSProperties } from "react"
 import { CheckCircle2Icon, FileTextIcon, ShieldCheckIcon } from "lucide-react"
 
 import { GenerationRun } from "@/components/GenerationRun"
+import { RetainedSheetPicker } from "@/components/RetainedSheetPicker"
 import { UploadPanel } from "@/components/UploadPanel"
 import { WorkGroups } from "@/components/WorkGroups"
 import { buttonVariants } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Separator } from "@/components/ui/separator"
-import type { ControlSheetResponse } from "@/lib/control-sheet"
+import type { ControlSheetResponse, RetainedSheet } from "@/lib/control-sheet"
 import {
   getRetainedControlSheet,
+  listRetainedControlSheets,
   uploadControlSheet,
 } from "@/lib/control-sheet"
 import type { RunResponse } from "@/lib/runs"
@@ -26,7 +28,8 @@ const stages = [
 const features = [
   {
     title: "Extração automática com consistência de screenshots das páginas",
-    description: "Capturas organizadas para registrar cada página com consistência.",
+    description:
+      "Capturas organizadas para registrar cada página com consistência.",
     icon: ShieldCheckIcon,
   },
   {
@@ -50,21 +53,23 @@ function currentStage(pathname: string) {
 }
 
 export function App() {
-  const [status, setStatus] = useState<"idle" | "loading" | "starting">(
-    "idle",
-  )
+  const [status, setStatus] = useState<"idle" | "loading" | "starting">("idle")
   const [errorDetail, setErrorDetail] = useState<string | null>(null)
   const [controlSheet, setControlSheet] = useState<ControlSheetResponse | null>(
     null
   )
   const [run, setRun] = useState<RunResponse | null>(null)
+  const [retainedSheets, setRetainedSheets] = useState<RetainedSheet[]>([])
+  const [restoringSheet, setRestoringSheet] = useState(
+    window.location.pathname === "/"
+  )
 
   const activeStage = currentStage(
     run
       ? "/conferir"
       : controlSheet
         ? CHOOSING_WORK_PATH
-        : window.location.pathname,
+        : window.location.pathname
   )
 
   async function handleFile(file: File) {
@@ -104,6 +109,31 @@ export function App() {
   }, [refreshRun])
 
   useEffect(() => {
+    if (window.location.pathname !== "/") {
+      return
+    }
+    void listRetainedControlSheets().then(async (result) => {
+      if (!result.ok) {
+        setErrorDetail(result.detail)
+        setRestoringSheet(false)
+        return
+      }
+      if (result.data.length === 1) {
+        const retained = await getRetainedControlSheet(result.data[0].sheet_id)
+        if (retained.ok) {
+          setControlSheet(retained.data)
+          window.history.replaceState({}, "", CHOOSING_WORK_PATH)
+        } else {
+          setErrorDetail(retained.detail)
+        }
+      } else if (result.data.length > 1) {
+        setRetainedSheets(result.data)
+      }
+      setRestoringSheet(false)
+    })
+  }, [])
+
+  useEffect(() => {
     if (!run || run.outcome !== "running") {
       return
     }
@@ -123,14 +153,30 @@ export function App() {
     setStatus("idle")
     if (!result.ok) {
       setErrorDetail(result.detail)
+      if (result.status === 404) {
+        setControlSheet(null)
+        setRetainedSheets([])
+        window.history.replaceState({}, "", "/enviar")
+      }
       return
     }
-    window.history.pushState(
-      {},
-      "",
-      `/relatorios/${result.data.run_id}`,
-    )
+    window.history.pushState({}, "", `/relatorios/${result.data.run_id}`)
     setRun(result.data)
+  }
+
+  async function handleRetainedSheet(sheetId: string) {
+    setStatus("loading")
+    setErrorDetail(null)
+    const retained = await getRetainedControlSheet(sheetId)
+    setStatus("idle")
+    setRetainedSheets([])
+    if (retained.ok) {
+      setControlSheet(retained.data)
+      window.history.replaceState({}, "", CHOOSING_WORK_PATH)
+      return
+    }
+    setErrorDetail(retained.detail)
+    window.history.replaceState({}, "", "/enviar")
   }
 
   async function handleBackToRows() {
@@ -138,6 +184,10 @@ export function App() {
       const result = await getRetainedControlSheet(run.sheet_id)
       if (!result.ok) {
         setErrorDetail(result.detail)
+        setRun(null)
+        setControlSheet(null)
+        setRetainedSheets([])
+        window.history.pushState({}, "", "/enviar")
         return
       }
       setControlSheet(result.data)
@@ -174,9 +224,11 @@ export function App() {
           <Separator />
           <ol
             className="stage-stepper grid grid-cols-4 gap-2 py-4 sm:gap-4"
-            style={{
-              "--stage-progress": `${(activeStage / stages.length) * 100}%`,
-            } as CSSProperties}
+            style={
+              {
+                "--stage-progress": `${(activeStage / stages.length) * 100}%`,
+              } as CSSProperties
+            }
           >
             {stages.map((stage) => (
               <li key={stage.number}>
@@ -219,6 +271,15 @@ export function App() {
             onReplaceFile={handleFile}
             onGenerate={handleGenerate}
           />
+        ) : retainedSheets.length > 1 ? (
+          <RetainedSheetPicker
+            sheets={retainedSheets}
+            onSelect={(sheetId) => void handleRetainedSheet(sheetId)}
+          />
+        ) : restoringSheet ? (
+          <p role="status" className="mt-10 text-sm text-muted-foreground">
+            Procurando a planilha mais recente no servidor…
+          </p>
         ) : (
           <>
             <UploadPanel
@@ -266,8 +327,9 @@ export function App() {
             </a>
           </div>
           <p className="max-w-xl text-right">
-            Os arquivos de cada execução são mantidos no servidor por sete dias.
-            Nenhum dado do cliente é enviado a uma conta de terceiros.
+            As planilhas enviadas e os arquivos de cada relatório são mantidos
+            no servidor por sete dias. Nenhum dado do cliente é enviado a uma
+            conta de terceiros.
           </p>
         </div>
       </footer>
