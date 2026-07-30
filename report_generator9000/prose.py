@@ -6,6 +6,7 @@ import re
 from dataclasses import dataclass
 from typing import Protocol
 
+from . import events
 from .lista_paginas import Pagina
 from .run_context import Grounding, Pendencia, pendencia_marker
 
@@ -159,18 +160,34 @@ def _field_value(
     provider_pages: dict[str, ProviderPageText],
     extracted_pages: dict[str, ExtractedPageText],
 ) -> tuple[str, Pendencia, tuple[Grounding, ...]]:
-    citations_are_exact = bool(field.citations) and all(
-        citation.source_id in provider_pages
-        and citation.excerpt.strip()
-        and citation.excerpt in provider_pages[citation.source_id].text
+    rejection_reason: str | None = None
+    if field.value is None or not field.value.strip():
+        rejection_reason = "missing_value"
+    elif not field.citations:
+        rejection_reason = "missing_citations"
+    elif any(
+        citation.source_id not in provider_pages
         for citation in field.citations
-    )
-    if (
-        not field.grounded
-        or field.value is None
-        or not field.value.strip()
-        or not citations_are_exact
     ):
+        rejection_reason = "unknown_source_id"
+    elif any(not citation.excerpt.strip() for citation in field.citations):
+        rejection_reason = "empty_excerpt"
+    elif any(
+        citation.excerpt not in provider_pages[citation.source_id].text
+        for citation in field.citations
+    ):
+        rejection_reason = "excerpt_not_found"
+    elif not field.grounded:
+        rejection_reason = "provider_marked_ungrounded"
+
+    if rejection_reason is not None:
+        events.notice(
+            "prose_field_rejected",
+            severity="warning",
+            slot=slot,
+            reason=rejection_reason,
+            citation_count=len(field.citations),
+        )
         marker, pendencia = _gap(
             slot=slot,
             name=name,

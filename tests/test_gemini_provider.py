@@ -153,6 +153,19 @@ def test_provider_uses_structured_output_and_preserves_exact_citations() -> None
     assert config.tools is None
 
 
+def test_system_instruction_contains_briefing_one_shot_example() -> None:
+    from report_generator9000.gemini_provider import _SYSTEM_INSTRUCTION
+
+    normalized = " ".join(_SYSTEM_INSTRUCTION.split())
+    assert (
+        "O responsável pela ARGEL Resistências Elétricas Ltda manifestou o "
+        "interesse em desenvolver um site institucional com o objetivo de "
+        "fortalecer a presença digital da empresa, apresentar sua trajetória "
+        "e destacar seu portfólio de produtos."
+    ) in normalized
+    assert "não copie os fatos nem o nome da empresa" in normalized
+
+
 @pytest.mark.parametrize("reason", ["MAX_TOKENS", "BUDGET_EXCEEDED"])
 def test_provider_marks_budget_exhaustion(reason: str) -> None:
     response = SimpleNamespace(

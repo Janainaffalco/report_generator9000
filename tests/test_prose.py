@@ -219,6 +219,43 @@ def test_null_or_ungrounded_fields_become_marked_gaps(
     assert all(item.evidence in values.values() for item in drafted.pendencias)
 
 
+def test_partial_prose_rejection_logs_the_specific_field_reason(
+    recording_sink,
+) -> None:
+    provider = CannedProvider(
+        ProseResponse(
+            company_description=GroundedField(
+                "A Acme fabrica componentes industriais.",
+                True,
+                (COMPANY_CITATION,),
+            ),
+            briefing_objective=GroundedField(None, False),
+        )
+    )
+
+    drafted = draft_prose(
+        PAGES,
+        SITE_TEXT,
+        provider,
+        ProseConfig(model="m", output_budget=500),
+    )
+
+    assert drafted.token_values["{{BRIEFING_INICIAL}}"].startswith(
+        "[PENDÊNCIA: FALHA NA AUTOMAÇÃO —"
+    )
+    rejections = [
+        event
+        for event in recording_sink.events
+        if event.name == "prose_field_rejected"
+    ]
+    assert len(rejections) == 1
+    assert rejections[0].fields == {
+        "slot": "objetivo_briefing",
+        "reason": "missing_value",
+        "citation_count": 0,
+    }
+
+
 def test_budget_exhaustion_is_a_hard_tool_failure() -> None:
     provider = CannedProvider(
         ProseResponse(

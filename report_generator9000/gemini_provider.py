@@ -42,10 +42,21 @@ Regras obrigatórias:
 - A descrição da empresa deve resumir o que a empresa faz em um parágrafo curto.
 - O objetivo do briefing deve descrever, em um parágrafo curto, o objetivo
   observável do site e dos serviços apresentados.
+- Avalie e preencha os dois campos de forma independente. Evidências usadas na
+  descrição da empresa também podem sustentar o objetivo do briefing.
 - Para cada campo preenchido, copie ao menos um trecho literal e contíguo das
   fontes como citação. Use exatamente o identificador da fonte fornecido.
 - Se não houver base suficiente para um campo, devolva valor nulo e nenhuma
   citação para esse campo.
+
+Exemplo de estilo para o valor de briefing_objective:
+"O responsável pela ARGEL Resistências Elétricas Ltda manifestou o interesse em
+desenvolver um site institucional com o objetivo de fortalecer a presença
+digital da empresa, apresentar sua trajetória e destacar seu portfólio de
+produtos."
+Use o exemplo somente como referência de estrutura e tom; não copie os fatos
+nem o nome da empresa. Cada afirmação da resposta deve estar sustentada pelas
+fontes fornecidas.
 """.strip()
 
 
