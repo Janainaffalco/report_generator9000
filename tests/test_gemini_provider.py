@@ -510,6 +510,52 @@ def test_model_used_logged_on_successful_call(recording_sink) -> None:
     assert ends[0].fields["model"] == DEFAULT_GEMINI_MODEL
 
 
+def test_successful_response_is_available_in_run_log_detail(
+    recording_sink,
+) -> None:
+    response_text = json.dumps(
+        {
+            "company_description": {
+                "value": "A Acme fabrica componentes.",
+                "citations": [
+                    {
+                        "source_id": "page-1",
+                        "excerpt": "A Acme fabrica componentes",
+                    }
+                ],
+            },
+            "briefing_objective": {
+                "value": None,
+                "citations": [],
+            },
+        },
+        ensure_ascii=False,
+    )
+    response = SimpleNamespace(
+        candidates=[],
+        parsed=None,
+        text=response_text,
+    )
+    provider = GeminiProseProvider(_settings(), client=_Client(response))
+
+    provider.generate(
+        _request(),
+        ProseConfig(model=DEFAULT_GEMINI_MODEL, output_budget=700),
+    )
+
+    responses = [
+        event
+        for event in recording_sink.events
+        if event.name == "gemini_response_received"
+    ]
+    assert len(responses) == 1
+    assert responses[0].fields == {
+        "model": DEFAULT_GEMINI_MODEL,
+        "response_chars": len(response_text),
+    }
+    assert responses[0].detail["response"] == response_text
+
+
 def test_prompt_content_never_appears_in_any_emitted_event(
     recording_sink,
 ) -> None:

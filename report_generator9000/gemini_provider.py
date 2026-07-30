@@ -339,6 +339,15 @@ class GeminiProseProvider:
                     f"Gemini request failed: {type(error).__name__}"
                 ) from error
 
+        response_text = getattr(response, "text", None)
+        if isinstance(response_text, str):
+            events.notice(
+                "gemini_response_received",
+                model=self.last_model_used,
+                response_chars=len(response_text),
+                detail={"response": response_text},
+            )
+
         if _budget_exhausted(response):
             events.notice(
                 "gemini_budget_exhausted",
