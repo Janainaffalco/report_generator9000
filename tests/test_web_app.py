@@ -9,6 +9,7 @@ from types import SimpleNamespace
 import pytest
 from fastapi.testclient import TestClient
 
+from report_generator9000.gates.results import GateReport, GateResult, Violation
 from report_generator9000.generate import StopCondition
 from report_generator9000.master import build_master
 from report_generator9000.prose import (
@@ -17,6 +18,7 @@ from report_generator9000.prose import (
     ProseRequest,
     ProseResponse,
 )
+from report_generator9000.run_context import Pendencia
 from report_generator9000.sheet_store import SheetStore
 from report_generator9000.control_sheet import Engagement
 from report_generator9000.runs import GateRejected, RunService, RunStore, STAGES
@@ -353,7 +355,12 @@ def test_starting_one_engagement_returns_immediately_then_polls_and_downloads(
         document.write_bytes(b"generated docx")
         return SimpleNamespace(
             pages=(object(), object(), object()),
-            report=SimpleNamespace(status="draft", document=document),
+            report=SimpleNamespace(
+                status="draft",
+                document=document,
+                gate_report=SimpleNamespace(results=()),
+                context=SimpleNamespace(pendencias=()),
+            ),
         )
 
     service = RunService(
@@ -613,3 +620,220 @@ def test_expired_run_is_gone_even_when_no_new_run_was_submitted(
     assert client.get(f"/api/runs/{record.run_id}/download").status_code == 404
     assert not path.exists()
     service.shutdown()
+
+
+def _finished_run_client(
+    tmp_path: Path,
+    *,
+    gate_report: GateReport,
+    pendencias: tuple[Pendencia, ...],
+) -> tuple[TestClient, str]:
+    sheet_store = SheetStore(tmp_path / "sheets")
+    app = create_app(static_dir=tmp_path / "missing-web", sheet_store=sheet_store)
+
+    def assemble(master, output_root, engagement, gated_root, **options):
+        progress = options["progress"]
+        for stage in STAGES:
+            progress(stage, 3 if stage == "derive_pages" else None)
+        document = (
+            Path(output_root)
+            / f"{engagement.pasta}_{engagement.razao_social}"
+            / f"RELATÓRIO TÉCNICO FINAL - {engagement.pasta}_{engagement.razao_social}.docx"
+        )
+        document.parent.mkdir(parents=True, exist_ok=True)
+        document.write_bytes(b"generated docx")
+        previews_dir = document.parent / "previews"
+        previews_dir.mkdir(parents=True, exist_ok=True)
+        (previews_dir / "preview-001.png").write_bytes(_TINY_PNG)
+        (previews_dir / "preview-002.png").write_bytes(_TINY_PNG)
+        return SimpleNamespace(
+            pages=(object(), object(), object()),
+            report=SimpleNamespace(
+                status=("complete" if not pendencias else "draft"),
+                document=document,
+                gate_report=gate_report,
+                context=SimpleNamespace(pendencias=pendencias),
+            ),
+        )
+
+    service = RunService(
+        store=RunStore(tmp_path / "runs"),
+        master=tmp_path / "MASTER.docx",
+        output_root=tmp_path / "outputs",
+        gated_drop_root=tmp_path / "gated",
+        assembler=assemble,
+        no_llm=True,
+    )
+    app.state.run_service = service
+    client = TestClient(app)
+    uploaded = _upload(client, FIXTURE)
+    started = client.post(
+        "/api/runs",
+        json={"sheet_id": uploaded.json()["sheet_id"], "row_number": 2},
+    )
+    location = started.headers["location"]
+    deadline = monotonic() + 2
+    record = client.get(location).json()
+    while record["outcome"] == "running" and monotonic() < deadline:
+        sleep(0.01)
+        record = client.get(location).json()
+    assert record["outcome"] == "finished", record
+    return client, record["run_id"]
+
+
+_TINY_PNG = (
+    b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01"
+    b"\x08\x02\x00\x00\x00\x90wS\xde\x00\x00\x00\x0cIDATx\x9cc\xf8\xcf\xc0"
+    b"\x00\x00\x03\x01\x01\x00\x18\xdd\x8d\xb0\x00\x00\x00\x00IEND\xaeB`\x82"
+)
+
+
+def test_finished_report_returns_pendencias_checks_and_download_filename(
+    tmp_path: Path,
+) -> None:
+    gate_report = GateReport(
+        results=(
+            GateResult(gate="media-provenance"),
+            GateResult(
+                gate="block-integrity",
+                violations=(
+                    Violation(
+                        gate="block-integrity",
+                        rule="heading-without-image",
+                        artifact="word/document.xml p=4",
+                        detail="SEÇÃO CONTATO",
+                    ),
+                ),
+            ),
+        )
+    )
+    pendencias = (
+        Pendencia(
+            slot="paleta",
+            classification="UNDECLARED",
+            reason="site nao declara cores",
+            evidence="deadbeef",
+            name="paleta de cores",
+            page="documento",
+            required_action="Revisar a paleta no Word e substituir se necessário",
+        ),
+        Pendencia(
+            slot="capture:foto-home.png",
+            classification="TOOL_BLOCKED",
+            reason="falha ao capturar a página",
+            evidence="cafefeed",
+            name="captura da PÁGINA HOME",
+            page="PÁGINA HOME",
+            required_action="Gerar novamente; se persistir, avise quem cuida do sistema",
+        ),
+        Pendencia(
+            slot="cnpj_doc",
+            classification="GATED",
+            reason="valor nao fornecido no Gated Drop Folder",
+            evidence="[PENDÊNCIA: NÃO FORNECIDO — cnpj_doc]",
+            name="cnpj doc",
+            page="documento",
+            required_action="Fornecer cnpj doc no valores.json",
+        ),
+    )
+    client, run_id = _finished_run_client(
+        tmp_path, gate_report=gate_report, pendencias=pendencias
+    )
+
+    response = client.get(f"/api/runs/{run_id}/report")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["status"] == "draft"
+    assert body["page_count"] == 3
+    assert body["filename"].endswith(".docx")
+    assert body["download_url"] == f"/api/runs/{run_id}/download"
+    assert [check["passed"] for check in body["checks"]] == [True, False]
+    check_labels = [check["label"] for check in body["checks"]]
+    assert "media-provenance" not in check_labels
+    assert "block-integrity" not in check_labels
+    assert len(set(check_labels)) == 2
+
+    by_classification = {
+        item["classification"]: item for item in body["pendencias"]
+    }
+    assert set(by_classification) == {"UNDECLARED", "TOOL_BLOCKED", "GATED"}
+    for item in body["pendencias"]:
+        assert "slot" not in item
+        assert item["name"]
+        assert item["required_action"]
+        assert item["page"]
+    explanations = {
+        item["classification"]: item["classification_explanation"]
+        for item in body["pendencias"]
+    }
+    assert len(set(explanations.values())) == 3
+    labels = {
+        item["classification"]: item["classification_label"]
+        for item in body["pendencias"]
+    }
+    assert len(set(labels.values())) == 3
+
+
+def test_finished_report_with_no_pendencias_is_complete_and_empty(
+    tmp_path: Path,
+) -> None:
+    client, run_id = _finished_run_client(
+        tmp_path, gate_report=GateReport(results=()), pendencias=()
+    )
+
+    response = client.get(f"/api/runs/{run_id}/report")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["status"] == "complete"
+    assert body["pendencias"] == []
+
+
+def test_report_endpoint_404s_before_the_run_finishes(tmp_path: Path) -> None:
+    sheet_store = SheetStore(tmp_path / "sheets")
+    app = create_app(static_dir=tmp_path / "missing-web", sheet_store=sheet_store)
+    release = Event()
+
+    def assemble(master, output_root, engagement, gated_root, **options):
+        options["progress"]("read_row", None)
+        release.wait(timeout=5)
+        options["progress"]("open_origin", None)
+        raise StopCondition("STOP CONDITION: never finishes")
+
+    service = RunService(
+        store=RunStore(tmp_path / "runs"),
+        master=tmp_path / "MASTER.docx",
+        output_root=tmp_path / "outputs",
+        gated_drop_root=tmp_path / "gated",
+        assembler=assemble,
+        no_llm=True,
+    )
+    app.state.run_service = service
+    client = TestClient(app)
+    uploaded = _upload(client, FIXTURE)
+    started = client.post(
+        "/api/runs",
+        json={"sheet_id": uploaded.json()["sheet_id"], "row_number": 2},
+    )
+    run_id = started.json()["run_id"]
+
+    response = client.get(f"/api/runs/{run_id}/report")
+
+    assert response.status_code == 404
+    release.set()
+    service.shutdown()
+
+
+def test_preview_page_images_are_served_as_png(tmp_path: Path) -> None:
+    client, run_id = _finished_run_client(
+        tmp_path, gate_report=GateReport(results=()), pendencias=()
+    )
+
+    first = client.get(f"/api/runs/{run_id}/previews/1")
+    missing = client.get(f"/api/runs/{run_id}/previews/99")
+
+    assert first.status_code == 200
+    assert first.headers["content-type"] == "image/png"
+    assert first.content[:8] == b"\x89PNG\r\n\x1a\n"
+    assert missing.status_code == 404

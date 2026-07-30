@@ -18,12 +18,14 @@ from .assembly import OutputPackage, ProgressCallback, assemble_output_package
 from .control_sheet import Engagement
 from .events import configure_logging, notice, run_scope
 from .events import stage as emit_stage
+from .gates.results import GateReport
 from .generate import GateRejected, StopCondition
 from .gemini_provider import (
     GeminiProseProvider,
     GeminiSettings,
 )
 from .prose import ProseConfig, ProseProvider
+from .run_context import Pendencia
 
 
 StageName = Literal[
@@ -70,6 +72,8 @@ class RunRecord:
     reason: str | None
     created_at: str
     updated_at: str
+    checks: tuple[dict[str, object], ...] = ()
+    pendencias: tuple[dict[str, object], ...] = ()
 
 
 class RunStore:
@@ -100,6 +104,8 @@ class RunStore:
             reason=None,
             created_at=now,
             updated_at=now,
+            checks=(),
+            pendencias=(),
         )
         self._write(record)
         return record
@@ -139,6 +145,8 @@ class RunStore:
                 return None
         payload["completed_stages"] = tuple(payload["completed_stages"])
         payload["stage_history"] = tuple(payload["stage_history"])
+        payload["checks"] = tuple(payload.get("checks", ()))
+        payload["pendencias"] = tuple(payload.get("pendencias", ()))
         return RunRecord(**payload)
 
     def update(self, run_id: str, **changes: object) -> RunRecord:
@@ -195,6 +203,30 @@ class RunStore:
 
 
 Assembler = Callable[..., OutputPackage]
+
+
+def _check_dicts(gate_report: GateReport) -> tuple[dict[str, object], ...]:
+    """Translate a GateReport into the durable shape a RunRecord stores."""
+    return tuple(
+        {"gate": item.gate, "passed": item.passed}
+        for item in gate_report.results
+    )
+
+
+def _pendencia_dicts(
+    pendencias: tuple[Pendencia, ...]
+) -> tuple[dict[str, object], ...]:
+    """Translate Pendências into the durable shape a RunRecord stores."""
+    return tuple(
+        {
+            "slot": item.slot,
+            "classification": item.classification,
+            "name": item.name,
+            "page": item.page,
+            "required_action": item.required_action,
+        }
+        for item in pendencias
+    )
 
 
 class RunService:
@@ -347,6 +379,8 @@ class RunService:
                 filename=package.report.document.name,
                 document=str(package.report.document.resolve()),
                 reason=None,
+                checks=_check_dicts(package.report.gate_report),
+                pendencias=_pendencia_dicts(package.report.context.pendencias),
             )
         finally:
             if managed_provider is not None:

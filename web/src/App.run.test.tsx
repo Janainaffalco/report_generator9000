@@ -99,17 +99,39 @@ describe("resumable generation screens", () => {
         "RELATÓRIO TÉCNICO FINAL - 40-2026_DENISE BARROS DE ALMEIDA.docx",
       download_url: "/api/runs/persisted-run/download",
     }
-    vi.mocked(fetch).mockResolvedValueOnce(response(finished))
+    const report = {
+      run_id: "persisted-run",
+      status: "draft",
+      page_count: 3,
+      filename: finished.filename,
+      download_url: finished.download_url,
+      pendencias: [
+        {
+          classification: "GATED",
+          classification_label: "NÃO FORNECIDO",
+          classification_explanation:
+            "Normal e esperado: nenhuma automação consegue obter este conteúdo sozinha.",
+          name: "logo do cliente",
+          required_action: "Fornecer logo do cliente no valores.json",
+          page: "documento",
+        },
+      ],
+      checks: [{ label: "Nenhuma imagem de outro cliente no arquivo", passed: true }],
+    }
+    vi.mocked(fetch)
+      .mockResolvedValueOnce(response(finished))
+      .mockResolvedValueOnce(response(report))
 
     render(<App />)
 
-    await screen.findByText("Relatório gerado")
-    expect(screen.getByText("Rascunho com Pendências")).toBeInTheDocument()
+    expect(await screen.findByText("Rascunho com Pendências")).toBeInTheDocument()
     expect(screen.getByText(finished.filename!)).toBeInTheDocument()
     expect(screen.getByRole("link", { name: "Baixar .docx" })).toHaveAttribute(
       "href",
       finished.download_url,
     )
+    expect(screen.getByText("logo do cliente")).toBeInTheDocument()
+    expect(fetch).toHaveBeenCalledWith("/api/runs/persisted-run/report")
   })
 
   it("names a Stop Condition and offers the row list with no download", async () => {

@@ -157,6 +157,12 @@
     color: var(--primary);
   }
 
+  /* The document preview page is the design system's one modal-shadow
+     case; everywhere else shadows are effectively absent. */
+  .preview-frame {
+    box-shadow: var(--shadow-modal);
+  }
+
   @keyframes stage-progress {
     from { width: 0; }
     to { width: var(--stage-progress); }

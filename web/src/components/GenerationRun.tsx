@@ -1,6 +1,7 @@
 import { CheckIcon, CircleIcon, LoaderCircleIcon } from "lucide-react"
 
-import { Button, buttonVariants } from "@/components/ui/button"
+import { ReviewScreen } from "@/components/ReviewScreen"
+import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import type { RunResponse } from "@/lib/runs"
 import { cn } from "@/lib/utils"
@@ -33,36 +34,7 @@ export function GenerationRun({
   const name = `${run.engagement.pasta} · ${run.engagement.razao_social}`
 
   if (run.outcome === "finished") {
-    const complete = run.status === "complete"
-    return (
-      <Card className="mt-10 w-full max-w-3xl">
-        <CardHeader>
-          <CardTitle>Relatório gerado</CardTitle>
-        </CardHeader>
-        <CardContent className="flex flex-col gap-5">
-          <p className="text-lg font-medium">{name}</p>
-          <dl className="grid gap-3 text-sm sm:grid-cols-2">
-            <RunFact
-              label="Estado"
-              value={complete ? "Completo" : "Rascunho com Pendências"}
-            />
-            <RunFact
-              label="Lista de Páginas"
-              value={`${run.page_count ?? 0} itens`}
-            />
-            <RunFact label="Arquivo" value={run.filename ?? "—"} />
-          </dl>
-          {run.download_url && (
-            <a
-              className={cn(buttonVariants({ size: "lg" }), "self-start")}
-              href={run.download_url}
-            >
-              Baixar .docx
-            </a>
-          )}
-        </CardContent>
-      </Card>
-    )
+    return <ReviewScreen key={run.run_id} run={run} />
   }
 
   if (run.outcome === "stopped") {
@@ -150,15 +122,6 @@ export function GenerationRun({
         ))}
       </ol>
     </section>
-  )
-}
-
-function RunFact({ label, value }: { label: string; value: string }) {
-  return (
-    <div>
-      <dt className="text-muted-foreground">{label}</dt>
-      <dd className="mt-1 font-medium">{value}</dd>
-    </div>
   )
 }
 

@@ -18,6 +18,7 @@ from .control_sheet import (
     read_control_sheet,
     read_row_pastas,
 )
+from .run_context import classification_label
 from .runs import RunRecord, STAGES, default_run_service
 from .sheet_store import SheetStore, default_sheet_store
 
@@ -98,6 +99,40 @@ _SKIPPED_REASONS: dict[str, _Exclusion] = {
     ),
 }
 
+# The Pendência classes must read correctly and differently: GATED is normal
+# and expected, TOOL_BLOCKED is a defect worth re-running for, and UNDECLARED
+# is a property of the site rather than a failure of either kind. REVIEW is
+# generated content still awaiting the consultant's approval.
+_CLASSIFICATION_EXPLANATIONS = {
+    "GATED": (
+        "Normal e esperado: nenhuma automação consegue obter este conteúdo "
+        "sozinha."
+    ),
+    "TOOL_BLOCKED": (
+        "Defeito da automação: a captura falhou e gerar de novo pode "
+        "resolver."
+    ),
+    "UNDECLARED": (
+        "O site não declara essa informação — é uma característica do "
+        "site, não uma falha da geração."
+    ),
+    "REVIEW": (
+        "Gerado a partir de fatos observados, mas ainda precisa da sua "
+        "aprovação antes do envio."
+    ),
+}
+
+# The same gates that would have blocked the run, stated in language that
+# means something to a consultant rather than the gate's internal name.
+_GATE_LABELS = {
+    "media-provenance": "Nenhuma imagem de outro cliente no arquivo",
+    "link-provenance": "Os links apontam para o cliente certo",
+    "token-residue": "Nenhum campo do modelo ficou por preencher",
+    "engagement-scope": "Os arquivos usados pertencem a este cliente",
+    "block-integrity": "Todo título de Bloco tem sua imagem",
+    "pendencias-agreement": "A lista de Pendências bate com o documento",
+}
+
 
 class RowRef(BaseModel):
     pasta: str | None
@@ -169,6 +204,30 @@ class RunResponse(BaseModel):
     download_url: str | None
 
 
+class PendenciaOut(BaseModel):
+    classification: str
+    classification_label: str
+    classification_explanation: str
+    name: str
+    required_action: str
+    page: str
+
+
+class CheckOut(BaseModel):
+    label: str
+    passed: bool
+
+
+class FinishedReportResponse(BaseModel):
+    run_id: str
+    status: str
+    page_count: int
+    filename: str
+    download_url: str
+    pendencias: list[PendenciaOut]
+    checks: list[CheckOut]
+
+
 def _run_response(record: RunRecord) -> RunResponse:
     completed = set(record.completed_stages)
     return RunResponse(
@@ -200,6 +259,38 @@ def _run_response(record: RunRecord) -> RunResponse:
             if record.outcome == "finished" and record.document
             else None
         ),
+    )
+
+
+def _report_response(record: RunRecord) -> FinishedReportResponse:
+    return FinishedReportResponse(
+        run_id=record.run_id,
+        status=record.report_status or "draft",
+        page_count=record.page_count or 0,
+        filename=record.filename or "",
+        download_url=f"/api/runs/{record.run_id}/download",
+        pendencias=[
+            PendenciaOut(
+                classification=item["classification"],
+                classification_label=classification_label(
+                    item["classification"]
+                ),
+                classification_explanation=_CLASSIFICATION_EXPLANATIONS.get(
+                    item["classification"], ""
+                ),
+                name=item["name"],
+                required_action=item["required_action"],
+                page=item["page"],
+            )
+            for item in record.pendencias
+        ],
+        checks=[
+            CheckOut(
+                label=_GATE_LABELS.get(item["gate"], item["gate"]),
+                passed=item["passed"],
+            )
+            for item in record.checks
+        ],
     )
 
 
@@ -380,6 +471,28 @@ def create_app(
             ),
             filename=record.filename,
         )
+
+    @app.get("/api/runs/{run_id}/report")
+    def get_report(run_id: str) -> FinishedReportResponse:
+        record = app.state.run_service.store.get(run_id)
+        if record is None or record.outcome != "finished" or record.document is None:
+            raise HTTPException(
+                404, "Esta geração ainda não tem um relatório para revisar."
+            )
+        return _report_response(record)
+
+    @app.get("/api/runs/{run_id}/previews/{page}")
+    def get_preview_page(run_id: str, page: int) -> FileResponse:
+        record = app.state.run_service.store.get(run_id)
+        if record is None or record.outcome != "finished" or record.document is None:
+            raise HTTPException(
+                404, "Esta geração não tem páginas de prévia disponíveis."
+            )
+        previews_dir = Path(record.document).parent / "previews"
+        image_path = previews_dir / f"preview-{page:03d}.png"
+        if not image_path.is_file():
+            raise HTTPException(404, "Esta página não existe na prévia.")
+        return FileResponse(image_path, media_type="image/png")
 
     app.frontend(
         "/",
