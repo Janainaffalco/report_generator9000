@@ -102,6 +102,7 @@ describe("resumable generation screens", () => {
     const report = {
       run_id: "persisted-run",
       status: "draft",
+      preview_page_count: 5,
       page_count: 3,
       filename: finished.filename,
       download_url: finished.download_url,

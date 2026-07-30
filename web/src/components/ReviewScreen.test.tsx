@@ -43,6 +43,7 @@ describe("ReviewScreen", () => {
         response({
           run_id: "run-1",
           status: "draft",
+          preview_page_count: 5,
           page_count: 3,
           filename: run.filename,
           download_url: run.download_url,
@@ -124,6 +125,7 @@ describe("ReviewScreen", () => {
         response({
           run_id: "run-1",
           status: "complete",
+          preview_page_count: 4,
           page_count: 2,
           filename: run.filename,
           download_url: run.download_url,
@@ -150,6 +152,7 @@ describe("ReviewScreen", () => {
         response({
           run_id: "run-1",
           status: "complete",
+          preview_page_count: 5,
           page_count: 3,
           filename: run.filename,
           download_url: run.download_url,
@@ -168,24 +171,26 @@ describe("ReviewScreen", () => {
     expect(
       screen.getByText("Todo título de Bloco tem sua imagem"),
     ).toBeInTheDocument()
-    expect(screen.getByText("Página 1 de 3")).toBeInTheDocument()
+    // The rail and the counter follow the document's own pages, never the
+    // Lista de Páginas — the response deliberately disagrees on the two.
+    expect(screen.getByText("Página 1 de 5")).toBeInTheDocument()
     expect(
       screen.getByText(/aproximada da paginação/i),
     ).toBeInTheDocument()
 
     const pageButtons = screen.getAllByRole("button")
-    expect(pageButtons).toHaveLength(3)
+    expect(pageButtons).toHaveLength(5)
 
     const framedImage = document.querySelector(".preview-frame img")
     expect(framedImage).toHaveAttribute("src", "/api/runs/run-1/previews/1")
 
-    fireEvent.click(pageButtons[2])
+    fireEvent.click(pageButtons[4])
 
-    expect(screen.getByText("Página 3 de 3")).toBeInTheDocument()
-    expect(pageButtons[2]).toHaveAttribute("aria-current", "page")
+    expect(screen.getByText("Página 5 de 5")).toBeInTheDocument()
+    expect(pageButtons[4]).toHaveAttribute("aria-current", "page")
     expect(document.querySelector(".preview-frame img")).toHaveAttribute(
       "src",
-      "/api/runs/run-1/previews/3",
+      "/api/runs/run-1/previews/5",
     )
   })
 })

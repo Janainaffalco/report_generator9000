@@ -17,6 +17,9 @@ export interface Check {
 export interface FinishedReport {
   run_id: string
   status: string
+  /** Pages of the generated document — what the review screen pages through. */
+  preview_page_count: number
+  /** Size of the Lista de Páginas: pages of the client's site, not of the document. */
   page_count: number
   filename: string
   download_url: string

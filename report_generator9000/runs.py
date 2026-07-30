@@ -58,6 +58,17 @@ PACKAGED_MASTER_PATH = Path(__file__).with_name("assets") / "MASTER.docx"
 
 @dataclass(frozen=True)
 class RunRecord:
+    """One run's durable state.
+
+    ``page_count`` is the size of the Lista de Páginas — how many pages the
+    client's site has — which is what the working screen announces once
+    ``derive_pages`` discovers it. It is *not* how many pages the generated
+    document has: each page of the site becomes a Block, a Block spans more
+    than one page in Word, and the report carries matter that comes from no
+    page of the site at all. Anything paging through the document counts
+    ``previews`` instead.
+    """
+
     run_id: str
     sheet_id: str
     engagement: dict[str, object]
@@ -74,6 +85,7 @@ class RunRecord:
     updated_at: str
     checks: tuple[dict[str, object], ...] = ()
     pendencias: tuple[dict[str, object], ...] = ()
+    previews: tuple[str, ...] = ()
 
 
 class RunStore:
@@ -106,6 +118,7 @@ class RunStore:
             updated_at=now,
             checks=(),
             pendencias=(),
+            previews=(),
         )
         self._write(record)
         return record
@@ -147,6 +160,7 @@ class RunStore:
         payload["stage_history"] = tuple(payload["stage_history"])
         payload["checks"] = tuple(payload.get("checks", ()))
         payload["pendencias"] = tuple(payload.get("pendencias", ()))
+        payload["previews"] = tuple(payload.get("previews", ()))
         return RunRecord(**payload)
 
     def update(self, run_id: str, **changes: object) -> RunRecord:
@@ -381,6 +395,9 @@ class RunService:
                 reason=None,
                 checks=_check_dicts(package.report.gate_report),
                 pendencias=_pendencia_dicts(package.report.context.pendencias),
+                previews=tuple(
+                    str(path.resolve()) for path in package.previews
+                ),
             )
         finally:
             if managed_provider is not None:

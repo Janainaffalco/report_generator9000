@@ -355,6 +355,7 @@ def test_starting_one_engagement_returns_immediately_then_polls_and_downloads(
         document.write_bytes(b"generated docx")
         return SimpleNamespace(
             pages=(object(), object(), object()),
+            previews=(),
             report=SimpleNamespace(
                 status="draft",
                 document=document,
@@ -644,10 +645,18 @@ def _finished_run_client(
         document.write_bytes(b"generated docx")
         previews_dir = document.parent / "previews"
         previews_dir.mkdir(parents=True, exist_ok=True)
-        (previews_dir / "preview-001.png").write_bytes(_TINY_PNG)
-        (previews_dir / "preview-002.png").write_bytes(_TINY_PNG)
+        # Deliberately unequal to the three pages of the Lista de Páginas: a
+        # Block spans more than one page in Word, so conflating the two counts
+        # would leave the last pages of the document unreachable.
+        previews = tuple(
+            previews_dir / f"preview-{number:03d}.png"
+            for number in range(1, 6)
+        )
+        for preview in previews:
+            preview.write_bytes(_TINY_PNG)
         return SimpleNamespace(
             pages=(object(), object(), object()),
+            previews=previews,
             report=SimpleNamespace(
                 status=("complete" if not pendencias else "draft"),
                 document=document,
@@ -837,3 +846,36 @@ def test_preview_page_images_are_served_as_png(tmp_path: Path) -> None:
     assert first.headers["content-type"] == "image/png"
     assert first.content[:8] == b"\x89PNG\r\n\x1a\n"
     assert missing.status_code == 404
+
+
+def test_every_page_of_the_document_is_reachable_in_the_preview(
+    tmp_path: Path,
+) -> None:
+    """The counted pages are the document's, and each one is actually served.
+
+    The Lista de Páginas and the document's pagination are different numbers —
+    a Block spans more than one page in Word — so paging through the review
+    screen on the site's page count would leave the tail of the report with no
+    thumbnail and no way to reach it.
+    """
+    client, run_id = _finished_run_client(
+        tmp_path, gate_report=GateReport(results=()), pendencias=()
+    )
+    rendered = sorted(tmp_path.glob("outputs/*/previews/preview-*.png"))
+
+    body = client.get(f"/api/runs/{run_id}/report").json()
+
+    assert rendered, "the fake assembler rendered no preview pages"
+    assert body["preview_page_count"] == len(rendered)
+    assert body["preview_page_count"] != body["page_count"]
+    served = [
+        client.get(f"/api/runs/{run_id}/previews/{page}")
+        for page in range(1, body["preview_page_count"] + 1)
+    ]
+    assert [response.status_code for response in served] == [200] * len(rendered)
+    assert (
+        client.get(
+            f"/api/runs/{run_id}/previews/{body['preview_page_count'] + 1}"
+        ).status_code
+        == 404
+    )

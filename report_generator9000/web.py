@@ -221,6 +221,10 @@ class CheckOut(BaseModel):
 class FinishedReportResponse(BaseModel):
     run_id: str
     status: str
+    # How many pages the *document* has, which is what the review screen pages
+    # through. Distinct from the run's page_count, which is the size of the
+    # Lista de Páginas — see RunRecord.
+    preview_page_count: int
     page_count: int
     filename: str
     download_url: str
@@ -266,6 +270,7 @@ def _report_response(record: RunRecord) -> FinishedReportResponse:
     return FinishedReportResponse(
         run_id=record.run_id,
         status=record.report_status or "draft",
+        preview_page_count=len(record.previews),
         page_count=record.page_count or 0,
         filename=record.filename or "",
         download_url=f"/api/runs/{record.run_id}/download",
@@ -488,8 +493,11 @@ def create_app(
             raise HTTPException(
                 404, "Esta geração não tem páginas de prévia disponíveis."
             )
-        previews_dir = Path(record.document).parent / "previews"
-        image_path = previews_dir / f"preview-{page:03d}.png"
+        # The renderer owns where its pages live and what they are called, so
+        # the paths it recorded are followed rather than reconstructed here.
+        if not 1 <= page <= len(record.previews):
+            raise HTTPException(404, "Esta página não existe na prévia.")
+        image_path = Path(record.previews[page - 1])
         if not image_path.is_file():
             raise HTTPException(404, "Esta página não existe na prévia.")
         return FileResponse(image_path, media_type="image/png")

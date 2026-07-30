@@ -3,6 +3,7 @@ import {
   AlertTriangleIcon,
   CheckCircle2Icon,
   EyeIcon,
+  HelpCircleIcon,
   InboxIcon,
   PaletteIcon,
   XCircleIcon,
@@ -29,6 +30,14 @@ const CLASS_STYLE: Record<
   UNDECLARED: { badge: "outline", icon: PaletteIcon },
   REVIEW: { badge: "outline", icon: EyeIcon },
 }
+
+// A class the frontend does not know must not borrow another one's meaning:
+// showing it as REVIEW would tell the consultant it awaits their approval,
+// which may be untrue. Carry it neutrally instead and let its own label speak.
+const UNKNOWN_CLASS_STYLE = {
+  badge: "outline",
+  icon: HelpCircleIcon,
+} as const
 
 export function ReviewScreen({ run }: ReviewScreenProps) {
   const [report, setReport] = useState<FinishedReport | null>(null)
@@ -88,7 +97,10 @@ export function ReviewScreen({ run }: ReviewScreenProps) {
 
       <nav aria-label="Páginas do documento" className="min-w-0">
         <ol className="flex flex-col gap-2">
-          {Array.from({ length: report.page_count }, (_, index) => index + 1).map(
+          {Array.from(
+            { length: report.preview_page_count },
+            (_, index) => index + 1,
+          ).map(
             (page) => (
               <li key={page}>
                 <button
@@ -126,7 +138,7 @@ export function ReviewScreen({ run }: ReviewScreenProps) {
           />
         </div>
         <p className="text-sm font-medium">
-          Página {currentPage} de {report.page_count}
+          Página {currentPage} de {report.preview_page_count}
         </p>
         <p className="max-w-md text-center text-xs text-muted-foreground">
           Prévia aproximada da paginação — confira a paginação final no Word.
@@ -222,7 +234,7 @@ export function ReviewScreen({ run }: ReviewScreenProps) {
 }
 
 function PendenciaItem({ pendencia }: { pendencia: Pendencia }) {
-  const style = CLASS_STYLE[pendencia.classification] ?? CLASS_STYLE.REVIEW
+  const style = CLASS_STYLE[pendencia.classification] ?? UNKNOWN_CLASS_STYLE
   const Icon = style.icon
   return (
     <li className="rounded-md border border-border p-3">
