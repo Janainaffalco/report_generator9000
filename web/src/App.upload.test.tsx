@@ -200,6 +200,10 @@ describe("control sheet upload", () => {
     expect(screen.getByText("Bruno Henrique Santana Leal")).toBeInTheDocument()
     expect(screen.getByText("15/04/2026")).toBeInTheDocument()
     expect(screen.getAllByText("40-2026").length).toBeGreaterThan(0)
+    expect(screen.getAllByText("Link do site")).toHaveLength(2)
+    expect(screen.getAllByText("Início")).toHaveLength(2)
+    expect(screen.queryByText("Capture Origin")).not.toBeInTheDocument()
+    expect(screen.queryByText("Kick off")).not.toBeInTheDocument()
   })
 
   it("restricts generation to one selected Engagement", async () => {
@@ -215,10 +219,17 @@ describe("control sheet upload", () => {
       name: "Selecione um trabalho",
     })
     expect(generateButton).toBeDisabled()
+    expect(screen.getByText("Pronto para gerar").parentElement).toHaveClass(
+      "sticky",
+    )
 
     const firstCheckbox = screen.getByRole("checkbox", {
       name: /DENISE BARROS DE ALMEIDA.*linha 2/,
     })
+    expect(
+      generateButton.compareDocumentPosition(firstCheckbox) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy()
     fireEvent.click(firstCheckbox)
 
     const generateOne = await screen.findByRole("button", {
@@ -312,7 +323,7 @@ describe("control sheet upload", () => {
     )
   })
 
-  it("shows Stop Condition rows with no checkbox, Portuguese copy and the original cause", async () => {
+  it("shows Stop Condition rows with no checkbox and only Portuguese consultant copy", async () => {
     vi.mocked(fetch).mockResolvedValueOnce(jsonResponse(200, fixture))
 
     render(<App />)
@@ -333,7 +344,9 @@ describe("control sheet upload", () => {
         "Preencha o número da pasta, como 115-2026."
       )
     ).toBeInTheDocument()
-    expect(within(stopSection).getByText(/Pasta is absent/)).toBeInTheDocument()
+    expect(
+      within(stopSection).queryByText(/Pasta is absent/),
+    ).not.toBeInTheDocument()
     expect(
       within(stopSection).getByText(/prefere parar a inventar um valor/i)
     ).toBeInTheDocument()
