@@ -440,6 +440,132 @@ def test_master_blocks_are_two_paragraph_bound_and_cloneable(
         }
 
 
+def test_declaration_closes_with_a_signature_line_and_one_page_break(
+    tmp_path: Path,
+) -> None:
+    """The typed blank paragraphs that used to pad the declaration onto the
+    next page are what produced the stray blank page; a signature line plus a
+    single page break says the same thing and cannot grow one."""
+    built = build_master(
+        approved_source(tmp_path / "approved.docx"), tmp_path / "out"
+    )
+    with ZipFile(built.master) as archive:
+        document = ElementTree.fromstring(archive.read("word/document.xml"))
+    body = document.find(f"{W}body")
+    children = list(body)
+
+    def text_of(paragraph: ElementTree.Element) -> str:
+        return "".join(node.text or "" for node in paragraph.iter(f"{W}t"))
+
+    start = next(
+        index
+        for index, item in enumerate(children)
+        if text_of(item).strip() == "DECLARAÇÃO DE RECEBIMENTO E FINALIZAÇÃO"
+    )
+    end = next(
+        index
+        for index, item in enumerate(children[start + 1 :], start + 1)
+        if text_of(item).strip() == "TERMO DE CESSÃO DE DIREITOS"
+    )
+    section = children[start + 1 : end]
+
+    assert [
+        item
+        for item in section
+        if not text_of(item).strip()
+        and item.find(f".//{W}br") is None
+        and item.find(f"{W}pPr/{W}pBdr") is None
+    ] == []
+    rule, caption, page_break = section[-3:]
+    assert (
+        rule.find(f"{W}pPr/{W}pBdr/{W}bottom").get(f"{W}val") == "single"
+    )
+    assert not text_of(rule)
+    assert rule.find(f"{W}pPr/{W}jc").get(f"{W}val") == "center"
+    assert [run.findtext(f"{W}t") for run in caption.findall(f"{W}r")] == [
+        "{{RAZAO_SOCIAL}}",
+        "Assinatura do representante legal",
+    ]
+    first_run, second_run = caption.findall(f"{W}r")
+    assert first_run.find(f"{W}br") is None
+    assert second_run.find(f"{W}br") is not None
+    assert caption.find(f"{W}pPr/{W}keepLines") is not None
+    assert (
+        page_break.find(f".//{W}br").get(f"{W}type") == "page"
+    )
+    assert (
+        len([item for item in section if item.find(f".//{W}br[@{W}type='page']") is not None])
+        == 1
+    )
+    assert built.validation.passed
+    assert "signature line added" in built.diff.read_text(encoding="utf-8")
+
+
+def test_typed_spacers_before_an_existing_page_break_are_replaced(
+    tmp_path: Path,
+) -> None:
+    """The approved source pads the declaration with seven empty paragraphs
+    ahead of its page break; the signature line takes their place and the
+    source's own break is kept rather than doubled."""
+    paragraphs = _base_paragraphs()
+    index = next(
+        position
+        for position, spec in enumerate(paragraphs)
+        if spec.runs == ("DECLARAÇÃO DE RECEBIMENTO E FINALIZAÇÃO",)
+    )
+    paragraphs[index + 1 : index + 1] = [
+        paragraph("O representante legal declara ter recebido o projeto."),
+        *(paragraph() for _ in range(7)),
+        paragraph(page_break=True),
+    ]
+    source = build_docx(
+        tmp_path / "padded.docx",
+        paragraphs=paragraphs,
+        media=_base_media(),
+        relationships=_base_relationships(),
+    )
+
+    built = build_master(source, tmp_path / "out")
+
+    with ZipFile(built.master) as archive:
+        document = ElementTree.fromstring(archive.read("word/document.xml"))
+    body = document.find(f"{W}body")
+    children = list(body)
+
+    def text_of(item: ElementTree.Element) -> str:
+        return "".join(node.text or "" for node in item.iter(f"{W}t"))
+
+    start = next(
+        position
+        for position, item in enumerate(children)
+        if text_of(item).strip() == "DECLARAÇÃO DE RECEBIMENTO E FINALIZAÇÃO"
+    )
+    end = next(
+        position
+        for position, item in enumerate(children[start + 1 :], start + 1)
+        if text_of(item).strip() == "TERMO DE CESSÃO DE DIREITOS"
+    )
+    section = children[start + 1 : end]
+
+    assert [text_of(item) for item in section] == [
+        "O representante legal declara ter recebido o projeto.",
+        "",
+        "{{RAZAO_SOCIAL}}Assinatura do representante legal",
+        "",
+    ]
+    assert (
+        len(
+            [
+                item
+                for item in section
+                if item.find(f".//{W}br[@{W}type='page']") is not None
+            ]
+        )
+        == 1
+    )
+    assert built.validation.passed
+
+
 def test_master_reuses_the_dedicated_logo_section_without_a_briefing_box(
     tmp_path: Path,
 ) -> None:

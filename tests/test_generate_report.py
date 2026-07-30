@@ -12,8 +12,9 @@ from report_generator9000.docx_package import open_docx_package
 from report_generator9000.gates.master import BOILERPLATE_MEDIA
 from report_generator9000.gates.tokens import check_token_residue
 from report_generator9000.gated_inputs import GATED_VALUE_SLOTS
+from report_generator9000.generate import _emphasized_value
 from report_generator9000.master import build_master
-from report_generator9000.run_context import RunContext
+from report_generator9000.run_context import RunContext, pendencia_marker
 from test_master_build import approved_source
 
 
@@ -28,10 +29,12 @@ SPREADSHEET_TOKENS = {
 }
 PROSE_VALUES = {
     "{{SOBRE_A_EMPRESA}}": (
-        "[PENDÊNCIA GATED: descrição da empresa não gerada (--no-llm)]"
+        "[PENDÊNCIA: NÃO FORNECIDO — descrição da empresa não gerada "
+        "(--no-llm)]"
     ),
     "{{BRIEFING_INICIAL}}": (
-        "[PENDÊNCIA GATED: objetivo do briefing não gerado (--no-llm)]"
+        "[PENDÊNCIA: NÃO FORNECIDO — objetivo do briefing não gerado "
+        "(--no-llm)]"
     ),
     "{{LISTA_DE_PAGINAS}}": (
         "A estrutura do site contempla as páginas Home."
@@ -158,6 +161,8 @@ def test_cli_clones_master_and_fills_each_shared_pasta_engagement(
             "{{CNPJ}}": "52.052.612/0001-21",
             "{{ESPECIALISTA}}": "Bruno Henrique Santana Leal",
             "{{DATA_KICKOFF}}": "15/04/2026",
+            "{{DOMINIO_PUBLICADO}}": "denise.example",
+            "{{WP_ADMIN_URL}}": "https://denise.example/wp-admin/",
         },
         {
             "{{DEMANDA}}": "012099/2026",
@@ -165,6 +170,8 @@ def test_cli_clones_master_and_fills_each_shared_pasta_engagement(
             "{{CNPJ}}": "11.222.333/0001-81",
             "{{ESPECIALISTA}}": "Christian Albuquerque Alonso",
             "{{DATA_KICKOFF}}": "12/06/2026",
+            "{{DOMINIO_PUBLICADO}}": "gemea.example",
+            "{{WP_ADMIN_URL}}": "https://gemea.example/wp-admin/",
         },
     )
     for output, values in zip(
@@ -216,14 +223,21 @@ def test_cli_clones_master_and_fills_each_shared_pasta_engagement(
                         token.encode(), value.encode()
                     )
                 for slot, tokens in GATED_VALUE_SLOTS:
-                    evidence = f"[PEND\u00caNCIA GATED: {slot}]".encode()
+                    if slot == "dominio_publicado":
+                        continue  # derived from this row's Link, above
+                    evidence = _emphasized_value(
+                        pendencia_marker("GATED", slot)
+                    )
                     for token in tokens:
                         expected_content = expected_content.replace(
                             token.encode(), evidence
                         )
                 for token, value in PROSE_VALUES.items():
                     expected_content = expected_content.replace(
-                        token.encode(), value.encode()
+                        token.encode(),
+                        _emphasized_value(value)
+                        if "[PEND\u00caNCIA" in value
+                        else value.encode(),
                     )
                 generated_content = generated.read(item.filename)
                 if "/media/" not in f"/{item.filename}":

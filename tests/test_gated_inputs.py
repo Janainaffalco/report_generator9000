@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 from datetime import datetime
 from io import BytesIO
 from pathlib import Path
+from xml.etree import ElementTree
 from zipfile import ZipFile
 
 import pytest
@@ -33,6 +35,7 @@ from report_generator9000.run_context import load_run_context
 from test_generate_report import run_generator
 
 
+W = "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}"
 GATED_FIXTURES = Path(__file__).parent / "fixtures" / "gated"
 CONTROL_SHEET = Path(__file__).parent / "fixtures" / "control-sheet-cases.xlsx"
 ENGAGEMENT_FOLDER = "50-2026_LARI TORELLO CONSULTORIA LTDA"
@@ -339,8 +342,11 @@ def test_absent_gated_folder_is_a_normal_draft_with_explicit_pendencias(
     package = open_docx_package(output)
     text = "\n".join(part.text or "" for part in package.parts)
     assert not any(token in text for token in GATED_TOKENS)
-    assert "PENDÊNCIA GATED: dominio_publicado" in text
-    assert "https://teal-duck-363012.hostingersite.com/" not in text
+    # The Link this row was built from names a final domain, so 2.3 states it
+    # instead of leaving a Pendência marker where the domain belongs.
+    assert "lari.example" in text
+    assert "https://lari.example/wp-admin/" in text
+    assert "PENDÊNCIA: NÃO FORNECIDO — plano_hospedagem" in text
     generated_package = open_docx_package(output)
     original_dimensions = {
         item.part_name: (item.width, item.height)
@@ -369,9 +375,9 @@ def test_absent_gated_folder_is_a_normal_draft_with_explicit_pendencias(
             assert rendered != original
             with Image.open(BytesIO(rendered)) as placeholder:
                 expected_class = (
-                    "UNDECLARED"
+                    "NÃO DECLARADO"
                     if part_name == IMAGE_PARTS["paleta.png"]
-                    else "GATED"
+                    else "NÃO FORNECIDO"
                 )
                 assert expected_class in str(
                     placeholder.info.get("Description", "")
@@ -383,7 +389,7 @@ def test_absent_gated_folder_is_a_normal_draft_with_explicit_pendencias(
     assert pendencias_report["status"] == "draft"
     assert pendencias_report["ready_to_send"] is False
     pendencias = pendencias_report["pendencias"]
-    assert len(pendencias) == 20
+    assert len(pendencias) == 19
     assert {item["class"] for item in pendencias} == {
         "GATED",
         "UNDECLARED",
@@ -393,6 +399,7 @@ def test_absent_gated_folder_is_a_normal_draft_with_explicit_pendencias(
         for item in pendencias
         if item["class"] == "UNDECLARED"
     ] == ["paleta"]
+    assert "dominio_publicado" not in {item["slot"] for item in pendencias}
     assert all(
         {
             "slot",
@@ -409,8 +416,12 @@ def test_absent_gated_folder_is_a_normal_draft_with_explicit_pendencias(
         encoding="utf-8"
     )
     assert "Estado: **RASCUNHO**" in readable_report
-    assert "GATED" in readable_report
-    assert "UNDECLARED" in readable_report
+    assert "NÃO FORNECIDO" in readable_report
+    assert "NÃO DECLARADO" in readable_report
+    assert not any(
+        term in readable_report
+        for term in ("GATED", "TOOL_BLOCKED", "UNDECLARED", "REVIEW")
+    )
     assert "completo" not in readable_report.casefold()
     assert "pronto para envio" not in readable_report.casefold()
     assert "STATUS\tDRAFT" in completed.stdout
@@ -455,7 +466,7 @@ def test_partial_gated_folder_fills_only_what_is_present(
     assert "handoff-parcial@lari.example" in text
     assert "lari-parcial.example" in text
     assert "https://lari-parcial.example/wp-admin/" in text
-    assert "PENDÊNCIA GATED: plano_hospedagem" in text
+    assert "PENDÊNCIA: NÃO FORNECIDO — plano_hospedagem" in text
     with ZipFile(output) as generated:
         assert generated.read("word/media/image3.png") == (
             GATED_FIXTURES / "partial" / ENGAGEMENT_FOLDER / "paleta.png"
@@ -501,7 +512,7 @@ def test_failed_capture_renders_a_tool_blocked_placeholder_and_draft(
         with Image.open(
             BytesIO(generated.read("word/media/capture.png"))
         ) as placeholder:
-            assert "TOOL_BLOCKED" in str(
+            assert "FALHA NA AUTOMAÇÃO" in str(
                 placeholder.info.get("Description", "")
             )
             assert len(placeholder.getcolors(maxcolors=1_000_000) or ()) > 2
@@ -526,12 +537,114 @@ def test_failed_capture_renders_a_tool_blocked_placeholder_and_draft(
     assert pendencia["page"] == "PÁGINA HOME"
     assert pendencia["required_action"]
     readable = output.with_name("PENDENCIAS.md").read_text(encoding="utf-8")
-    assert "TOOL_BLOCKED" in readable
-    assert "GATED" in readable
+    assert "FALHA NA AUTOMAÇÃO" in readable
+    assert "NÃO FORNECIDO" in readable
     assert "STATUS\tDRAFT" in completed.stdout
     assert check_pendencias_agreement(
         package, load_run_context(output.with_name("run.json"))
     ).passed
+
+
+def _emphasized_runs(document: Path) -> dict[str, tuple[str | None, bool]]:
+    """Every run's text mapped to its (colour, bold) formatting."""
+    with ZipFile(document) as package:
+        body = ElementTree.fromstring(package.read("word/document.xml"))
+    runs = {}
+    for run in body.iter(f"{W}r"):
+        text = "".join(node.text or "" for node in run.iter(f"{W}t"))
+        color = run.find(f"{W}rPr/{W}color")
+        runs[text] = (
+            None if color is None else color.get(f"{W}val"),
+            run.find(f"{W}rPr/{W}b") is not None,
+        )
+    return runs
+
+
+def test_a_provisional_hosting_domain_is_stated_and_tagged(
+    tmp_path: Path,
+) -> None:
+    master = gated_master(tmp_path / "MASTER.docx")
+    engagement = replace(
+        next(
+            outcome
+            for outcome in read_control_sheet_for_pasta(
+                CONTROL_SHEET, "50-2026"
+            )
+            if isinstance(outcome, Engagement)
+        ),
+        capture_origin="https://teal-duck-363012.hostingersite.com/",
+        published_domain=None,
+    )
+
+    generated = generate_report(
+        master,
+        tmp_path / "reports",
+        engagement,
+        GATED_FIXTURES / "absent",
+        pages=(),
+        no_llm=True,
+    )
+
+    package = open_docx_package(generated.document)
+    paragraphs = [item.text for item in package.paragraphs]
+    assert (
+        "teal-duck-363012.hostingersite.com [DOMÍNIO PROVISÓRIO]"
+        in paragraphs
+    )
+    assert (
+        "https://teal-duck-363012.hostingersite.com/wp-admin/" in paragraphs
+    )
+    domain_pendencia = next(
+        item
+        for item in generated.context.pendencias
+        if item.slot == "dominio_publicado"
+    )
+    assert domain_pendencia.classification == "REVIEW"
+    assert domain_pendencia.required_action
+    assert not generated.ready_to_send
+    assert generated.gate_report.passed
+
+    runs = _emphasized_runs(generated.document)
+    # The domain itself keeps the surrounding formatting; only the tag is
+    # emphasised, so a consultant scanning the page sees exactly the gap.
+    assert runs["[DOMÍNIO PROVISÓRIO]"] == ("C00000", True)
+    _color, bold = next(
+        formatting
+        for text, formatting in runs.items()
+        if text.strip() == "teal-duck-363012.hostingersite.com"
+    )
+    assert bold is False
+    assert runs["https://teal-duck-363012.hostingersite.com/wp-admin/"] == (
+        None,
+        False,
+    )
+
+
+def test_every_gap_marker_is_bold_and_red(tmp_path: Path) -> None:
+    master = gated_master(tmp_path / "MASTER.docx")
+    engagement = next(
+        outcome
+        for outcome in read_control_sheet_for_pasta(CONTROL_SHEET, "50-2026")
+        if isinstance(outcome, Engagement)
+    )
+
+    generated = generate_report(
+        master,
+        tmp_path / "reports",
+        engagement,
+        GATED_FIXTURES / "absent",
+        pages=(),
+        no_llm=True,
+    )
+
+    runs = _emphasized_runs(generated.document)
+    markers = [text for text in runs if text.startswith("[PENDÊNCIA:")]
+    assert markers
+    assert all(runs[marker] == ("C00000", True) for marker in markers)
+    assert {"plano_hospedagem", "data_backup"} <= {
+        item.slot for item in generated.context.pendencias
+    }
+    assert generated.gate_report.passed
 
 
 def test_wrong_engagement_gated_folder_fails_without_output(

@@ -207,11 +207,13 @@ def test_null_or_ungrounded_fields_become_marked_gaps(
     values = drafted.token_values
     if not company.grounded or company.value is None:
         assert values["{{SOBRE_A_EMPRESA}}"] == (
-            "[PENDÊNCIA TOOL_BLOCKED: descrição da empresa sem base no site]"
+            "[PENDÊNCIA: FALHA NA AUTOMAÇÃO — descrição da empresa sem "
+            "base no site]"
         )
     if not objective.grounded or objective.value is None:
         assert values["{{BRIEFING_INICIAL}}"] == (
-            "[PENDÊNCIA TOOL_BLOCKED: objetivo do briefing sem base no site]"
+            "[PENDÊNCIA: FALHA NA AUTOMAÇÃO — objetivo do briefing sem "
+            "base no site]"
         )
     assert all(item.evidence in values.values() for item in drafted.pendencias)
 
@@ -255,10 +257,10 @@ def test_no_llm_completes_with_marked_gaps_without_calling_provider() -> None:
 
     assert provider.calls == []
     assert drafted.token_values["{{SOBRE_A_EMPRESA}}"].startswith(
-        "[PENDÊNCIA GATED:"
+        "[PENDÊNCIA: NÃO FORNECIDO —"
     )
     assert drafted.token_values["{{BRIEFING_INICIAL}}"].startswith(
-        "[PENDÊNCIA GATED:"
+        "[PENDÊNCIA: NÃO FORNECIDO —"
     )
     assert drafted.token_values["{{LISTA_DE_PAGINAS}}"].endswith(
         "Política de Privacidade."
@@ -303,7 +305,7 @@ def test_grounded_claim_without_exact_site_excerpt_becomes_a_gap() -> None:
     )
 
     assert drafted.token_values["{{SOBRE_A_EMPRESA}}"].startswith(
-        "[PENDÊNCIA TOOL_BLOCKED:"
+        "[PENDÊNCIA: FALHA NA AUTOMAÇÃO —"
     )
 
 
@@ -343,7 +345,10 @@ def test_no_llm_reaches_the_report_and_pendencias_sidecars(
     assert "{{SOBRE_A_EMPRESA}}" not in text
     assert "{{BRIEFING_INICIAL}}" not in text
     assert "{{LISTA_DE_PAGINAS}}" not in text
-    assert "[PENDÊNCIA GATED: descrição da empresa não gerada (--no-llm)]" in text
+    assert (
+        "[PENDÊNCIA: NÃO FORNECIDO — descrição da empresa não gerada "
+        "(--no-llm)]"
+    ) in text
     assert "Home, Serviços e Política de Privacidade" in text
     assert {
         item.slot

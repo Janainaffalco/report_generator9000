@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from typing import Protocol
 
 from .lista_paginas import Pagina
-from .run_context import Grounding, Pendencia
+from .run_context import Grounding, Pendencia, pendencia_marker
 
 
 _RAW_MARKUP = re.compile(r"<[A-Za-z][^>]*>")
@@ -138,7 +138,7 @@ def _gap(
     classification: str,
     reason: str,
 ) -> tuple[str, Pendencia]:
-    marker = f"[PENDÊNCIA {classification}: {reason}]"
+    marker = pendencia_marker(classification, reason)
     return marker, Pendencia(
         slot=slot,
         classification=classification,
@@ -256,7 +256,9 @@ def draft_prose(
                 slot="prosa",
                 classification="TOOL_BLOCKED",
                 reason="orçamento de saída esgotado; resposta truncada",
-                evidence="[PENDÊNCIA TOOL_BLOCKED: prosa truncada]",
+                evidence=pendencia_marker(
+                    "TOOL_BLOCKED", "prosa truncada"
+                ),
                 name="prosa gerada",
                 page="BRIEFING INICIAL PARA DEFINIÇÃO DO ESCOPO",
                 required_action=(

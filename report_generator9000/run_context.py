@@ -11,6 +11,31 @@ from typing import Any, Mapping
 ORIGINS = ("boilerplate", "capture", "derived", "gated", "placeholder")
 CLASSIFICATIONS = ("GATED", "TOOL_BLOCKED", "UNDECLARED", "REVIEW")
 
+# The classification is this pipeline's stable identifier and stays in
+# `run.json`, the gates and the CLI. The consultant reading the delivered DOCX
+# never sees it: everything rendered into the document or onto a placeholder
+# image carries the Portuguese term instead.
+CLASSIFICATION_LABELS = {
+    "GATED": "NÃO FORNECIDO",
+    "TOOL_BLOCKED": "FALHA NA AUTOMAÇÃO",
+    "UNDECLARED": "NÃO DECLARADO",
+    "REVIEW": "REVISAR",
+}
+
+
+def classification_label(classification: str) -> str:
+    """Return the Portuguese term the document shows for *classification*."""
+    return CLASSIFICATION_LABELS.get(classification, classification)
+
+
+def pendencia_marker(classification: str, detail: str) -> str:
+    """Return the bracketed gap text the document carries for a Pendência.
+
+    Every bracketed marker is rendered bold and red in the DOCX so a
+    consultant can scan a page and see what is still missing.
+    """
+    return f"[PENDÊNCIA: {classification_label(classification)} — {detail}]"
+
 
 @dataclass(frozen=True)
 class Artifact:
