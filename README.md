@@ -31,6 +31,28 @@ Os registros e artefatos de cada geração ficam nesse volume por sete dias.
 
 ## Desenvolvimento
 
+Com Docker, copie `.env.example` para `.env`, preencha `GEMINI_API_KEY` e
+inicie backend e frontend com recarregamento automático:
+
+```powershell
+docker compose -f compose.dev.yaml up --build
+```
+
+A interface de desenvolvimento fica em `http://localhost:5173`; a API também
+pode ser acessada diretamente em `http://localhost:8000`. O Vite encaminha
+requisições `/api` ao backend. O código-fonte é montado nos contêineres e os
+dados persistentes ficam em `.data/`. O Master aprovado é montado, somente para
+leitura, de `master-build-check/MASTER.docx`; defina `REPORT_DEV_MASTER_PATH` se
+ele estiver em outro local. Coloque os Gated Drop Folders em `.data/gated`.
+
+Para encerrar e remover os contêineres (mantendo `.data/`):
+
+```powershell
+docker compose -f compose.dev.yaml down
+```
+
+Sem Docker:
+
 Backend:
 
 ```powershell

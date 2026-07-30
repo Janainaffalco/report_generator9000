@@ -11,6 +11,7 @@ __pycache__/
 uv.lock
 .uv-cache*/
 .npm-cache*/
+.data/
 
 # Generated documents
 *.xlsx
