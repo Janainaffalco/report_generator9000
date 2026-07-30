@@ -6,10 +6,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import { App } from "@/App"
 import type { RunResponse } from "@/lib/runs"
 
-function response(body: unknown) {
+function response(body: unknown, status = 200) {
   return {
-    ok: true,
-    status: 200,
+    ok: status >= 200 && status < 300,
+    status,
     json: async () => body,
   } as Response
 }
@@ -165,6 +165,40 @@ describe("resumable generation screens", () => {
     expect(
       screen.queryByRole("link", { name: "Baixar .docx" })
     ).not.toBeInTheDocument()
+  })
+
+  it("returns to the upload drop area when a run's sheet has expired", async () => {
+    vi.mocked(fetch)
+      .mockResolvedValueOnce(
+        response({
+          ...base,
+          outcome: "stopped",
+          current_stage: null,
+          reason: "STOP CONDITION: Capture Origin indisponível",
+        })
+      )
+      .mockResolvedValueOnce(
+        response(
+          {
+            detail:
+              "Esta planilha expirou ou não é conhecida. Envie-a novamente.",
+          },
+          404
+        )
+      )
+
+    render(<App />)
+
+    await screen.findByText("A geração foi interrompida")
+    fireEvent.click(
+      screen.getByRole("button", { name: "Voltar à lista de trabalhos" })
+    )
+
+    expect(
+      await screen.findByTestId("control-sheet-dropzone")
+    ).toBeInTheDocument()
+    expect(screen.getByRole("alert")).toHaveTextContent(/expirou/i)
+    expect(window.location.pathname).toBe("/enviar")
   })
 
   it("reports a gate rejection as a defect that produced nothing", async () => {

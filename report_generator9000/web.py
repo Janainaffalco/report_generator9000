@@ -28,6 +28,9 @@ DEFAULT_STATIC_DIR = Path(__file__).with_name("web_dist")
 _NOT_XLSX_DETAIL = "Este arquivo não é uma planilha .xlsx que possamos ler."
 _MISSING_WORKSHEET_DETAIL = "A planilha não tem a aba “LV e Site”."
 _MISSING_COLUMNS_DETAIL = "A aba “LV e Site” não tem as colunas esperadas."
+_EXPIRED_SHEET_DETAIL = (
+    "Esta planilha expirou ou não é conhecida. Envie-a novamente."
+)
 
 @dataclass(frozen=True)
 class _Remedy:
@@ -177,6 +180,13 @@ class ControlSheetResponse(BaseModel):
     engagements: list[EngagementOut]
     stop_conditions: list[StopConditionOut]
     skipped_rows: SkippedRowsOut
+
+
+class RetainedSheetOut(BaseModel):
+    sheet_id: str
+    filename: str
+    uploaded_at: str
+    ready_count: int
 
 
 class StartRunRequest(BaseModel):
@@ -400,31 +410,50 @@ def create_app(
 
     @app.post("/api/control-sheet")
     async def control_sheet(file: UploadFile = File(...)) -> ControlSheetResponse:
-        sheet_id, path = store.save(await file.read())
+        filename = file.filename or "planilha.xlsx"
+        sheet_id, path = store.save(await file.read(), filename)
         try:
             outcomes, pasta_by_row = _read_sheet(path)
         except HTTPException:
             store.discard(sheet_id)
             raise
         return _build_response(
-            sheet_id, file.filename or "planilha.xlsx", outcomes, pasta_by_row
+            sheet_id, filename, outcomes, pasta_by_row
         )
 
     @app.get("/api/control-sheet/{sheet_id}")
     def retained_control_sheet(sheet_id: str) -> ControlSheetResponse:
         path = store.path(sheet_id)
         if path is None:
-            raise HTTPException(404, "A planilha enviada não está mais disponível.")
+            raise HTTPException(404, _EXPIRED_SHEET_DETAIL)
         outcomes, pasta_by_row = _read_sheet(path)
         return _build_response(
-            sheet_id, "planilha enviada anteriormente.xlsx", outcomes, pasta_by_row
+            sheet_id, store.filename(sheet_id), outcomes, pasta_by_row
         )
+
+    @app.get("/api/control-sheets")
+    def retained_control_sheets() -> list[RetainedSheetOut]:
+        retained: list[RetainedSheetOut] = []
+        for sheet in store.all():
+            outcomes, _pasta_by_row = _read_sheet(sheet.path)
+            retained.append(
+                RetainedSheetOut(
+                    sheet_id=sheet.sheet_id,
+                    filename=sheet.filename,
+                    uploaded_at=sheet.uploaded_at.isoformat(),
+                    ready_count=sum(
+                        isinstance(outcome, Engagement)
+                        for outcome in outcomes
+                    ),
+                )
+            )
+        return retained
 
     @app.post("/api/runs", status_code=202)
     def start_run(request: StartRunRequest, response: Response) -> RunResponse:
         path = store.path(request.sheet_id)
         if path is None:
-            raise HTTPException(404, "A planilha enviada não está mais disponível.")
+            raise HTTPException(404, _EXPIRED_SHEET_DETAIL)
         outcomes, _pasta_by_row = _read_sheet(path)
         engagement = next(
             (

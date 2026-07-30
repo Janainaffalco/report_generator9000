@@ -115,7 +115,7 @@ const runningFixture: RunResponse = {
 
 describe("control sheet upload", () => {
   beforeEach(() => {
-    window.history.replaceState({}, "", "/")
+    window.history.replaceState({}, "", "/enviar")
     vi.stubGlobal("fetch", vi.fn())
   })
 
@@ -123,6 +123,79 @@ describe("control sheet upload", () => {
     cleanup()
     vi.unstubAllGlobals()
     vi.restoreAllMocks()
+  })
+
+  it("opens the most recent retained sheet directly when it is the only one", async () => {
+    window.history.replaceState({}, "", "/")
+    vi.mocked(fetch)
+      .mockResolvedValueOnce(
+        jsonResponse(200, [
+          {
+            sheet_id: fixture.sheet_id,
+            filename: fixture.filename,
+            uploaded_at: "2026-07-30T18:00:00+00:00",
+            ready_count: 2,
+          },
+        ])
+      )
+      .mockResolvedValueOnce(jsonResponse(200, fixture))
+
+    render(<App />)
+
+    await screen.findByText("Pronto para gerar")
+    expect(fetch).toHaveBeenNthCalledWith(1, "/api/control-sheets")
+    expect(fetch).toHaveBeenNthCalledWith(
+      2,
+      `/api/control-sheet/${fixture.sheet_id}`
+    )
+    expect(
+      screen.queryByTestId("control-sheet-dropzone")
+    ).not.toBeInTheDocument()
+  })
+
+  it("offers retained sheet choices with upload dates and ready counts", async () => {
+    window.history.replaceState({}, "", "/")
+    vi.mocked(fetch)
+      .mockResolvedValueOnce(
+        jsonResponse(200, [
+          {
+            sheet_id: "sheet-july",
+            filename: "controle julho.xlsx",
+            uploaded_at: "2026-07-30T18:00:00-03:00",
+            ready_count: 2,
+          },
+          {
+            sheet_id: "sheet-june",
+            filename: "controle junho.xlsx",
+            uploaded_at: "2026-06-30T18:00:00-03:00",
+            ready_count: 1,
+          },
+        ])
+      )
+      .mockResolvedValueOnce(jsonResponse(200, fixture))
+
+    render(<App />)
+
+    await screen.findByText("Escolha uma planilha")
+    expect(screen.getByText("controle julho.xlsx")).toBeInTheDocument()
+    expect(screen.getByText("controle junho.xlsx")).toBeInTheDocument()
+    expect(screen.getByText(/2 trabalhos prontos/)).toBeInTheDocument()
+    expect(screen.getByText(/30\/07\/2026/)).toBeInTheDocument()
+    expect(
+      screen.getByText(/planilhas ficam no servidor por sete dias/i)
+    ).toBeInTheDocument()
+    expect(
+      screen.getByRole("link", { name: "Enviar nova planilha" })
+    ).toHaveAttribute("href", "/enviar")
+    expect(
+      screen.queryByText(/computador por sete dias/i)
+    ).not.toBeInTheDocument()
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Usar controle julho.xlsx" })
+    )
+    await screen.findByText("Pronto para gerar")
+    expect(fetch).toHaveBeenLastCalledWith("/api/control-sheet/sheet-july")
   })
 
   it("uploads via the file dialog and renders the three groups", async () => {
@@ -220,7 +293,7 @@ describe("control sheet upload", () => {
     })
     expect(generateButton).toBeDisabled()
     expect(screen.getByText("Pronto para gerar").parentElement).toHaveClass(
-      "sticky",
+      "sticky"
     )
 
     const firstCheckbox = screen.getByRole("checkbox", {
@@ -228,7 +301,7 @@ describe("control sheet upload", () => {
     })
     expect(
       generateButton.compareDocumentPosition(firstCheckbox) &
-        Node.DOCUMENT_POSITION_FOLLOWING,
+        Node.DOCUMENT_POSITION_FOLLOWING
     ).toBeTruthy()
     fireEvent.click(firstCheckbox)
 
@@ -245,7 +318,7 @@ describe("control sheet upload", () => {
     expect(secondCheckbox).toBeChecked()
     expect(firstCheckbox).not.toBeChecked()
     expect(
-      screen.getByRole("button", { name: "Gerar relatório" }),
+      screen.getByRole("button", { name: "Gerar relatório" })
     ).toBeEnabled()
 
     fireEvent.click(secondCheckbox)
@@ -295,20 +368,20 @@ describe("control sheet upload", () => {
     fireEvent.click(
       screen.getByRole("checkbox", {
         name: /DENISE BARROS DE ALMEIDA.*linha 2/,
-      }),
+      })
     )
     fireEvent.click(screen.getByRole("button", { name: "Gerar relatório" }))
 
     await screen.findByText("Gerando agora")
     expect(
-      screen.getByText("40-2026 · DENISE BARROS DE ALMEIDA"),
+      screen.getByText("40-2026 · DENISE BARROS DE ALMEIDA")
     ).toBeInTheDocument()
     expect(screen.getByText("Lista de Páginas: 7 itens")).toBeInTheDocument()
     expect(
-      screen.getByText("Capturando páginas, Cabeçalho e Rodapé"),
+      screen.getByText("Capturando páginas, Cabeçalho e Rodapé")
     ).toBeInTheDocument()
     expect(
-      screen.getByText(/fechar esta aba e voltar depois/i),
+      screen.getByText(/fechar esta aba e voltar depois/i)
     ).toBeInTheDocument()
     expect(window.location.pathname).toBe("/relatorios/run-24")
     expect(fetch).toHaveBeenLastCalledWith(
@@ -319,7 +392,7 @@ describe("control sheet upload", () => {
           sheet_id: fixture.sheet_id,
           row_number: 2,
         }),
-      }),
+      })
     )
   })
 
@@ -345,7 +418,7 @@ describe("control sheet upload", () => {
       )
     ).toBeInTheDocument()
     expect(
-      within(stopSection).queryByText(/Pasta is absent/),
+      within(stopSection).queryByText(/Pasta is absent/)
     ).not.toBeInTheDocument()
     expect(
       within(stopSection).getByText(/prefere parar a inventar um valor/i)
