@@ -147,6 +147,40 @@
     text-transform: uppercase;
   }
 
+  .batch-jump {
+    position: relative;
+    min-height: 2.35rem;
+    padding-inline: 0.85rem 0.55rem;
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--primary) 12%, transparent);
+  }
+
+  .batch-jump::before {
+    content: "";
+    position: absolute;
+    inset: -5px;
+    border: 1px solid color-mix(in srgb, var(--primary) 24%, transparent);
+    border-radius: calc(var(--ds-radius-md) + 5px);
+    pointer-events: none;
+  }
+
+  .batch-jump-icon {
+    width: 1rem;
+    height: 1rem;
+  }
+
+  .batch-jump-count {
+    display: inline-flex;
+    min-width: 1.35rem;
+    height: 1.35rem;
+    align-items: center;
+    justify-content: center;
+    border-radius: 999px;
+    background: rgb(255 255 255 / 18%);
+    padding-inline: 0.3rem;
+    font-size: 0.7rem;
+    font-variant-numeric: tabular-nums;
+  }
+
   .footer-link {
     color: var(--text-muted);
     text-decoration: none;
@@ -164,11 +198,27 @@
   }
 
   @keyframes stage-progress {
-    from { width: 0; }
-    to { width: var(--stage-progress); }
+    from {
+      width: 0;
+    }
+    to {
+      width: var(--stage-progress);
+    }
   }
 
   @media (prefers-reduced-motion: reduce) {
-    .stage-stepper::after { animation: none; }
+    .stage-stepper::after {
+      animation: none;
+    }
+  }
+
+  @media (max-width: 639px) {
+    .stage-step {
+      justify-content: center;
+    }
+
+    .stage-label {
+      display: none;
+    }
   }
 }

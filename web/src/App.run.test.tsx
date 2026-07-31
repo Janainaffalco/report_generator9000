@@ -1,6 +1,12 @@
 import "@testing-library/jest-dom/vitest"
 
-import { cleanup, fireEvent, render, screen } from "@testing-library/react"
+import {
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  within,
+} from "@testing-library/react"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 
 import { App } from "@/App"
@@ -75,6 +81,7 @@ describe("resumable generation screens", () => {
     cleanup()
     vi.unstubAllGlobals()
     vi.restoreAllMocks()
+    window.localStorage.clear()
     window.history.replaceState({}, "", "/")
   })
 
@@ -123,6 +130,9 @@ describe("resumable generation screens", () => {
     expect(screen.getByText("Gerando agora")).toBeInTheDocument()
     expect(screen.getByText("Na fila")).toBeInTheDocument()
     expect(screen.getByText("OUTRA EMPRESA LTDA")).toBeInTheDocument()
+    expect(
+      screen.getByRole("button", { name: "Ir para o lote atual" })
+    ).toBeInTheDocument()
   })
 
   it("shows every batch outcome and opens a finished report for review", async () => {
@@ -199,6 +209,25 @@ describe("resumable generation screens", () => {
     expect(
       screen.getByText("block-integrity recusou o documento")
     ).toBeInTheDocument()
+    const downloadLinks = screen.getAllByRole("link", {
+      name: "Baixar relatório",
+    })
+    expect(downloadLinks).toHaveLength(2)
+    expect(downloadLinks[0]).toHaveAttribute("href", finished.download_url)
+
+    const layoutControls = screen.getByRole("group", {
+      name: "Layout da fila",
+    })
+    fireEvent.click(
+      within(layoutControls).getByRole("button", { name: "Grade" })
+    )
+    expect(
+      within(layoutControls).getByRole("button", { name: "Grade" })
+    ).toHaveAttribute("aria-pressed", "true")
+    expect(
+      screen.getByRole("list", { name: "Fila de relatórios" })
+    ).toHaveAttribute("data-layout", "grid")
+
     fireEvent.click(
       screen.getAllByRole("button", { name: "Conferir relatório" })[0]
     )

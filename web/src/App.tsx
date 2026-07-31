@@ -1,13 +1,19 @@
 /* eslint-disable react-refresh/only-export-components */
 import { useCallback, useEffect, useState, type CSSProperties } from "react"
-import { CheckCircle2Icon, FileTextIcon, ShieldCheckIcon } from "lucide-react"
+import {
+  CheckCircle2Icon,
+  FileTextIcon,
+  Layers3Icon,
+  LoaderCircleIcon,
+  ShieldCheckIcon,
+} from "lucide-react"
 
 import { BatchGeneration } from "@/components/BatchGeneration"
 import { GenerationRun } from "@/components/GenerationRun"
 import { RetainedSheetPicker } from "@/components/RetainedSheetPicker"
 import { UploadPanel } from "@/components/UploadPanel"
 import { WorkGroups } from "@/components/WorkGroups"
-import { buttonVariants } from "@/components/ui/button"
+import { Button, buttonVariants } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Separator } from "@/components/ui/separator"
 import type { ControlSheetResponse, RetainedSheet } from "@/lib/control-sheet"
@@ -295,7 +301,31 @@ export function App() {
           <span className="font-display text-lg font-bold text-primary sm:min-w-0 sm:truncate sm:text-xl">
             Gerador de Relatórios SEBRAETEC
           </span>
-          <div className="flex shrink-0 items-center justify-between gap-4 sm:justify-end">
+          <div className="flex shrink-0 flex-wrap items-center justify-start gap-3 sm:flex-nowrap sm:justify-end sm:gap-4">
+            {batch && (
+              <Button
+                className="batch-jump"
+                aria-current={!run ? "page" : undefined}
+                onClick={handleBackToBatch}
+              >
+                {batch.runs.some(
+                  (batchRun) =>
+                    batchRun.outcome === "queued" ||
+                    batchRun.outcome === "running"
+                ) ? (
+                  <LoaderCircleIcon
+                    aria-hidden="true"
+                    className="batch-jump-icon animate-spin"
+                  />
+                ) : (
+                  <Layers3Icon aria-hidden="true" className="batch-jump-icon" />
+                )}
+                Ir para o lote atual
+                <span className="batch-jump-count" aria-hidden="true">
+                  {batch.runs.length}
+                </span>
+              </Button>
+            )}
             <a
               className={buttonVariants({ variant: "secondary" })}
               href="/relatorios"
