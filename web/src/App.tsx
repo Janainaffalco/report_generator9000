@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState, type CSSProperties } from "react"
 import { CheckCircle2Icon, FileTextIcon, ShieldCheckIcon } from "lucide-react"
 
+import { BatchGeneration } from "@/components/BatchGeneration"
 import { GenerationRun } from "@/components/GenerationRun"
 import { RetainedSheetPicker } from "@/components/RetainedSheetPicker"
 import { UploadPanel } from "@/components/UploadPanel"
@@ -14,8 +15,8 @@ import {
   listRetainedControlSheets,
   uploadControlSheet,
 } from "@/lib/control-sheet"
-import type { RunResponse } from "@/lib/runs"
-import { getRun, startRun } from "@/lib/runs"
+import type { BatchResponse, RunResponse } from "@/lib/runs"
+import { getBatch, getRun, startBatch, startRun } from "@/lib/runs"
 import { cn } from "@/lib/utils"
 
 const stages = [
@@ -59,13 +60,14 @@ export function App() {
     null
   )
   const [run, setRun] = useState<RunResponse | null>(null)
+  const [batch, setBatch] = useState<BatchResponse | null>(null)
   const [retainedSheets, setRetainedSheets] = useState<RetainedSheet[]>([])
   const [restoringSheet, setRestoringSheet] = useState(
     window.location.pathname === "/"
   )
 
   const activeStage = currentStage(
-    run
+    run || batch
       ? "/conferir"
       : controlSheet
         ? CHOOSING_WORK_PATH
@@ -94,6 +96,16 @@ export function App() {
     setErrorDetail(result.detail)
   }, [])
 
+  const refreshBatch = useCallback(async (batchId: string) => {
+    const result = await getBatch(batchId)
+    if (result.ok) {
+      setBatch(result.data)
+      setErrorDetail(null)
+      return
+    }
+    setErrorDetail(result.detail)
+  }, [])
+
   useEffect(() => {
     const match = window.location.pathname.match(/^\/relatorios\/([^/]+)$/)
     if (match) {
@@ -105,8 +117,20 @@ export function App() {
           setErrorDetail(result.detail)
         }
       })
+      return
     }
-  }, [refreshRun])
+    const batchMatch = window.location.pathname.match(/^\/lotes\/([^/]+)$/)
+    if (batchMatch) {
+      void getBatch(batchMatch[1]).then((result) => {
+        if (result.ok) {
+          setBatch(result.data)
+          setErrorDetail(null)
+        } else {
+          setErrorDetail(result.detail)
+        }
+      })
+    }
+  }, [refreshBatch, refreshRun])
 
   useEffect(() => {
     if (window.location.pathname !== "/") {
@@ -143,13 +167,45 @@ export function App() {
     return () => window.clearInterval(timer)
   }, [refreshRun, run])
 
-  async function handleGenerate(rowNumber: number) {
+  useEffect(() => {
+    if (
+      !batch ||
+      !batch.runs.some(
+        (batchRun) =>
+          batchRun.outcome === "queued" || batchRun.outcome === "running"
+      )
+    ) {
+      return
+    }
+    const timer = window.setInterval(() => {
+      void refreshBatch(batch.batch_id)
+    }, 1500)
+    return () => window.clearInterval(timer)
+  }, [batch, refreshBatch])
+
+  async function handleGenerate(rowNumbers: number[]) {
     if (!controlSheet) {
       return
     }
     setStatus("starting")
     setErrorDetail(null)
-    const result = await startRun(controlSheet.sheet_id, rowNumber)
+    if (rowNumbers.length > 1) {
+      const result = await startBatch(controlSheet.sheet_id, rowNumbers)
+      setStatus("idle")
+      if (!result.ok) {
+        setErrorDetail(result.detail)
+        if (result.status === 404) {
+          setControlSheet(null)
+          setRetainedSheets([])
+          window.history.replaceState({}, "", "/enviar")
+        }
+        return
+      }
+      window.history.pushState({}, "", `/lotes/${result.data.batch_id}`)
+      setBatch(result.data)
+      return
+    }
+    const result = await startRun(controlSheet.sheet_id, rowNumbers[0])
     setStatus("idle")
     if (!result.ok) {
       setErrorDetail(result.detail)
@@ -180,8 +236,9 @@ export function App() {
   }
 
   async function handleBackToRows() {
-    if (!controlSheet && run) {
-      const result = await getRetainedControlSheet(run.sheet_id)
+    const sheetId = run?.sheet_id ?? batch?.sheet_id
+    if (!controlSheet && sheetId) {
+      const result = await getRetainedControlSheet(sheetId)
       if (!result.ok) {
         setErrorDetail(result.detail)
         setRun(null)
@@ -194,7 +251,21 @@ export function App() {
     }
     setErrorDetail(null)
     setRun(null)
+    setBatch(null)
     window.history.pushState({}, "", CHOOSING_WORK_PATH)
+  }
+
+  function handleOpenBatchRun(batchRun: RunResponse) {
+    setRun(batchRun)
+    window.history.pushState({}, "", `/relatorios/${batchRun.run_id}`)
+  }
+
+  function handleBackToBatch() {
+    if (!batch) {
+      return
+    }
+    setRun(null)
+    window.history.pushState({}, "", `/lotes/${batch.batch_id}`)
   }
 
   return (
@@ -260,6 +331,15 @@ export function App() {
             run={run}
             errorDetail={errorDetail}
             onRefresh={() => void refreshRun(run.run_id)}
+            onBackToRows={() => void handleBackToRows()}
+            onBackToBatch={batch ? handleBackToBatch : undefined}
+          />
+        ) : batch ? (
+          <BatchGeneration
+            batch={batch}
+            errorDetail={errorDetail}
+            onRefresh={() => void refreshBatch(batch.batch_id)}
+            onOpenRun={handleOpenBatchRun}
             onBackToRows={() => void handleBackToRows()}
           />
         ) : controlSheet ? (

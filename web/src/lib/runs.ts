@@ -1,4 +1,5 @@
-export type RunOutcome = "running" | "finished" | "stopped" | "rejected"
+export type RunOutcome =
+  "queued" | "running" | "finished" | "stopped" | "rejected"
 export type StageState = "pending" | "current" | "done"
 
 export interface RunStage {
@@ -25,13 +26,28 @@ export interface RunResponse {
   download_url: string | null
 }
 
+export interface BatchResponse {
+  batch_id: string
+  sheet_id: string
+  runs: RunResponse[]
+}
+
 export type RunResult =
   | { ok: true; data: RunResponse }
   | { ok: false; detail: string; status?: number }
 
-async function readRunResponse(response: Response): Promise<RunResult> {
+export type BatchResult =
+  | { ok: true; data: BatchResponse }
+  | { ok: false; detail: string; status?: number }
+
+async function readResponse<T>(
+  response: Response,
+  fallback: string
+): Promise<
+  { ok: true; data: T } | { ok: false; detail: string; status?: number }
+> {
   if (response.ok) {
-    return { ok: true, data: (await response.json()) as RunResponse }
+    return { ok: true, data: (await response.json()) as T }
   }
   try {
     const body = (await response.json()) as { detail?: unknown }
@@ -43,7 +59,7 @@ async function readRunResponse(response: Response): Promise<RunResult> {
   }
   return {
     ok: false,
-    detail: "Não foi possível consultar esta geração. Tente novamente.",
+    detail: fallback,
     status: response.status,
   }
 }
@@ -53,7 +69,7 @@ export async function startRun(
   rowNumber: number
 ): Promise<RunResult> {
   try {
-    return readRunResponse(
+    return readResponse<RunResponse>(
       await fetch("/api/runs", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -61,7 +77,8 @@ export async function startRun(
           sheet_id: sheetId,
           row_number: rowNumber,
         }),
-      })
+      }),
+      "Não foi possível consultar esta geração. Tente novamente."
     )
   } catch {
     return {
@@ -73,11 +90,52 @@ export async function startRun(
 
 export async function getRun(runId: string): Promise<RunResult> {
   try {
-    return readRunResponse(await fetch(`/api/runs/${runId}`))
+    return readResponse<RunResponse>(
+      await fetch(`/api/runs/${runId}`),
+      "Não foi possível consultar esta geração. Tente novamente."
+    )
   } catch {
     return {
       ok: false,
       detail: "Não foi possível atualizar a geração. Tentaremos de novo.",
+    }
+  }
+}
+
+export async function startBatch(
+  sheetId: string,
+  rowNumbers: number[]
+): Promise<BatchResult> {
+  try {
+    return readResponse<BatchResponse>(
+      await fetch("/api/batches", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          sheet_id: sheetId,
+          row_numbers: rowNumbers,
+        }),
+      }),
+      "Não foi possível consultar este lote. Tente novamente."
+    )
+  } catch {
+    return {
+      ok: false,
+      detail: "Não foi possível iniciar o lote. Tente novamente.",
+    }
+  }
+}
+
+export async function getBatch(batchId: string): Promise<BatchResult> {
+  try {
+    return readResponse<BatchResponse>(
+      await fetch(`/api/batches/${batchId}`),
+      "Não foi possível consultar este lote. Tente novamente."
+    )
+  } catch {
+    return {
+      ok: false,
+      detail: "Não foi possível atualizar este lote. Tentaremos de novo.",
     }
   }
 }

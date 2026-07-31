@@ -4,7 +4,7 @@ import { cleanup, fireEvent, render, screen } from "@testing-library/react"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 
 import { App } from "@/App"
-import type { RunResponse } from "@/lib/runs"
+import type { BatchResponse, RunResponse } from "@/lib/runs"
 
 function response(body: unknown, status = 200) {
   return {
@@ -86,6 +86,146 @@ describe("resumable generation screens", () => {
     await screen.findByText("Gerando agora")
     expect(fetch).toHaveBeenCalledWith("/api/runs/persisted-run")
     expect(screen.getByText("Lista de Páginas: 7 itens")).toBeInTheDocument()
+  })
+
+  it("reopens a progressing batch and shows what is running and queued", async () => {
+    const batch: BatchResponse = {
+      batch_id: "persisted-batch",
+      sheet_id: "retained-sheet",
+      runs: [
+        base,
+        {
+          ...base,
+          run_id: "queued-run",
+          engagement: {
+            row_number: 5,
+            pasta: "41-2026",
+            razao_social: "OUTRA EMPRESA LTDA",
+          },
+          outcome: "queued",
+          current_stage: null,
+          stages: base.stages.map((stage) => ({
+            ...stage,
+            state: "pending",
+          })),
+          stage_history: [],
+          page_count: null,
+        },
+      ],
+    }
+    window.history.replaceState({}, "", "/lotes/persisted-batch")
+    vi.mocked(fetch).mockResolvedValueOnce(response(batch))
+
+    render(<App />)
+
+    await screen.findByRole("heading", { name: "Lote em andamento" })
+    expect(fetch).toHaveBeenCalledWith("/api/batches/persisted-batch")
+    expect(screen.getByText("Gerando agora")).toBeInTheDocument()
+    expect(screen.getByText("Na fila")).toBeInTheDocument()
+    expect(screen.getByText("OUTRA EMPRESA LTDA")).toBeInTheDocument()
+  })
+
+  it("shows every batch outcome and opens a finished report for review", async () => {
+    const finished: RunResponse = {
+      ...base,
+      outcome: "finished",
+      current_stage: null,
+      stages: base.stages.map((stage) => ({ ...stage, state: "done" })),
+      status: "complete",
+      filename:
+        "RELATÓRIO TÉCNICO FINAL - 40-2026_DENISE BARROS DE ALMEIDA.docx",
+      download_url: "/api/runs/persisted-run/download",
+    }
+    const secondFinished: RunResponse = {
+      ...finished,
+      run_id: "second-finished-run",
+      engagement: {
+        row_number: 5,
+        pasta: "41-2026",
+        razao_social: "OUTRA EMPRESA LTDA",
+      },
+      filename: "RELATÓRIO TÉCNICO FINAL - 41-2026_OUTRA EMPRESA LTDA.docx",
+      download_url: "/api/runs/second-finished-run/download",
+    }
+    const batch: BatchResponse = {
+      batch_id: "finished-batch",
+      sheet_id: "retained-sheet",
+      runs: [
+        finished,
+        secondFinished,
+        {
+          ...base,
+          run_id: "stopped-run",
+          outcome: "stopped",
+          current_stage: null,
+          reason: "Capture Origin indisponível",
+        },
+        {
+          ...base,
+          run_id: "rejected-run",
+          outcome: "rejected",
+          current_stage: null,
+          reason: "block-integrity recusou o documento",
+        },
+      ],
+    }
+    const report = {
+      run_id: finished.run_id,
+      status: "complete",
+      page_count: 1,
+      filename: finished.filename,
+      download_url: finished.download_url,
+      pendencias: [],
+      checks: [
+        { label: "Nenhuma imagem de outro cliente no arquivo", passed: true },
+      ],
+    }
+    const secondReport = {
+      ...report,
+      run_id: secondFinished.run_id,
+      filename: secondFinished.filename,
+      download_url: secondFinished.download_url,
+    }
+    window.history.replaceState({}, "", "/lotes/finished-batch")
+    vi.mocked(fetch)
+      .mockResolvedValueOnce(response(batch))
+      .mockResolvedValueOnce(response(report))
+      .mockResolvedValueOnce(response(secondReport))
+
+    render(<App />)
+
+    await screen.findByRole("heading", { name: "Lote concluído" })
+    expect(screen.getByText("Capture Origin indisponível")).toBeInTheDocument()
+    expect(
+      screen.getByText("block-integrity recusou o documento")
+    ).toBeInTheDocument()
+    fireEvent.click(
+      screen.getAllByRole("button", { name: "Conferir relatório" })[0]
+    )
+
+    expect(
+      await screen.findByRole("heading", { name: "Revisão do relatório" })
+    ).toBeInTheDocument()
+    expect(window.location.pathname).toBe("/relatorios/persisted-run")
+    expect(fetch).toHaveBeenLastCalledWith("/api/runs/persisted-run/report")
+
+    fireEvent.click(screen.getByRole("button", { name: "Voltar ao lote" }))
+    expect(
+      screen.getByRole("heading", { name: "Lote concluído" })
+    ).toBeInTheDocument()
+    const reviewButtons = screen.getAllByRole("button", {
+      name: "Conferir relatório",
+    })
+    expect(reviewButtons).toHaveLength(2)
+    fireEvent.click(reviewButtons[1])
+
+    expect(
+      await screen.findByText(secondFinished.filename!)
+    ).toBeInTheDocument()
+    expect(window.location.pathname).toBe("/relatorios/second-finished-run")
+    expect(fetch).toHaveBeenLastCalledWith(
+      "/api/runs/second-finished-run/report"
+    )
   })
 
   it("shows an honest finished draft and its filename before download", async () => {

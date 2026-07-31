@@ -23,6 +23,7 @@ interface GenerationRunProps {
   errorDetail: string | null
   onRefresh: () => void
   onBackToRows: () => void
+  onBackToBatch?: () => void
 }
 
 export function GenerationRun({
@@ -30,11 +31,12 @@ export function GenerationRun({
   errorDetail,
   onRefresh,
   onBackToRows,
+  onBackToBatch,
 }: GenerationRunProps) {
   const name = `${run.engagement.pasta} · ${run.engagement.razao_social}`
 
   if (run.outcome === "finished") {
-    return <ReviewScreen key={run.run_id} run={run} />
+    return <ReviewScreen key={run.run_id} run={run} onBack={onBackToBatch} />
   }
 
   if (run.outcome === "stopped") {
@@ -42,7 +44,9 @@ export function GenerationRun({
       <TerminalCard
         title="A geração foi interrompida"
         name={name}
-        explanation={run.reason ?? "Uma Stop Condition interrompeu este trabalho."}
+        explanation={
+          run.reason ?? "Uma Stop Condition interrompeu este trabalho."
+        }
         onBack={onBackToRows}
       />
     )
@@ -94,7 +98,7 @@ export function GenerationRun({
             key={stage.name}
             className={cn(
               "flex items-center gap-3 rounded-md border px-4 py-3",
-              stage.state === "current" && "border-primary bg-primary/5",
+              stage.state === "current" && "border-primary bg-primary/5"
             )}
           >
             {stage.state === "done" ? (
@@ -113,7 +117,7 @@ export function GenerationRun({
             <span
               className={cn(
                 "text-sm",
-                stage.state === "current" && "font-medium",
+                stage.state === "current" && "font-medium"
               )}
             >
               {stageCopy[stage.name] ?? stage.name}
@@ -152,11 +156,7 @@ function TerminalCard({
           </p>
         )}
         <p className="text-sm font-medium">Nenhum documento foi produzido.</p>
-        <Button
-          variant="secondary"
-          className="self-start"
-          onClick={onBack}
-        >
+        <Button variant="secondary" className="self-start" onClick={onBack}>
           Voltar à lista de trabalhos
         </Button>
       </CardContent>

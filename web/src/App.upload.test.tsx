@@ -12,7 +12,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 
 import { App } from "@/App"
 import type { ControlSheetResponse } from "@/lib/control-sheet"
-import type { RunResponse } from "@/lib/runs"
+import type { BatchResponse, RunResponse } from "@/lib/runs"
 
 function jsonResponse(status: number, body: unknown) {
   return {
@@ -114,6 +114,31 @@ const runningFixture: RunResponse = {
   filename: null,
   reason: null,
   download_url: null,
+}
+
+const batchFixture: BatchResponse = {
+  batch_id: "batch-29",
+  sheet_id: fixture.sheet_id,
+  runs: [
+    runningFixture,
+    {
+      ...runningFixture,
+      run_id: "run-29-queued",
+      engagement: {
+        row_number: 5,
+        pasta: "40-2026",
+        razao_social: "OUTRA EMPRESA LTDA",
+      },
+      outcome: "queued",
+      current_stage: null,
+      stages: runningFixture.stages.map((stage) => ({
+        ...stage,
+        state: "pending",
+      })),
+      stage_history: [],
+      page_count: null,
+    },
+  ],
 }
 
 describe("control sheet upload", () => {
@@ -362,7 +387,7 @@ describe("control sheet upload", () => {
     ).not.toBeInTheDocument()
   })
 
-  it("restricts generation to one selected Engagement", async () => {
+  it("selects several Engagements independently", async () => {
     vi.mocked(fetch).mockResolvedValueOnce(jsonResponse(200, fixture))
 
     render(<App />)
@@ -413,9 +438,9 @@ describe("control sheet upload", () => {
       screen.getByRole("checkbox", {
         name: /DENISE BARROS DE ALMEIDA.*linha 2/,
       })
-    ).not.toBeChecked()
+    ).toBeChecked()
     expect(
-      screen.getByRole("button", { name: "Gerar relatório" })
+      screen.getByRole("button", { name: "Gerar 2 relatórios" })
     ).toBeEnabled()
 
     fireEvent.click(
@@ -425,10 +450,8 @@ describe("control sheet upload", () => {
     )
 
     expect(
-      await screen.findByRole("button", {
-        name: "Selecione um trabalho",
-      })
-    ).toBeDisabled()
+      await screen.findByRole("button", { name: "Gerar relatório" })
+    ).toBeEnabled()
   })
 
   it("selects two engagements sharing a Pasta independently", async () => {
@@ -496,6 +519,45 @@ describe("control sheet upload", () => {
         body: JSON.stringify({
           sheet_id: fixture.sheet_id,
           row_number: 2,
+        }),
+      })
+    )
+  })
+
+  it("starts a selected batch and shows the running and queued Engagements", async () => {
+    vi.mocked(fetch)
+      .mockResolvedValueOnce(jsonResponse(200, fixture))
+      .mockResolvedValueOnce(jsonResponse(202, batchFixture))
+
+    render(<App />)
+    fireEvent.change(screen.getByLabelText("Arquivo de planilha"), {
+      target: { files: [makeFile()] },
+    })
+    await screen.findByText("Pronto para gerar")
+    fireEvent.click(
+      screen.getByRole("checkbox", {
+        name: /DENISE BARROS DE ALMEIDA.*linha 2/,
+      })
+    )
+    fireEvent.click(
+      screen.getByRole("checkbox", {
+        name: /OUTRA EMPRESA LTDA.*linha 5/,
+      })
+    )
+    fireEvent.click(screen.getByRole("button", { name: "Gerar 2 relatórios" }))
+
+    await screen.findByRole("heading", { name: "Lote em andamento" })
+    expect(screen.getByText("Gerando agora")).toBeInTheDocument()
+    expect(screen.getByText("Na fila")).toBeInTheDocument()
+    expect(screen.getByText("OUTRA EMPRESA LTDA")).toBeInTheDocument()
+    expect(window.location.pathname).toBe("/lotes/batch-29")
+    expect(fetch).toHaveBeenLastCalledWith(
+      "/api/batches",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({
+          sheet_id: fixture.sheet_id,
+          row_numbers: [2, 5],
         }),
       })
     )

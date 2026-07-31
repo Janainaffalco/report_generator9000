@@ -198,6 +198,11 @@ class StartRunRequest(BaseModel):
     row_number: int
 
 
+class StartBatchRequest(BaseModel):
+    sheet_id: str
+    row_numbers: list[int]
+
+
 class StageOut(BaseModel):
     name: str
     state: str
@@ -216,6 +221,12 @@ class RunResponse(BaseModel):
     filename: str | None
     reason: str | None
     download_url: str | None
+
+
+class BatchResponse(BaseModel):
+    batch_id: str
+    sheet_id: str
+    runs: list[RunResponse]
 
 
 class PendenciaOut(BaseModel):
@@ -482,6 +493,65 @@ def create_app(
         record = app.state.run_service.submit(engagement, request.sheet_id)
         response.headers["Location"] = f"/api/runs/{record.run_id}"
         return _run_response(record)
+
+    @app.post("/api/batches", status_code=202)
+    def start_batch(
+        request: StartBatchRequest, response: Response
+    ) -> BatchResponse:
+        path = store.path(request.sheet_id)
+        if path is None:
+            raise HTTPException(404, _EXPIRED_SHEET_DETAIL)
+        if not request.row_numbers:
+            raise HTTPException(
+                422, "Selecione pelo menos um Engagement para gerar."
+            )
+        if len(set(request.row_numbers)) != len(request.row_numbers):
+            raise HTTPException(
+                422, "Cada Engagement só pode aparecer uma vez no lote."
+            )
+        outcomes, _pasta_by_row = _read_sheet(path)
+        engagements_by_row = {
+            outcome.row_number: outcome
+            for outcome in outcomes
+            if isinstance(outcome, Engagement)
+        }
+        try:
+            engagements = tuple(
+                engagements_by_row[row_number]
+                for row_number in request.row_numbers
+            )
+        except KeyError as error:
+            raise HTTPException(
+                422,
+                "Uma das linhas escolhidas não é um Engagement pronto para gerar.",
+            ) from error
+        batch_id, records = app.state.run_service.submit_batch(
+            engagements, request.sheet_id
+        )
+        response.headers["Location"] = f"/api/batches/{batch_id}"
+        return BatchResponse(
+            batch_id=batch_id,
+            sheet_id=request.sheet_id,
+            runs=[_run_response(record) for record in records],
+        )
+
+    @app.get("/api/batches/{batch_id}")
+    def get_batch(batch_id: str) -> BatchResponse:
+        records = sorted(
+            (
+                record
+                for record in app.state.run_service.store.all()
+                if record.batch_id == batch_id
+            ),
+            key=lambda record: record.batch_position or 0,
+        )
+        if not records:
+            raise HTTPException(404, "Este lote não existe ou expirou.")
+        return BatchResponse(
+            batch_id=batch_id,
+            sheet_id=records[0].sheet_id,
+            runs=[_run_response(record) for record in records],
+        )
 
     @app.get("/api/runs/{run_id}")
     def get_run(run_id: str) -> RunResponse:

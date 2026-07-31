@@ -1,4 +1,4 @@
-"""Durable, pollable execution of one Engagement at a time."""
+"""Durable, pollable execution of Engagements, one at a time."""
 
 from __future__ import annotations
 
@@ -40,7 +40,7 @@ StageName = Literal[
     "assemble",
     "gate",
 ]
-RunOutcome = Literal["running", "finished", "stopped", "rejected"]
+RunOutcome = Literal["queued", "running", "finished", "stopped", "rejected"]
 
 STAGES: tuple[StageName, ...] = (
     "read_row",
@@ -86,6 +86,9 @@ class RunRecord:
     checks: tuple[dict[str, object], ...] = ()
     pendencias: tuple[dict[str, object], ...] = ()
     previews: tuple[str, ...] = ()
+    batch_id: str | None = None
+    batch_position: int | None = None
+    batch_size: int | None = None
 
 
 class RunStore:
@@ -95,7 +98,16 @@ class RunStore:
         self.directory = directory
         self._lock = RLock()
 
-    def create(self, engagement: Engagement, sheet_id: str) -> RunRecord:
+    def create(
+        self,
+        engagement: Engagement,
+        sheet_id: str,
+        *,
+        outcome: RunOutcome = "running",
+        batch_id: str | None = None,
+        batch_position: int | None = None,
+        batch_size: int | None = None,
+    ) -> RunRecord:
         now = datetime.now(UTC).isoformat()
         record = RunRecord(
             run_id=uuid4().hex,
@@ -105,7 +117,7 @@ class RunStore:
                 "pasta": engagement.pasta,
                 "razao_social": engagement.razao_social,
             },
-            outcome="running",
+            outcome=outcome,
             current_stage=None,
             completed_stages=(),
             stage_history=(),
@@ -119,6 +131,9 @@ class RunStore:
             checks=(),
             pendencias=(),
             previews=(),
+            batch_id=batch_id,
+            batch_position=batch_position,
+            batch_size=batch_size,
         )
         self._write(record)
         return record
@@ -267,10 +282,41 @@ class RunService:
         self.prose_config = prose_config
         self.no_llm = no_llm
         self._executor = ThreadPoolExecutor(
-            max_workers=2, thread_name_prefix="report-run"
+            max_workers=1, thread_name_prefix="report-run"
         )
 
     def submit(self, engagement: Engagement, sheet_id: str) -> RunRecord:
+        self._discard_expired_outputs()
+        record = self.store.create(engagement, sheet_id)
+        record = self.store.update(record.run_id, current_stage=STAGES[0])
+        self._executor.submit(self._execute, record.run_id, engagement)
+        return record
+
+    def submit_batch(
+        self,
+        engagements: tuple[Engagement, ...],
+        sheet_id: str,
+    ) -> tuple[str, tuple[RunRecord, ...]]:
+        if not engagements:
+            raise ValueError("a batch needs at least one Engagement")
+        self._discard_expired_outputs()
+        batch_id = uuid4().hex
+        records = tuple(
+            self.store.create(
+                engagement,
+                sheet_id,
+                outcome="queued",
+                batch_id=batch_id,
+                batch_position=position,
+                batch_size=len(engagements),
+            )
+            for position, engagement in enumerate(engagements, start=1)
+        )
+        for record, engagement in zip(records, engagements, strict=True):
+            self._executor.submit(self._execute, record.run_id, engagement)
+        return batch_id, records
+
+    def _discard_expired_outputs(self) -> None:
         output_root = self.output_root.resolve()
         expired_records = self.store.discard_expired()
         active_documents = {
@@ -293,16 +339,21 @@ class RunService:
                     path=str(document.parent),
                 )
                 shutil.rmtree(document.parent, ignore_errors=True)
-        record = self.store.create(engagement, sheet_id)
-        record = self.store.update(record.run_id, current_stage=STAGES[0])
-        self._executor.submit(self._execute, record.run_id, engagement)
-        return record
 
     def shutdown(self) -> None:
         self._executor.shutdown(wait=True)
 
     def _execute(self, run_id: str, engagement: Engagement) -> None:
         with run_scope(run_id):
+            current = self.store.get(run_id)
+            if current is None:
+                return
+            if current.outcome == "queued":
+                self.store.update(
+                    run_id,
+                    outcome="running",
+                    current_stage=STAGES[0],
+                )
             self._execute_within_scope(run_id, engagement)
 
     def _execute_within_scope(

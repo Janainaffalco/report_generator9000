@@ -10,7 +10,7 @@ import {
 } from "lucide-react"
 
 import { Badge } from "@/components/ui/badge"
-import { buttonVariants } from "@/components/ui/button"
+import { Button, buttonVariants } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { getReport, previewPageUrl } from "@/lib/report"
 import type { FinishedReport, Pendencia, PendenciaClass } from "@/lib/report"
@@ -19,6 +19,7 @@ import { cn } from "@/lib/utils"
 
 interface ReviewScreenProps {
   run: RunResponse
+  onBack?: () => void
 }
 
 const CLASS_STYLE: Record<
@@ -39,7 +40,7 @@ const UNKNOWN_CLASS_STYLE = {
   icon: HelpCircleIcon,
 } as const
 
-export function ReviewScreen({ run }: ReviewScreenProps) {
+export function ReviewScreen({ run, onBack }: ReviewScreenProps) {
   const [report, setReport] = useState<FinishedReport | null>(null)
   const [errorDetail, setErrorDetail] = useState<string | null>(null)
   const [currentPage, setCurrentPage] = useState(1)
@@ -95,137 +96,148 @@ export function ReviewScreen({ run }: ReviewScreenProps) {
         : report.status
 
   return (
-    <section
-      className="mt-10 grid w-full min-w-0 gap-6"
-      style={{ gridTemplateColumns: "112px minmax(0, 1fr) 340px" }}
-      aria-labelledby="review-heading"
-    >
-      <h1 id="review-heading" className="sr-only">
-        Revisão do relatório
-      </h1>
-
-      <nav aria-label="Páginas do documento" className="min-w-0">
-        <ol className="flex flex-col gap-2">
-          {Array.from(
-            { length: report.page_count },
-            (_, index) => index + 1
-          ).map((page) => (
-            <li key={page}>
-              <button
-                type="button"
-                aria-current={page === currentPage ? "page" : undefined}
-                onClick={() => setCurrentPage(page)}
-                className={cn(
-                  "block w-full overflow-hidden rounded-sm border-2",
-                  page === currentPage ? "border-primary" : "border-border"
-                )}
-              >
-                <img
-                  src={previewPageUrl(run.run_id, page)}
-                  alt={`Página ${page}`}
-                  loading="lazy"
-                  className="aspect-[1240/1754] w-full object-cover"
-                />
-              </button>
-            </li>
-          ))}
-        </ol>
-      </nav>
-
-      <div className="flex min-w-0 flex-col items-center gap-3">
-        <div className="preview-frame w-full max-w-md overflow-hidden rounded-sm bg-canvas">
-          <img
-            src={previewPageUrl(run.run_id, currentPage)}
-            alt={`Prévia da página ${currentPage} do relatório`}
-            className="aspect-[1240/1754] w-full object-cover"
-          />
+    <>
+      {onBack && (
+        <div className="mt-4 flex w-full justify-start">
+          <Button variant="secondary" onClick={onBack}>
+            Voltar ao lote
+          </Button>
         </div>
-        <p className="text-sm font-medium">
-          Página {currentPage} de {report.page_count}
-        </p>
-        <p className="max-w-md text-center text-xs text-muted-foreground">
-          Prévia aproximada da paginação — confira a paginação final no Word.
-        </p>
-      </div>
+      )}
+      <section
+        className="mt-10 grid w-full min-w-0 gap-6"
+        style={{ gridTemplateColumns: "112px minmax(0, 1fr) 340px" }}
+        aria-labelledby="review-heading"
+      >
+        <h1 id="review-heading" className="sr-only">
+          Revisão do relatório
+        </h1>
 
-      <div className="flex min-w-0 flex-col gap-6">
-        <Card>
-          <CardHeader>
-            <CardTitle>{statusLabel}</CardTitle>
-          </CardHeader>
-          <CardContent className="flex flex-col gap-3">
-            <p className="text-sm text-muted-foreground">
-              {readyForSignature
-                ? "Nenhuma Pendência foi encontrada — o relatório está pronto para assinatura."
-                : `Ainda há ${report.pendencias.length} ${
-                    report.pendencias.length === 1 ? "Pendência" : "Pendências"
-                  } antes do envio ao cliente.`}
-            </p>
-            <p className="text-sm font-medium">{report.filename}</p>
-            <a
-              className={cn(buttonVariants({ size: "lg" }), "self-start")}
-              href={report.download_url}
-            >
-              Baixar .docx
-            </a>
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardHeader>
-            <CardTitle>Pendências</CardTitle>
-          </CardHeader>
-          <CardContent className="flex flex-col gap-4">
-            {report.pendencias.length === 0 ? (
-              <p className="text-sm text-muted-foreground">
-                Nenhuma Pendência — o relatório está pronto para assinatura.
-              </p>
-            ) : (
-              <>
-                <p className="text-xs text-muted-foreground">
-                  Estas Pendências podem ser resolvidas agora ou depois, direto
-                  no Word.
-                </p>
-                <ul className="flex flex-col gap-3">
-                  {report.pendencias.map((pendencia, index) => (
-                    <PendenciaItem key={index} pendencia={pendencia} />
-                  ))}
-                </ul>
-              </>
-            )}
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardHeader>
-            <CardTitle>Conferências automáticas</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <ul className="flex flex-col gap-2">
-              {report.checks.map((check) => (
-                <li
-                  key={check.label}
-                  className="flex items-center gap-2 text-sm"
-                >
-                  {check.passed ? (
-                    <CheckCircle2Icon
-                      aria-hidden="true"
-                      className="size-4 shrink-0 text-primary"
-                    />
-                  ) : (
-                    <XCircleIcon
-                      aria-hidden="true"
-                      className="size-4 shrink-0 text-destructive"
-                    />
+        <nav aria-label="Páginas do documento" className="min-w-0">
+          <ol className="flex flex-col gap-2">
+            {Array.from(
+              { length: report.page_count },
+              (_, index) => index + 1
+            ).map((page) => (
+              <li key={page}>
+                <button
+                  type="button"
+                  aria-current={page === currentPage ? "page" : undefined}
+                  onClick={() => setCurrentPage(page)}
+                  className={cn(
+                    "block w-full overflow-hidden rounded-sm border-2",
+                    page === currentPage ? "border-primary" : "border-border"
                   )}
-                  <span>{check.label}</span>
-                </li>
-              ))}
-            </ul>
-          </CardContent>
-        </Card>
-      </div>
-    </section>
+                >
+                  <img
+                    src={previewPageUrl(run.run_id, page)}
+                    alt={`Página ${page}`}
+                    loading="lazy"
+                    className="aspect-[1240/1754] w-full object-cover"
+                  />
+                </button>
+              </li>
+            ))}
+          </ol>
+        </nav>
+
+        <div className="flex min-w-0 flex-col items-center gap-3">
+          <div className="preview-frame w-full max-w-md overflow-hidden rounded-sm bg-canvas">
+            <img
+              src={previewPageUrl(run.run_id, currentPage)}
+              alt={`Prévia da página ${currentPage} do relatório`}
+              className="aspect-[1240/1754] w-full object-cover"
+            />
+          </div>
+          <p className="text-sm font-medium">
+            Página {currentPage} de {report.page_count}
+          </p>
+          <p className="max-w-md text-center text-xs text-muted-foreground">
+            Prévia aproximada da paginação — confira a paginação final no Word.
+          </p>
+        </div>
+
+        <div className="flex min-w-0 flex-col gap-6">
+          <Card>
+            <CardHeader>
+              <CardTitle>{statusLabel}</CardTitle>
+            </CardHeader>
+            <CardContent className="flex flex-col gap-3">
+              <p className="text-sm text-muted-foreground">
+                {readyForSignature
+                  ? "Nenhuma Pendência foi encontrada — o relatório está pronto para assinatura."
+                  : `Ainda há ${report.pendencias.length} ${
+                      report.pendencias.length === 1
+                        ? "Pendência"
+                        : "Pendências"
+                    } antes do envio ao cliente.`}
+              </p>
+              <p className="text-sm font-medium">{report.filename}</p>
+              <a
+                className={cn(buttonVariants({ size: "lg" }), "self-start")}
+                href={report.download_url}
+              >
+                Baixar .docx
+              </a>
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardHeader>
+              <CardTitle>Pendências</CardTitle>
+            </CardHeader>
+            <CardContent className="flex flex-col gap-4">
+              {report.pendencias.length === 0 ? (
+                <p className="text-sm text-muted-foreground">
+                  Nenhuma Pendência — o relatório está pronto para assinatura.
+                </p>
+              ) : (
+                <>
+                  <p className="text-xs text-muted-foreground">
+                    Estas Pendências podem ser resolvidas agora ou depois,
+                    direto no Word.
+                  </p>
+                  <ul className="flex flex-col gap-3">
+                    {report.pendencias.map((pendencia, index) => (
+                      <PendenciaItem key={index} pendencia={pendencia} />
+                    ))}
+                  </ul>
+                </>
+              )}
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardHeader>
+              <CardTitle>Conferências automáticas</CardTitle>
+            </CardHeader>
+            <CardContent>
+              <ul className="flex flex-col gap-2">
+                {report.checks.map((check) => (
+                  <li
+                    key={check.label}
+                    className="flex items-center gap-2 text-sm"
+                  >
+                    {check.passed ? (
+                      <CheckCircle2Icon
+                        aria-hidden="true"
+                        className="size-4 shrink-0 text-primary"
+                      />
+                    ) : (
+                      <XCircleIcon
+                        aria-hidden="true"
+                        className="size-4 shrink-0 text-destructive"
+                      />
+                    )}
+                    <span>{check.label}</span>
+                  </li>
+                ))}
+              </ul>
+            </CardContent>
+          </Card>
+        </div>
+      </section>
+    </>
   )
 }
 

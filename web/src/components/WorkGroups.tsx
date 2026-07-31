@@ -53,7 +53,7 @@ interface WorkGroupsProps {
   status: "idle" | "loading" | "starting"
   errorDetail: string | null
   onReplaceFile: (file: File) => void
-  onGenerate: (rowNumber: number) => void
+  onGenerate: (rowNumbers: number[]) => void
 }
 
 type WorkStatus = "ready" | "blocked" | "unsupported"
@@ -216,7 +216,7 @@ export function WorkGroups({
   onReplaceFile,
   onGenerate,
 }: WorkGroupsProps) {
-  const [selected, setSelected] = useState<string | null>(null)
+  const [selected, setSelected] = useState<Set<string>>(() => new Set())
   const [query, setQuery] = useState("")
   const [statusFilter, setStatusFilter] = useState<WorkStatus | "all">("all")
   const [reportReadyFilter, setReportReadyFilter] = useState("all")
@@ -253,8 +253,8 @@ export function WorkGroups({
     ]
   }, [allRows])
 
-  const selectedEngagement = data.engagements.find(
-    (engagement) => rowKey(engagement.row) === selected
+  const selectedEngagements = data.engagements.filter((engagement) =>
+    selected.has(rowKey(engagement.row))
   )
 
   const filteredRows = useMemo(() => {
@@ -304,13 +304,19 @@ export function WorkGroups({
           }
           return (
             <Checkbox
-              checked={selected === item.key}
+              checked={selected.has(item.key)}
               disabled={isLoading}
-              onCheckedChange={() =>
-                setSelected((previous) =>
-                  previous === item.key ? null : item.key
-                )
-              }
+              onCheckedChange={() => {
+                setSelected((previous) => {
+                  const next = new Set(previous)
+                  if (next.has(item.key)) {
+                    next.delete(item.key)
+                  } else {
+                    next.add(item.key)
+                  }
+                  return next
+                })
+              }}
               aria-label={`Selecionar ${item.title}, pasta ${item.pasta === "—" ? "sem pasta" : item.pasta}, linha ${item.rowNumber}`}
             />
           )
@@ -431,9 +437,11 @@ export function WorkGroups({
   const generateLabel =
     status === "starting"
       ? "Iniciando geração…"
-      : selectedEngagement
+      : selectedEngagements.length === 1
         ? "Gerar relatório"
-        : "Selecione um trabalho"
+        : selectedEngagements.length > 1
+          ? `Gerar ${selectedEngagements.length} relatórios`
+          : "Selecione um trabalho"
   const visibleRows = table.getRowModel().rows
   const pageStart =
     filteredRows.length === 0
@@ -530,10 +538,13 @@ export function WorkGroups({
               </div>
               <Button
                 size="lg"
-                disabled={!selectedEngagement || isLoading}
+                disabled={selectedEngagements.length === 0 || isLoading}
                 onClick={() =>
-                  selectedEngagement &&
-                  onGenerate(selectedEngagement.row.row_number)
+                  onGenerate(
+                    selectedEngagements.map(
+                      (engagement) => engagement.row.row_number
+                    )
+                  )
                 }
               >
                 {generateLabel}
@@ -632,7 +643,9 @@ export function WorkGroups({
                         key={row.original.key}
                         data-status={row.original.status}
                         data-state={
-                          selected === row.original.key ? "selected" : undefined
+                          selected.has(row.original.key)
+                            ? "selected"
+                            : undefined
                         }
                         className={cn(
                           row.original.status === "blocked" &&
@@ -667,8 +680,8 @@ export function WorkGroups({
 
             <div className="flex flex-wrap items-center justify-between gap-4">
               <p className="text-sm text-muted-foreground">
-                {selectedEngagement
-                  ? `1 trabalho selecionado · ${pageStart}–${pageEnd} de ${filteredRows.length}`
+                {selectedEngagements.length > 0
+                  ? `${selectedEngagements.length} ${selectedEngagements.length === 1 ? "trabalho selecionado" : "trabalhos selecionados"} · ${pageStart}–${pageEnd} de ${filteredRows.length}`
                   : `${pageStart}–${pageEnd} de ${filteredRows.length} Demandas`}
               </p>
               <div className="flex items-center gap-4">
