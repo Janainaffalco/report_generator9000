@@ -627,8 +627,13 @@ def test_seven_day_sheet_boundary_is_enforced_from_stored_upload_time(
             sheet_store=SheetStore(sheet_directory),
         )
     )
+    empty = generate_control_sheet.build(
+        tmp_path / "expirada.xlsx", rows=(), row_numbers=()
+    )
+    # Distinct byte content for the two uploads: content-addressed dedupe
+    # would otherwise fold them into a single retained sheet.
     retained = _upload(client, FIXTURE, "ainda-retida.xlsx").json()
-    expired = _upload(client, FIXTURE, "expirada.xlsx").json()
+    expired = _upload(client, empty, "expirada.xlsx").json()
     now = datetime.now(UTC)
     _set_uploaded_at(
         sheet_directory,
@@ -657,6 +662,128 @@ def test_seven_day_sheet_boundary_is_enforced_from_stored_upload_time(
     assert not (sheet_directory / f"{expired['sheet_id']}.xlsx").exists()
     assert not (sheet_directory / f"{expired['sheet_id']}.json").exists()
     assert (sheet_directory / f"{retained['sheet_id']}.xlsx").is_file()
+
+
+def test_saving_identical_bytes_twice_returns_the_same_sheet_id_and_one_file(
+    tmp_path: Path,
+) -> None:
+    store = SheetStore(tmp_path / "sheets")
+    data = FIXTURE.read_bytes()
+
+    first_id, first_path = store.save(data, "planilha.xlsx")
+    second_id, second_path = store.save(data, "planilha.xlsx")
+
+    assert first_id == second_id
+    assert first_path == second_path
+    assert list((tmp_path / "sheets").glob("*.xlsx")) == [first_path]
+
+
+def test_all_returns_one_entry_after_saving_identical_bytes_twice(
+    tmp_path: Path,
+) -> None:
+    store = SheetStore(tmp_path / "sheets")
+    data = FIXTURE.read_bytes()
+
+    store.save(data, "planilha.xlsx")
+    store.save(data, "planilha.xlsx")
+
+    assert len(store.all()) == 1
+
+
+def test_saving_edited_bytes_creates_a_second_distinct_sheet(
+    tmp_path: Path,
+) -> None:
+    store = SheetStore(tmp_path / "sheets")
+    original = FIXTURE.read_bytes()
+    edited = generate_control_sheet.build(
+        tmp_path / "edited.xlsx", rows=(), row_numbers=()
+    ).read_bytes()
+
+    original_id, _ = store.save(original, "planilha.xlsx")
+    edited_id, _ = store.save(edited, "planilha.xlsx")
+
+    assert original_id != edited_id
+    assert len(store.all()) == 2
+
+
+def test_dedupe_survives_a_sheet_store_restart(tmp_path: Path) -> None:
+    sheet_directory = tmp_path / "sheets"
+    data = FIXTURE.read_bytes()
+    first_store = SheetStore(sheet_directory)
+    first_id, _ = first_store.save(data, "planilha.xlsx")
+
+    second_store = SheetStore(sheet_directory)
+    second_id, _ = second_store.save(data, "planilha.xlsx")
+
+    assert first_id == second_id
+    assert list(sheet_directory.glob("*.xlsx")) == [sheet_directory / f"{first_id}.xlsx"]
+
+
+def test_missing_or_corrupt_sidecar_does_not_break_save_or_listing(
+    tmp_path: Path,
+) -> None:
+    sheet_directory = tmp_path / "sheets"
+    store = SheetStore(sheet_directory)
+    data = FIXTURE.read_bytes()
+
+    sheet_id, path = store.save(data, "planilha.xlsx")
+    (sheet_directory / f"{sheet_id}.json").write_text(
+        "{not valid json", encoding="utf-8"
+    )
+
+    # A corrupt sidecar must not crash the listing...
+    listed = store.all()
+    assert len(listed) == 1
+    assert listed[0].sheet_id == sheet_id
+
+    # ...nor the save path: re-saving the same bytes still dedupes, falling
+    # back to the file's mtime (as `_metadata` already does) to decide
+    # whether the match is still inside the retention window.
+    resaved_id, resaved_path = store.save(data, "planilha.xlsx")
+    assert resaved_id == sheet_id
+    assert resaved_path == path
+
+    # Now remove the sidecar entirely and confirm the same tolerance holds.
+    (sheet_directory / f"{sheet_id}.json").unlink()
+    assert len(store.all()) == 1
+    again_id, _ = store.save(data, "planilha.xlsx")
+    assert again_id == sheet_id
+
+
+def test_same_bytes_under_a_different_filename_dedupe_to_the_same_sheet(
+    tmp_path: Path,
+) -> None:
+    store = SheetStore(tmp_path / "sheets")
+    data = FIXTURE.read_bytes()
+
+    first_id, _ = store.save(data, "controle junho.xlsx")
+    second_id, _ = store.save(data, "controle junho (1).xlsx")
+
+    assert first_id == second_id
+
+
+def test_expired_sheet_is_not_matched_by_dedupe(tmp_path: Path) -> None:
+    sheet_directory = tmp_path / "sheets"
+    store = SheetStore(sheet_directory)
+    data = FIXTURE.read_bytes()
+
+    first_id, first_path = store.save(data, "planilha.xlsx")
+    _set_uploaded_at(
+        sheet_directory, first_id, datetime.now(UTC) - timedelta(days=7, seconds=5)
+    )
+
+    second_id, second_path = store.save(data, "planilha.xlsx")
+
+    assert second_id == first_id  # content-addressed: same id, refreshed contents
+    assert second_path == first_path
+    # The refreshed save must not still read as expired.
+    assert store.path(second_id) == second_path
+    metadata = json.loads(
+        (sheet_directory / f"{second_id}.json").read_text(encoding="utf-8")
+    )
+    assert datetime.fromisoformat(metadata["uploaded_at"]) > datetime.now(UTC) - timedelta(
+        minutes=1
+    )
 
 
 def test_copy_never_claims_two_addresses_in_one_cell_are_an_error(

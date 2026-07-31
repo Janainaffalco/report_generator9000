@@ -573,6 +573,221 @@ def test_typed_spacers_before_an_existing_page_break_are_replaced(
     assert built.validation.passed
 
 
+def test_palette_image_is_followed_by_a_single_page_break_and_no_spacers(
+    tmp_path: Path,
+) -> None:
+    """Issue #37 item 3: the colour palette image must be followed by exactly
+    one page break and no typed spacer paragraphs, the same treatment given
+    to the declaration's closing page and for the same reason — any reflow
+    above a run of blank paragraphs can spill them onto a page carrying
+    nothing but the running header."""
+    built = build_master(
+        approved_source(tmp_path / "approved.docx"), tmp_path / "out"
+    )
+    with ZipFile(built.master) as archive:
+        document = ElementTree.fromstring(archive.read("word/document.xml"))
+    body = document.find(f"{W}body")
+    children = list(body)
+
+    def text_of(item: ElementTree.Element) -> str:
+        return "".join(node.text or "" for node in item.iter(f"{W}t"))
+
+    heading = next(
+        index
+        for index, item in enumerate(children)
+        if text_of(item).strip() == "PALETA DE CORES"
+    )
+    image = next(
+        index
+        for index, item in enumerate(children[heading + 1 :], heading + 1)
+        if item.find(f".//{W}drawing") is not None
+    )
+    next_heading = next(
+        index
+        for index, item in enumerate(children[image + 1 :], image + 1)
+        if item.find(f"{W}pPr/{W}pStyle") is not None
+        and item.find(f"{W}pPr/{W}pStyle").get(f"{W}val")
+        in {"Heading1", "Heading2"}
+    )
+    section = children[image + 1 : next_heading]
+
+    assert [
+        item
+        for item in section
+        if not text_of(item).strip() and item.find(f".//{W}br") is None
+    ] == []
+    page_breaks = [
+        item
+        for item in section
+        if item.find(f".//{W}br[@{W}type='page']") is not None
+    ]
+    assert len(page_breaks) == 1
+    assert built.validation.passed
+
+
+def test_palette_spacers_before_the_next_section_are_replaced(
+    tmp_path: Path,
+) -> None:
+    """The approved source pads the palette with seven empty paragraphs and
+    no explicit break at all; master-build must not merely delete them but
+    must leave exactly one page break behind, or the next section reflows
+    onto whatever page the palette image lands on."""
+    paragraphs = _base_paragraphs()
+    index = next(
+        position
+        for position, spec in enumerate(paragraphs)
+        if spec.image is not None and spec.extent == (4_653_280, 953_135)
+    )
+    paragraphs[index + 1 : index + 1] = [paragraph() for _ in range(7)]
+    source = build_docx(
+        tmp_path / "padded.docx",
+        paragraphs=paragraphs,
+        media=_base_media(),
+        relationships=_base_relationships(),
+    )
+
+    built = build_master(source, tmp_path / "out")
+
+    with ZipFile(built.master) as archive:
+        document = ElementTree.fromstring(archive.read("word/document.xml"))
+    body = document.find(f"{W}body")
+    children = list(body)
+
+    def text_of(item: ElementTree.Element) -> str:
+        return "".join(node.text or "" for node in item.iter(f"{W}t"))
+
+    heading = next(
+        position
+        for position, item in enumerate(children)
+        if text_of(item).strip() == "PALETA DE CORES"
+    )
+    image = next(
+        position
+        for position, item in enumerate(children[heading + 1 :], heading + 1)
+        if item.find(f".//{W}drawing") is not None
+    )
+    next_heading = next(
+        position
+        for position, item in enumerate(children[image + 1 :], image + 1)
+        if item.find(f"{W}pPr/{W}pStyle") is not None
+        and item.find(f"{W}pPr/{W}pStyle").get(f"{W}val")
+        in {"Heading1", "Heading2"}
+    )
+    section = children[image + 1 : next_heading]
+
+    assert [
+        item
+        for item in section
+        if not text_of(item).strip() and item.find(f".//{W}br") is None
+    ] == []
+    page_breaks = [
+        item
+        for item in section
+        if item.find(f".//{W}br[@{W}type='page']") is not None
+    ]
+    assert len(page_breaks) == 1
+    assert built.validation.passed
+
+
+def test_shipped_master_declaration_and_palette_carry_no_header_only_pages() -> None:
+    """The signed-off Master is a versioned runtime asset (ADR 0003) that the
+    pipeline clones directly — the pipeline never runs master-build again, so
+    a stale committed asset silently ships whatever spacer/page-break shape
+    it happened to have when it was last regenerated, even if every other
+    master-build test (which builds a fresh candidate from a fixture source)
+    is green. This is the regression guard for issue #37 items 2 and 3: it
+    opens the exact asset the app ships and re-checks, directly against
+    word/document.xml, the two known mechanisms that produced a page with
+    nothing on it but the running header — the declaration's closing spacers
+    and the palette's trailing spacers. It does not attempt to prove no page
+    anywhere in the document is header-only in general; that would require
+    layout, which this repo deliberately keeps out of gates that only see
+    XML."""
+    with ZipFile(PACKAGED_MASTER_PATH) as archive:
+        document = ElementTree.fromstring(archive.read("word/document.xml"))
+    body = document.find(f"{W}body")
+    children = list(body)
+
+    def text_of(item: ElementTree.Element) -> str:
+        return "".join(node.text or "" for node in item.iter(f"{W}t"))
+
+    def is_blank_spacer(item: ElementTree.Element) -> bool:
+        # Mirrors master._is_blank_spacer, including its pBdr exclusion: the
+        # signature rule paragraph has no text of its own either, but it is
+        # a deliberate ruled line, not a typed spacer.
+        return (
+            item.tag == f"{W}p"
+            and not text_of(item).strip()
+            and item.find(f".//{W}drawing") is None
+            and item.find(f".//{W}br") is None
+            and item.find(f"{W}pPr/{W}sectPr") is None
+            and item.find(f"{W}pPr/{W}pBdr") is None
+        )
+
+    # Declaration: a signature line, no spacers, exactly one page break
+    # before TERMO DE CESSÃO DE DIREITOS.
+    declaration = next(
+        index
+        for index, item in enumerate(children)
+        if text_of(item).strip() == "DECLARAÇÃO DE RECEBIMENTO E FINALIZAÇÃO"
+    )
+    termo = next(
+        index
+        for index, item in enumerate(children[declaration + 1 :], declaration + 1)
+        if text_of(item).strip() == "TERMO DE CESSÃO DE DIREITOS"
+    )
+    declaration_section = children[declaration + 1 : termo]
+    assert not any(is_blank_spacer(item) for item in declaration_section)
+    assert "Assinatura do representante legal" in "".join(
+        text_of(item) for item in declaration_section
+    )
+    assert (
+        len(
+            [
+                item
+                for item in declaration_section
+                if item.find(f".//{W}br[@{W}type='page']") is not None
+            ]
+        )
+        == 1
+    )
+
+    # Palette: no spacers, exactly one page break before the next section.
+    palette_heading = next(
+        index
+        for index, item in enumerate(children)
+        if text_of(item).strip() == "PALETA DE CORES"
+    )
+    palette_image = next(
+        index
+        for index, item in enumerate(
+            children[palette_heading + 1 :], palette_heading + 1
+        )
+        if item.find(f".//{W}drawing") is not None
+    )
+    next_heading = next(
+        index
+        for index, item in enumerate(
+            children[palette_image + 1 :], palette_image + 1
+        )
+        if item.find(f"{W}pPr/{W}pStyle") is not None
+        and item.find(f"{W}pPr/{W}pStyle").get(f"{W}val")
+        in {"Heading1", "Heading2"}
+    )
+    palette_section = children[palette_image + 1 : next_heading]
+    assert not any(is_blank_spacer(item) for item in palette_section)
+    assert (
+        len(
+            [
+                item
+                for item in palette_section
+                if item.find(f".//{W}br[@{W}type='page']") is not None
+            ]
+        )
+        == 1
+    )
+
+
 def test_master_reuses_the_dedicated_logo_section_without_a_briefing_box(
     tmp_path: Path,
 ) -> None:

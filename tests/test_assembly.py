@@ -12,7 +12,11 @@ from PIL import Image
 
 from report_generator9000.assembly import assemble_output_package
 from report_generator9000.control_sheet import Engagement
-from report_generator9000.docx_package import open_docx_package
+from report_generator9000.docx_package import (
+    _paragraph_flow_height_emu,
+    open_docx_package,
+    page_geometry_emu,
+)
 from report_generator9000.events import run_scope
 from report_generator9000.gates import GATES
 from report_generator9000.gates.blocks import check_block_integrity
@@ -240,6 +244,70 @@ def test_one_engagement_directory_contains_the_complete_handoff_package(
         *(str(path.resolve()) for path in package.previews),
         *(str(path.resolve()) for path in package.raw_captures),
     }
+
+
+def test_block_heading_and_capture_land_on_the_same_page(
+    tmp_path: Path,
+) -> None:
+    """Every Block's heading plus its embedded Capture must fit within the
+    usable page height, and never bleed past the bottom margin, on a real
+    generated document -- issue #37 item 1, checked against the actual
+    document.xml extents produced by the full pipeline, not a preview."""
+    master = build_master(
+        approved_source(tmp_path / "approved.docx"),
+        tmp_path / "master",
+    ).master
+    gated_root = _gated_root(tmp_path)
+
+    with serve_fixture_site() as origin:
+        package = assemble_output_package(
+            master,
+            tmp_path / "outputs",
+            _engagement(origin),
+            gated_root,
+            no_llm=True,
+        )
+
+    with ZipFile(package.report.document) as archive:
+        document = ElementTree.fromstring(archive.read("word/document.xml"))
+        styles = ElementTree.fromstring(archive.read("word/styles.xml"))
+    geometry = page_geometry_emu(document)
+    document_paragraphs = list(document.iter(f"{W}p"))
+
+    document_package = open_docx_package(package.report.document)
+    slots_by_position = {
+        (slot.source_part, slot.paragraph_index): slot
+        for slot in document_package.slots
+        if slot.height_emu is not None
+    }
+
+    checked_blocks = 0
+    for paragraph in document_package.paragraphs:
+        if paragraph.source_part != "word/document.xml":
+            continue
+        if not paragraph.keep_next or paragraph.has_image:
+            continue
+        slot = slots_by_position.get(
+            (paragraph.source_part, paragraph.index + 1)
+        )
+        if slot is None:
+            continue
+        heading_element = document_paragraphs[paragraph.index]
+        heading_height_emu = _paragraph_flow_height_emu(
+            heading_element, styles, W
+        )
+        reserved_emu = heading_height_emu + slot.height_emu
+
+        # Heading and Capture fit on one page under the heading.
+        assert reserved_emu <= geometry.usable_height_emu
+        # The image's own bottom edge never bleeds past the bottom margin.
+        assert (
+            geometry.top_margin_emu + reserved_emu
+            <= geometry.page_height_emu - geometry.bottom_margin_emu
+        )
+        checked_blocks += 1
+
+    assert checked_blocks > 0
 
 
 def test_a_gate_failure_never_promotes_the_staged_report(

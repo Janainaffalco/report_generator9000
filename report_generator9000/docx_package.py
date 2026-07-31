@@ -39,6 +39,15 @@ NAMESPACES = {
     "wp": WORD_DRAWING_NS,
 }
 TWIP_TO_EMU = 635
+CM_TO_EMU = 360_000
+
+# The reporter measured a Capture bleeding past the bottom margin even after
+# every derivable reservation (heading, caption, paragraph spacing) was
+# subtracted from the usable page height -- Word's own layout slop (widow
+# control, running header band, line-height rounding) still ate into the
+# page. 22.5 cm is that measured ceiling: it caps the returned height
+# regardless of what the geometry computation below yields.
+BLOCK_EMBEDDING_HEIGHT_CEILING_EMU = int(22.5 * CM_TO_EMU)
 
 _NAMESPACE_PREFIXES = (
     ("mc", MARKUP_COMPATIBILITY_NS),
@@ -221,83 +230,75 @@ def page_geometry_emu(document: ElementTree.Element) -> PageGeometry:
     return geometry
 
 
-def block_embedding_box_emu(
-    document: ElementTree.Element,
-    styles: ElementTree.Element | None = None,
-) -> tuple[int, int]:
-    """Return the Block Slot width and one-page image-height cap."""
-    w = f"{{{WORD_NS}}}"
-    wp = f"{{{WORD_DRAWING_NS}}}"
-    body = document.find(f"{w}body")
-    if body is None:
-        raise ValueError("document has no body")
-    children = list(body)
-    heading_index = next(
-        (
-            index
-            for index, paragraph in enumerate(children)
-            if paragraph.find(
-                f"{w}bookmarkStart[@{w}name='MASTER_BLOCK_STAMP']"
-            )
-            is not None
-        ),
-        None,
+def _style_chain(
+    paragraph: ElementTree.Element,
+    styles: ElementTree.Element | None,
+    w: str,
+) -> list[ElementTree.Element]:
+    """Return *paragraph*'s style ancestry, nearest first, following basedOn."""
+    if styles is None:
+        return []
+    styles_by_id = {
+        item.get(f"{w}styleId"): item for item in styles.findall(f"{w}style")
+    }
+    style_id_node = paragraph.find(f"{w}pPr/{w}pStyle")
+    style_id = (
+        style_id_node.get(f"{w}val") if style_id_node is not None else None
     )
-    if heading_index is None or heading_index + 1 >= len(children):
-        raise ValueError("MASTER_BLOCK_STAMP is incomplete")
-    heading = children[heading_index]
-    image_paragraph = children[heading_index + 1]
-    extent = image_paragraph.find(f".//{wp}extent")
-    if extent is None or extent.get("cx") is None:
-        raise ValueError("MASTER_BLOCK_STAMP has no image extent")
+    chain: list[ElementTree.Element] = []
+    visited: set[str] = set()
+    while style_id and style_id not in visited:
+        visited.add(style_id)
+        style = styles_by_id.get(style_id)
+        if style is None:
+            break
+        chain.append(style)
+        based_on = style.find(f"{w}basedOn")
+        style_id = based_on.get(f"{w}val") if based_on is not None else None
+    return chain
 
-    direct_spacing = heading.find(f"{w}pPr/{w}spacing")
-    style_properties: list[ElementTree.Element] = []
-    if styles is not None:
-        styles_by_id = {
-            item.get(f"{w}styleId"): item
-            for item in styles.findall(f"{w}style")
-        }
-        style_id_node = heading.find(f"{w}pPr/{w}pStyle")
-        style_id = (
-            style_id_node.get(f"{w}val")
-            if style_id_node is not None
-            else None
-        )
-        visited: set[str] = set()
-        while style_id and style_id not in visited:
-            visited.add(style_id)
-            style = styles_by_id.get(style_id)
-            if style is None:
-                break
-            style_properties.append(style)
-            based_on = style.find(f"{w}basedOn")
-            style_id = (
-                based_on.get(f"{w}val")
-                if based_on is not None
-                else None
-            )
 
-    def inherited_attribute(element_name: str, attribute: str) -> int:
-        if direct_spacing is not None:
-            value = direct_spacing.get(f"{w}{attribute}")
+def _inherited_spacing(
+    paragraph: ElementTree.Element,
+    style_chain: list[ElementTree.Element],
+    attribute: str,
+    w: str,
+) -> int:
+    """Return *paragraph*'s inherited ``w:spacing`` attribute, in twips."""
+    direct_spacing = paragraph.find(f"{w}pPr/{w}spacing")
+    if direct_spacing is not None:
+        value = direct_spacing.get(f"{w}{attribute}")
+        if value is not None:
+            return int(value)
+    for style in style_chain:
+        element = style.find(f"{w}pPr/{w}spacing")
+        if element is not None:
+            value = element.get(f"{w}{attribute}")
             if value is not None:
                 return int(value)
-        for style in style_properties:
-            element = style.find(f"{w}pPr/{w}{element_name}")
-            if element is not None:
-                value = element.get(f"{w}{attribute}")
-                if value is not None:
-                    return int(value)
-        return 0
+    return 0
 
-    before = inherited_attribute("spacing", "before")
-    after = inherited_attribute("spacing", "after")
-    explicit_line = inherited_attribute("spacing", "line")
+
+def _paragraph_flow_height_emu(
+    paragraph: ElementTree.Element,
+    styles: ElementTree.Element | None,
+    w: str,
+) -> int:
+    """Return the vertical footprint *paragraph* reserves on the page.
+
+    This is spacing-before + one line of text at the paragraph's effective
+    font size + spacing-after, resolved through the paragraph's own direct
+    formatting, its style's ``basedOn`` chain, and the styles part's
+    ``docDefaults`` -- the same resolution order Word itself uses.
+    """
+    style_chain = _style_chain(paragraph, styles, w)
+    before = _inherited_spacing(paragraph, style_chain, "before", w)
+    after = _inherited_spacing(paragraph, style_chain, "after", w)
+    explicit_line = _inherited_spacing(paragraph, style_chain, "line", w)
     inherited_font_size = next(
         (
             int(size)
-            for style in style_properties
+            for style in style_chain
             for size_node in style.findall(f"{w}rPr/{w}sz")
             if (size := size_node.get(f"{w}val")) is not None
         ),
@@ -320,31 +321,91 @@ def block_embedding_box_emu(
         else max(default_font_sizes or [24])
     )
     run_font_sizes = []
-    for run in heading.iter(f"{w}r"):
+    for run in paragraph.iter(f"{w}r"):
         size_node = run.find(f"{w}rPr/{w}sz")
-        size = (
-            size_node.get(f"{w}val")
-            if size_node is not None
-            else None
-        )
+        size = size_node.get(f"{w}val") if size_node is not None else None
         run_font_sizes.append(
             int(size) if size is not None else style_font_size
         )
-    effective_font_size = max(
-        run_font_sizes or [style_font_size]
+    effective_font_size = max(run_font_sizes or [style_font_size])
+    line_height_twips = max(explicit_line, effective_font_size * 10)
+    return (before + line_height_twips + after) * TWIP_TO_EMU
+
+
+def block_embedding_box_emu(
+    document: ElementTree.Element,
+    styles: ElementTree.Element | None = None,
+) -> tuple[int, int]:
+    """Return the Block Slot width and one-page image-height cap.
+
+    The cap reserves space for everything that sits above the image within
+    its own Block -- the heading and, if the Master ever grows one, a
+    caption paragraph between heading and image -- plus the paragraph
+    spacing Word inserts immediately above the image itself. It is then
+    clamped to the empirically measured ceiling below.
+    """
+    w = f"{{{WORD_NS}}}"
+    wp = f"{{{WORD_DRAWING_NS}}}"
+    body = document.find(f"{w}body")
+    if body is None:
+        raise ValueError("document has no body")
+    children = list(body)
+    heading_index = next(
+        (
+            index
+            for index, paragraph in enumerate(children)
+            if paragraph.find(
+                f"{w}bookmarkStart[@{w}name='MASTER_BLOCK_STAMP']"
+            )
+            is not None
+        ),
+        None,
     )
-    line_height_twips = max(
-        explicit_line,
-        effective_font_size * 10,
+    if heading_index is None or heading_index + 1 >= len(children):
+        raise ValueError("MASTER_BLOCK_STAMP is incomplete")
+    image_index = next(
+        (
+            index
+            for index in range(heading_index + 1, len(children))
+            if children[index].find(f".//{wp}extent") is not None
+        ),
+        None,
     )
-    heading_height_emu = (
-        before + line_height_twips + after
-    ) * TWIP_TO_EMU
-    max_height_emu = (
-        page_geometry_emu(document).usable_height_emu - heading_height_emu
+    if image_index is None:
+        raise ValueError("MASTER_BLOCK_STAMP has no image extent")
+    image_paragraph = children[image_index]
+    extent = image_paragraph.find(f".//{wp}extent")
+    if extent is None or extent.get("cx") is None:
+        raise ValueError("MASTER_BLOCK_STAMP has no image extent")
+
+    # Everything from the heading up to (but excluding) the image paragraph
+    # sits above the Capture and must be reserved -- the heading itself, and
+    # any caption paragraph(s) between heading and image.
+    above_image_height_emu = sum(
+        _paragraph_flow_height_emu(paragraph, styles, w)
+        for paragraph in children[heading_index:image_index]
     )
-    if max_height_emu <= 0:
+    # The gap Word inserts between that text and the image is the image
+    # paragraph's own spacing-before -- its line height is the image being
+    # sized, so only its "before" spacing belongs to the reservation.
+    image_spacing_before_emu = (
+        _inherited_spacing(
+            image_paragraph,
+            _style_chain(image_paragraph, styles, w),
+            "before",
+            w,
+        )
+        * TWIP_TO_EMU
+    )
+    reserved_height_emu = above_image_height_emu + image_spacing_before_emu
+    computed_max_height_emu = (
+        page_geometry_emu(document).usable_height_emu - reserved_height_emu
+    )
+    if computed_max_height_emu <= 0:
         raise ValueError("Block heading leaves no usable image height")
+    max_height_emu = min(
+        computed_max_height_emu, BLOCK_EMBEDDING_HEIGHT_CEILING_EMU
+    )
     return int(extent.get("cx")), max_height_emu
 
 

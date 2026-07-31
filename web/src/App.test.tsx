@@ -1,11 +1,15 @@
 import "@testing-library/jest-dom/vitest"
 
-import { render, screen } from "@testing-library/react"
-import { describe, expect, it } from "vitest"
+import { cleanup, render, screen } from "@testing-library/react"
+import { afterEach, describe, expect, it } from "vitest"
 
-import { App } from "@/App"
+import { App, currentStage } from "@/App"
 
 describe("upload shell", () => {
+  afterEach(() => {
+    cleanup()
+  })
+
   it("presents the approved first-stage structure and honest delivery copy", () => {
     window.history.replaceState({}, "", "/enviar")
     render(<App />)
@@ -54,5 +58,37 @@ describe("upload shell", () => {
         /nenhum dado do cliente é enviado a uma conta de terceiros/i
       )
     ).toBeInTheDocument()
+  })
+
+  it("points the first stepper step at the root path, not the drop-area route", () => {
+    window.history.replaceState({}, "", "/enviar")
+    render(<App />)
+
+    expect(
+      screen.getByRole("link", { name: "1·Enviar planilha" })
+    ).toHaveAttribute("href", "/")
+  })
+})
+
+describe("currentStage", () => {
+  it("resolves both the root path and the drop-area route to stage 1", () => {
+    expect(currentStage("/")).toBe(1)
+    expect(currentStage("/enviar")).toBe(1)
+  })
+
+  it("resolves every other stage's own path to its own number", () => {
+    const cases: Array<[string, number]> = [
+      ["/escolher", 2],
+      ["/conferir", 3],
+      ["/baixar", 4],
+    ]
+
+    for (const [path, expected] of cases) {
+      expect(currentStage(path)).toBe(expected)
+    }
+  })
+
+  it("falls back to stage 1 for an unrecognized path", () => {
+    expect(currentStage("/algo-desconhecido")).toBe(1)
   })
 })

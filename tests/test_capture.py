@@ -313,7 +313,10 @@ def test_capture_height_cap_comes_from_master_page_geometry(
     )
 
     assert config.embedding_slot_width_emu == 5_400_000
-    assert config.embedding_max_height_emu == 12876 * 635
+    # The raw geometric reservation (12876 twips of heading) still leaves
+    # more than the 22.5 cm ceiling, so the ceiling -- not the geometry --
+    # is what binds here.
+    assert config.embedding_max_height_emu == 8_100_000
 
     with ZipFile(master) as archive:
         parts = {
@@ -403,7 +406,8 @@ def test_capture_height_cap_comes_from_master_page_geometry(
             archive.writestr(name, content)
 
     inherited = capture_config_from_master(inherited_master)
-    assert inherited.embedding_max_height_emu == 12876 * 635
+    # Same geometry as the base case above -- the ceiling binds again.
+    assert inherited.embedding_max_height_emu == 8_100_000
 
 
 def test_capture_url_cannot_carry_credentials(tmp_path: Path) -> None:

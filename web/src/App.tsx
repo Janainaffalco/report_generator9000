@@ -1,3 +1,4 @@
+/* eslint-disable react-refresh/only-export-components */
 import { useCallback, useEffect, useState, type CSSProperties } from "react"
 import { CheckCircle2Icon, FileTextIcon, ShieldCheckIcon } from "lucide-react"
 
@@ -20,10 +21,25 @@ import { getBatch, getRun, startBatch, startRun } from "@/lib/runs"
 import { cn } from "@/lib/utils"
 
 const stages = [
-  { number: 1, label: "Enviar planilha", path: "/enviar" },
-  { number: 2, label: "Escolher o trabalho", path: "/escolher" },
-  { number: 3, label: "Conferir o relatório", path: "/conferir" },
-  { number: 4, label: "Baixar", path: "/baixar" },
+  {
+    number: 1,
+    label: "Enviar planilha",
+    path: "/",
+    matchPaths: ["/", "/enviar"],
+  },
+  {
+    number: 2,
+    label: "Escolher o trabalho",
+    path: "/escolher",
+    matchPaths: ["/escolher"],
+  },
+  {
+    number: 3,
+    label: "Conferir o relatório",
+    path: "/conferir",
+    matchPaths: ["/conferir"],
+  },
+  { number: 4, label: "Baixar", path: "/baixar", matchPaths: ["/baixar"] },
 ]
 
 const features = [
@@ -48,8 +64,12 @@ const features = [
 
 const CHOOSING_WORK_PATH = "/escolher"
 
-function currentStage(pathname: string) {
-  const stage = stages.find((item) => pathname.startsWith(item.path))
+export function currentStage(pathname: string) {
+  const stage = stages.find((item) =>
+    item.matchPaths.some((match) =>
+      match === "/" ? pathname === "/" : pathname.startsWith(match)
+    )
+  )
   return stage?.number ?? 1
 }
 

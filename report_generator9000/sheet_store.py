@@ -2,12 +2,12 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from uuid import uuid4
 
 from .retention import RETENTION
 
@@ -35,10 +35,24 @@ class SheetStore:
     def save(
         self, data: bytes, filename: str = "planilha.xlsx"
     ) -> tuple[str, Path]:
-        """Write *data* to disk, returning the sheet_id it is retained under and its path."""
+        """Write *data* to disk, returning the sheet_id it is retained under and its path.
+
+        The sheet_id is a content digest, not a random token: re-uploading bytes
+        identical to a workbook already inside the retention window lands on the
+        same id and is a no-op rather than a second copy. This is derived purely
+        from the digest-to-path mapping already on disk, so it needs no
+        process-local index and survives a restart the same way `all()` does. A
+        digest match past the retention window is treated as a fresh upload
+        (the stale copy is simply overwritten, refreshing its metadata) rather
+        than a dedupe hit — an expired sheet must not be matched.
+        """
         self.directory.mkdir(parents=True, exist_ok=True)
-        sheet_id = uuid4().hex
+        sheet_id = hashlib.sha256(data).hexdigest()[:32]
         path = self.directory / f"{sheet_id}.xlsx"
+        if path.is_file():
+            existing = self._metadata(sheet_id, path)
+            if not self._is_expired(existing.uploaded_at):
+                return sheet_id, path
         path.write_bytes(data)
         uploaded_at = datetime.now(UTC)
         self._metadata_path(sheet_id).write_text(

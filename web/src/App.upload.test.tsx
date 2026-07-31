@@ -181,6 +181,42 @@ describe("control sheet upload", () => {
     ).not.toBeInTheDocument()
   })
 
+  it("shows the retained sheet at step 1 instead of demanding a re-upload", async () => {
+    window.history.replaceState({}, "", "/")
+    vi.mocked(fetch)
+      .mockResolvedValueOnce(
+        jsonResponse(200, [
+          {
+            sheet_id: fixture.sheet_id,
+            filename: fixture.filename,
+            uploaded_at: "2026-07-30T18:00:00+00:00",
+            ready_count: 2,
+          },
+        ])
+      )
+      .mockResolvedValueOnce(jsonResponse(200, fixture))
+
+    render(<App />)
+
+    await screen.findByRole("checkbox", {
+      name: /DENISE BARROS DE ALMEIDA.*linha 2/,
+    })
+    expect(
+      screen.queryByTestId("control-sheet-dropzone")
+    ).not.toBeInTheDocument()
+  })
+
+  it("falls through to the drop area at step 1 when there is no retained sheet", async () => {
+    window.history.replaceState({}, "", "/")
+    vi.mocked(fetch).mockResolvedValueOnce(jsonResponse(200, []))
+
+    render(<App />)
+
+    expect(
+      await screen.findByTestId("control-sheet-dropzone")
+    ).toBeInTheDocument()
+  })
+
   it("offers retained sheet choices with upload dates and ready counts", async () => {
     window.history.replaceState({}, "", "/")
     vi.mocked(fetch)

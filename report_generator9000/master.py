@@ -984,6 +984,112 @@ def _page_break_paragraph() -> ElementTree.Element:
     return paragraph
 
 
+_PALETTE_SECTION = "PALETA DE CORES"
+_PALETTE_HEADING_STYLES = frozenset({"Heading1", "Heading2"})
+
+
+def _add_palette_page_break(
+    parts: dict[str, bytes], changes: list[_Change]
+) -> None:
+    """Close the colour palette with one page break, not typed blank lines.
+
+    Sibling of `_add_signature_line`, for the same failure: the source pads
+    the palette image onto a fresh page with a run of empty paragraphs, and
+    any reflow above them spills the spacers onto a page carrying nothing but
+    the running header. Unlike the declaration, the palette needs no
+    signature — only the spacer-removal-and-one-break idiom, so this stays a
+    lean sibling rather than a call into `_add_signature_line` with unused
+    parameters.
+
+    The heading match is case-exact rather than casefolded, unlike
+    `_add_signature_line`'s: the source's deliverables list under `ACESSOS E
+    ENTREGAS` mentions "Paleta de cores" in title case as a line item, and a
+    casefolded match finds that line before the real all-caps heading.
+    """
+    original_document = parts["word/document.xml"]
+    document = ElementTree.fromstring(original_document)
+    body = document.find(f"{W}body")
+    if body is None:
+        raise MasterBuildError("word/document.xml has no body")
+
+    def bounds() -> tuple[int, int]:
+        children = list(body)
+        heading = next(
+            (
+                index
+                for index, item in enumerate(children)
+                if item.tag == f"{W}p"
+                and _paragraph_text(item).strip() == _PALETTE_SECTION
+            ),
+            None,
+        )
+        if heading is None:
+            raise MasterBuildError(
+                f"palette section not found: {_PALETTE_SECTION}"
+            )
+        image = next(
+            (
+                index
+                for index, item in enumerate(children[heading + 1 :], heading + 1)
+                if item.find(f".//{W}drawing") is not None
+            ),
+            None,
+        )
+        if image is None:
+            raise MasterBuildError(
+                f"palette image not found after {_PALETTE_SECTION}"
+            )
+        next_heading = next(
+            (
+                index
+                for index, item in enumerate(children[image + 1 :], image + 1)
+                if item.find(f"{W}pPr/{W}pStyle") is not None
+                and item.find(f"{W}pPr/{W}pStyle").get(f"{W}val")
+                in _PALETTE_HEADING_STYLES
+            ),
+            len(children),
+        )
+        return image, next_heading
+
+    image, next_heading = bounds()
+    for spacer in [
+        item
+        for item in list(body)[image + 1 : next_heading]
+        if _is_blank_spacer(item)
+    ]:
+        body.remove(spacer)
+        changes.append(
+            _Change(
+                "palette spacer removed",
+                "word/document.xml",
+                "empty paragraph",
+                "one page break",
+            )
+        )
+
+    image, next_heading = bounds()
+    children = list(body)
+    existing_break = next(
+        (
+            item
+            for item in children[image + 1 : next_heading]
+            if item.find(f".//{W}br[@{W}type='page']") is not None
+        ),
+        None,
+    )
+    if existing_break is None:
+        body.insert(next_heading, _page_break_paragraph())
+        changes.append(
+            _Change(
+                "page break added",
+                "word/document.xml",
+                _PALETTE_SECTION,
+                "one page break",
+            )
+        )
+    parts["word/document.xml"] = serialize_xml(document, original_document)
+
+
 def _add_signature_line(
     parts: dict[str, bytes], changes: list[_Change]
 ) -> None:
@@ -1554,6 +1660,7 @@ def build_master(source: str | Path, destination: str | Path) -> MasterBuild:
     _add_signoff_structure(parts, changes)
     _canonicalize_blocks(parts, changes)
     _add_signature_line(parts, changes)
+    _add_palette_page_break(parts, changes)
     _embed_montserrat(parts, changes)
     master_path.parent.mkdir(parents=True, exist_ok=True)
     _deterministic_zip(master_path, parts)
