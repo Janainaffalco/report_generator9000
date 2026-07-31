@@ -285,7 +285,13 @@ def derive_lista_paginas(
 
     request = Request(
         capture_origin,
-        headers={"User-Agent": "report-generator9000/0.1"},
+        headers={
+            "User-Agent": "report-generator9000/0.1",
+            # Derive the Lista de Páginas from the live nav, not an
+            # intermediary's stored copy -- see `capture.NO_CACHE_HEADERS`.
+            "Cache-Control": "no-cache",
+            "Pragma": "no-cache",
+        },
     )
     try:
         with urlopen(request, timeout=timeout) as response:

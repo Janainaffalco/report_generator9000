@@ -134,6 +134,78 @@ def test_real_browser_renders_lazy_content_declines_and_downscales(
     assert not any(r > 245 and 180 < g < 235 and b < 80 for r, g, b in colors)
 
 
+class _EdgeCacheHandler(BaseHTTPRequestHandler):
+    """A host behind a CDN, announcing which layer answered."""
+
+    received: list[dict[str, str]] = []
+
+    def log_message(self, format: str, *args: object) -> None:
+        pass
+
+    def do_GET(self) -> None:
+        type(self).received.append(dict(self.headers))
+        content = (
+            "<html><body style='background:#1b7f3b'>"
+            "<h1 style='color:#f2c14e'>CLINICA EXEMPLO</h1>"
+            "<p style='color:#3b5bdb'>Atendimento especializado.</p>"
+            "</body></html>"
+        ).encode()
+        self.send_response(200)
+        self.send_header("Content-Type", "text/html; charset=utf-8")
+        self.send_header("Content-Length", str(len(content)))
+        self.send_header("x-hcdn-cache-status", "HIT")
+        self.end_headers()
+        self.wfile.write(content)
+
+
+@contextmanager
+def _serve_edge_cached_site() -> Iterator[str]:
+    _EdgeCacheHandler.received = []
+    server = ThreadingHTTPServer(("127.0.0.1", 0), _EdgeCacheHandler)
+    thread = Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        yield f"http://127.0.0.1:{server.server_port}/"
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join()
+
+
+def test_capture_asks_intermediaries_to_revalidate_and_records_who_answered(
+    tmp_path: Path,
+    recording_sink,
+) -> None:
+    """A Capture must depict the site now, not a maintenance page from before.
+
+    Nothing here caches -- every Run launches a fresh browser profile -- so a
+    stale Capture can only come from an intermediary. We ask it to revalidate,
+    and we record what it says it served, so the next stale Capture is
+    evidence rather than a guess.
+    """
+    with _serve_edge_cached_site() as origin:
+        result = capture_site(
+            (_pagina(origin),),
+            tmp_path / "40-2026_CLIENTE" / "capturas",
+            config=_capture_config(minimum_color_count=2),
+        )
+
+    assert result.failures == ()
+    document_request = _EdgeCacheHandler.received[0]
+    assert document_request["Cache-Control"] == "no-cache"
+    assert document_request["Pragma"] == "no-cache"
+
+    responses = [
+        event
+        for event in recording_sink.events
+        if event.name == "capture_page_response"
+    ]
+    assert len(responses) == 1
+    assert responses[0].fields["url"] == origin
+    assert responses[0].fields["status"] == 200
+    assert responses[0].fields["x_hcdn_cache_status"] == "HIT"
+
+
 class _RestlessHandler(BaseHTTPRequestHandler):
     """A site that never goes network-idle, the way Wix and Hostinger do not."""
 

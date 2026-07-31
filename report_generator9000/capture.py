@@ -16,6 +16,7 @@ from PIL import Image, ImageDraw, ImageFont, ImageOps
 from playwright.sync_api import (
     Error as PlaywrightError,
     Page,
+    Response,
     sync_playwright,
 )
 
@@ -49,6 +50,31 @@ CONSENT_BANNER_SELECTORS = (
     "[role='dialog'][aria-label*='cookie' i]",
     "[class*='cookie'][class*='banner']",
 )
+NO_CACHE_HEADERS = {
+    "Cache-Control": "no-cache",
+    "Pragma": "no-cache",
+}
+"""Ask every intermediary to revalidate rather than serve a stored copy.
+
+A Capture must depict the site as it is at Run time. Hosting stacks in front
+of these sites (Hostinger's `hcdn`, LiteSpeed Cache, WordPress page caches)
+will otherwise keep serving a maintenance page for some time after the owner
+has taken the site out of maintenance, and the Run captures the stale copy.
+Nothing in this application caches -- each Run launches a fresh browser
+profile -- so revalidation is the only lever we hold. Honouring the request
+header is at the intermediary's discretion, so this narrows the window rather
+than closing it; `FRESHNESS_HEADERS` records what was actually served.
+"""
+
+FRESHNESS_HEADERS = (
+    "x-hcdn-cache-status",
+    "cf-cache-status",
+    "x-litespeed-cache",
+    "x-cache",
+    "age",
+)
+"""Response headers naming the layer that answered, recorded per page."""
+
 _SAFE_STEM = re.compile(r"[^a-z0-9]+")
 _MANAGED_CAPTURE = re.compile(r"^\d{2}-[a-z0-9-]+\.png$")
 PARTIAL_CAPTURE_BADGE_TEXT = "captura parcial da página"
@@ -408,6 +434,27 @@ def _force_lazy_rendering(page: Page, config: CaptureConfig) -> None:
     page.wait_for_timeout(config.lazy_settle_ms)
 
 
+def _record_freshness(pagina: Pagina, response: Response | None) -> None:
+    """Record which layer answered, so a stale Capture is evidence, not a guess.
+
+    This is diagnostics, never Provenance: the Run log is not a source of
+    truth for the report -- see docs/adr/0002.
+    """
+    if response is None:
+        return
+    observed: dict[str, str] = {}
+    for header in FRESHNESS_HEADERS:
+        value = response.header_value(header)
+        if value is not None:
+            observed[header.replace("-", "_")] = value
+    notice(
+        "capture_page_response",
+        url=pagina.url,
+        status=response.status,
+        **observed,
+    )
+
+
 def _capture_page(
     page: Page,
     pagina: Pagina,
@@ -420,11 +467,12 @@ def _capture_page(
     if parsed.username is not None or parsed.password is not None:
         raise CaptureError("Capture URL must not contain credentials")
 
-    page.goto(
+    response = page.goto(
         pagina.url,
         wait_until="domcontentloaded",
         timeout=config.navigation_timeout_ms,
     )
+    _record_freshness(pagina, response)
     final_url = urlsplit(page.url)
     if (
         final_url.netloc.casefold() != parsed.netloc.casefold()
@@ -513,6 +561,7 @@ def capture_site(
                         "height": settings.viewport_height,
                     },
                     device_scale_factor=settings.device_scale_factor,
+                    extra_http_headers=NO_CACHE_HEADERS,
                 )
                 page = context.new_page()
                 for index, pagina in enumerate(pages, start=1):
@@ -660,6 +709,7 @@ def extract_site_text(
                     "height": settings.viewport_height,
                 },
                 device_scale_factor=settings.device_scale_factor,
+                extra_http_headers=NO_CACHE_HEADERS,
             )
             page = context.new_page()
             for pagina in pages:

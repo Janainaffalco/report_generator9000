@@ -14,6 +14,8 @@ from PIL import Image, ImageDraw, ImageFont, PngImagePlugin
 from playwright.sync_api import Error as PlaywrightError
 from playwright.sync_api import sync_playwright
 
+from .capture import NO_CACHE_HEADERS
+
 
 OBSERVED_NEAR_BLACK_LIGHTNESS = 0.05
 OBSERVED_NEAR_WHITE_LIGHTNESS = 0.95
@@ -332,7 +334,8 @@ def derive_palette_from_site(capture_origin: str) -> PaletteDerivation:
             browser = playwright.chromium.launch(headless=True)
             try:
                 context = browser.new_context(
-                    viewport={"width": 1440, "height": 900}
+                    viewport={"width": 1440, "height": 900},
+                    extra_http_headers=NO_CACHE_HEADERS,
                 )
                 page = context.new_page()
                 page.goto(

@@ -20,6 +20,7 @@ from playwright.sync_api import (
     sync_playwright,
 )
 
+from .capture import NO_CACHE_HEADERS
 from .run_context import Artifact, Pendencia
 
 
@@ -438,6 +439,7 @@ def capture_client_logo(
                 context = browser.new_context(
                     viewport={"width": 1600, "height": 900},
                     device_scale_factor=2,
+                    extra_http_headers=NO_CACHE_HEADERS,
                 )
                 page = context.new_page()
                 page.goto(
