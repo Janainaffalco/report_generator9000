@@ -1,9 +1,13 @@
 from __future__ import annotations
 
+from collections.abc import Iterator
+from contextlib import contextmanager
 from datetime import datetime
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from io import BytesIO
 import json
 from pathlib import Path
+from threading import Thread
 from zipfile import ZipFile
 from xml.etree import ElementTree
 
@@ -391,6 +395,89 @@ def test_budget_stop_condition_discards_the_whole_staged_package(
             prose_config=ProseConfig("configured", 20),
         )
 
+    assert not (tmp_path / "outputs" / "40-2026_CLIENTE").exists()
+
+
+class _MaintenanceHandler(BaseHTTPRequestHandler):
+    """Every path answers with a near-blank holding page."""
+
+    def log_message(self, format: str, *args: object) -> None:
+        pass
+
+    def do_GET(self) -> None:
+        content = (
+            "<html><body style='background:#fff;color:#000'>"
+            "<p>Site is undergoing maintenance</p>"
+            "</body></html>"
+        ).encode()
+        self.send_response(200)
+        self.send_header("Content-Type", "text/html; charset=utf-8")
+        self.send_header("Content-Length", str(len(content)))
+        self.end_headers()
+        self.wfile.write(content)
+
+
+@contextmanager
+def _serve_maintenance_site() -> Iterator[str]:
+    server = ThreadingHTTPServer(("127.0.0.1", 0), _MaintenanceHandler)
+    thread = Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        yield f"http://127.0.0.1:{server.server_port}/"
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join()
+
+
+class _CountingProvider(_Provider):
+    def __init__(self, response: ProseResponse) -> None:
+        super().__init__(response)
+        self.calls = 0
+
+    def generate(
+        self,
+        request: ProseRequest,
+        config: ProseConfig,
+    ) -> ProseResponse:
+        self.calls += 1
+        return super().generate(request, config)
+
+
+def test_a_site_with_no_usable_capture_stops_before_spending_prose_budget(
+    tmp_path: Path,
+) -> None:
+    """A run with nothing captured cannot produce a report, so it must not try.
+
+    A site in maintenance mode trips the blank-content check on every page.
+    Continuing past that point builds a report entirely from placeholders and
+    sends the prose provider an empty prompt -- burning quota that the runs
+    behind it in the batch still need.
+    """
+    master = build_master(
+        approved_source(tmp_path / "approved.docx"),
+        tmp_path / "master",
+    ).master
+    provider = _CountingProvider(
+        ProseResponse(
+            company_description=GroundedField("Texto", True),
+            briefing_objective=GroundedField("Texto", True),
+        )
+    )
+
+    with _serve_maintenance_site() as origin:
+        with pytest.raises(StopCondition) as rejection:
+            assemble_output_package(
+                master,
+                tmp_path / "outputs",
+                _engagement(origin),
+                tmp_path / "absent-gated",
+                prose_provider=provider,
+                prose_config=ProseConfig("configured", 2048),
+            )
+
+    assert provider.calls == 0
+    assert "captura" in str(rejection.value).casefold()
     assert not (tmp_path / "outputs" / "40-2026_CLIENTE").exists()
 
 

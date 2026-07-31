@@ -18,6 +18,7 @@ from report_generator9000.capture import (
     build_embedding_derivative,
     capture_config_from_master,
     capture_site,
+    extract_site_text,
     fitted_emu_dimensions,
 )
 from report_generator9000.lista_paginas import (
@@ -131,6 +132,93 @@ def test_real_browser_renders_lazy_content_declines_and_downscales(
         )
     assert any(g > 120 and r < 120 for r, g, _b in colors)
     assert not any(r > 245 and 180 < g < 235 and b < 80 for r, g, b in colors)
+
+
+class _RestlessHandler(BaseHTTPRequestHandler):
+    """A site that never goes network-idle, the way Wix and Hostinger do not."""
+
+    def log_message(self, format: str, *args: object) -> None:
+        pass
+
+    def do_GET(self) -> None:
+        if self.path == "/beacon":
+            self.send_response(204)
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+            return
+        content = (
+            "<html><body>"
+            "<h1>CLINICA EXEMPLO</h1>"
+            "<p>Atendimento especializado em toda a regiao.</p>"
+            "<script>setInterval(() => fetch('/beacon'), 100)</script>"
+            "</body></html>"
+        ).encode()
+        self.send_response(200)
+        self.send_header("Content-Type", "text/html; charset=utf-8")
+        self.send_header("Content-Length", str(len(content)))
+        self.end_headers()
+        self.wfile.write(content)
+
+
+@contextmanager
+def _serve_restless_site() -> Iterator[str]:
+    server = ThreadingHTTPServer(("127.0.0.1", 0), _RestlessHandler)
+    thread = Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        yield f"http://127.0.0.1:{server.server_port}/"
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join()
+
+
+def test_site_that_never_goes_network_idle_is_still_captured(
+    tmp_path: Path,
+) -> None:
+    """Network quiet is a settle hint, not a precondition for a usable page.
+
+    Site builders keep beacons and chat sockets open indefinitely, so waiting
+    for `networkidle` before capturing throws away pages that finished
+    rendering seconds earlier.
+    """
+    with _serve_restless_site() as origin:
+        result = capture_site(
+            (_pagina(origin, titulo="SEÇÃO HOME"),),
+            tmp_path / "40-2026_CLIENTE" / "capturas",
+            config=_capture_config(),
+        )
+
+    assert result.failures == ()
+    assert len(result.captures) == 1
+
+
+def test_site_that_never_goes_network_idle_still_yields_prose_text(
+    tmp_path: Path,
+) -> None:
+    with _serve_restless_site() as origin:
+        extracted = extract_site_text(
+            (_pagina(origin, titulo="SEÇÃO HOME"),),
+            config=_capture_config(),
+        )
+
+    assert len(extracted) == 1
+    assert "CLINICA EXEMPLO" in extracted[0].text
+
+
+def test_one_unreachable_page_does_not_lose_the_other_pages_prose() -> None:
+    """A single bad page costs its own text, never the whole extraction."""
+    with serve_fixture_site() as origin:
+        extracted = extract_site_text(
+            (
+                _pagina("http://127.0.0.1:9/", titulo="SEÇÃO MORTA"),
+                _pagina(origin, titulo="SEÇÃO HOME"),
+            ),
+            config=_capture_config(),
+        )
+
+    assert len(extracted) == 1
+    assert extracted[0].capture_origin.startswith(origin)
 
 
 def test_undismissable_banner_is_visible_and_flagged(tmp_path: Path) -> None:

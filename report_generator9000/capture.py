@@ -20,6 +20,7 @@ from playwright.sync_api import (
 )
 
 from .docx_package import block_embedding_box_emu
+from .events import notice
 from .lista_paginas import ELEMENTO_TRANSVERSAL, Pagina
 from .run_context import Artifact, Pendencia
 
@@ -391,9 +392,18 @@ def _force_lazy_rendering(page: Page, config: CaptureConfig) -> None:
         "document.body.scrollHeight, document.documentElement.scrollHeight))"
     )
     page.wait_for_timeout(config.lazy_settle_ms)
-    page.wait_for_load_state(
-        "networkidle", timeout=config.network_idle_timeout_ms
-    )
+    try:
+        page.wait_for_load_state(
+            "networkidle", timeout=config.network_idle_timeout_ms
+        )
+    except PlaywrightError:
+        # Network quiet is a hint that lazy content has settled, never a
+        # precondition for a usable page. Site builders (Wix, Hostinger) keep
+        # analytics beacons and chat sockets open for the life of the tab, so
+        # they never reach networkidle at all -- waiting for it discarded
+        # pages that had finished rendering seconds earlier. Whatever has
+        # painted by now is what we capture.
+        pass
     page.evaluate("() => window.scrollTo(0, 0)")
     page.wait_for_timeout(config.lazy_settle_ms)
 
@@ -600,6 +610,35 @@ def capture_site(
     )
 
 
+def _page_text(page: Page, pagina: Pagina, settings: CaptureConfig) -> str:
+    """Navigate to *pagina* and return its rendered body text."""
+    parsed = urlsplit(pagina.url)
+    if (
+        parsed.scheme not in {"http", "https"}
+        or not parsed.netloc
+        or parsed.username is not None
+        or parsed.password is not None
+    ):
+        raise CaptureError(
+            "prose extraction URL must be unauthenticated HTTP(S)"
+        )
+    page.goto(
+        pagina.url,
+        wait_until="domcontentloaded",
+        timeout=settings.navigation_timeout_ms,
+    )
+    final_url = urlsplit(page.url)
+    if (
+        final_url.netloc.casefold() != parsed.netloc.casefold()
+        or final_url.username is not None
+        or final_url.password is not None
+    ):
+        raise CaptureError("prose extraction left the declared page host")
+    _dismiss_consent(page)
+    _force_lazy_rendering(page, settings)
+    return page.locator("body").inner_text().strip()
+
+
 def extract_site_text(
     pages: tuple[Pagina, ...],
     *,
@@ -611,6 +650,7 @@ def extract_site_text(
     settings = CaptureConfig() if config is None else config
     extracted: list[ExtractedPageText] = []
     seen: set[str] = set()
+    skipped = 0
     with sync_playwright() as playwright:
         browser = playwright.chromium.launch(headless=True)
         try:
@@ -626,34 +666,24 @@ def extract_site_text(
                 if not pagina.entra_no_briefing or pagina.url in seen:
                     continue
                 seen.add(pagina.url)
-                parsed = urlsplit(pagina.url)
-                if (
-                    parsed.scheme not in {"http", "https"}
-                    or not parsed.netloc
-                    or parsed.username is not None
-                    or parsed.password is not None
-                ):
-                    raise CaptureError(
-                        "prose extraction URL must be unauthenticated HTTP(S)"
-                    )
-                page.goto(
-                    pagina.url,
-                    wait_until="domcontentloaded",
-                    timeout=settings.navigation_timeout_ms,
-                )
-                final_url = urlsplit(page.url)
-                if (
-                    final_url.netloc.casefold()
-                    != parsed.netloc.casefold()
-                    or final_url.username is not None
-                    or final_url.password is not None
-                ):
-                    raise CaptureError(
-                        "prose extraction left the declared page host"
-                    )
-                _dismiss_consent(page)
-                _force_lazy_rendering(page, settings)
-                text = page.locator("body").inner_text().strip()
+                # Prose is a best-effort enrichment -- `assembly` already
+                # generates a report from no site text at all under `no_llm`.
+                # So one page that times out, redirects off-host, or refuses
+                # to load costs its own text and nothing more; letting it
+                # escape would fail the whole engagement over an optional
+                # input. This mirrors the per-page tolerance in `capture_site`.
+                try:
+                    text = _page_text(page, pagina, settings)
+                except (CaptureError, PlaywrightError):
+                    skipped += 1
+                    # A failed navigation leaves the tab on a pending
+                    # `chrome-error://` navigation that interrupts the *next*
+                    # page's `goto`. Without recycling the tab, one dead page
+                    # would still take down the page after it -- the very
+                    # cascade this per-page tolerance exists to stop.
+                    page.close()
+                    page = context.new_page()
+                    continue
                 if text:
                     extracted.append(
                         ExtractedPageText(
@@ -663,6 +693,13 @@ def extract_site_text(
                     )
         finally:
             browser.close()
+    if skipped:
+        notice(
+            "extract_site_text_pages_skipped",
+            severity="warning",
+            skipped=skipped,
+            extracted=len(extracted),
+        )
     return tuple(extracted)
 
 

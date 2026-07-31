@@ -104,6 +104,18 @@ def _assemble_staged_package(
         )
         result["captured"] = len(captures.captures)
         result["failed"] = len(captures.failures)
+    if pages and not captures.captures:
+        # Every page failed -- the site is down, in maintenance, or renders
+        # nothing. The report would be built entirely from placeholders and
+        # the prose prompt would carry no site text at all, so the run cannot
+        # produce anything usable. Stopping here also protects the runs behind
+        # this one in the batch: a doomed run must not spend shared prose
+        # quota on an empty prompt.
+        raise StopCondition(
+            "STOP CONDITION: nenhuma captura utilizável do site "
+            f"({len(captures.failures)} de {len(pages)} páginas falharam); "
+            "o site pode estar fora do ar ou em manutenção"
+        )
     report_progress("capture")
     derived_palette = None
     if palette_part not in gated.images_by_part():
