@@ -2,7 +2,7 @@ import json
 import sys
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from threading import Event
+from threading import Event, Lock
 from time import monotonic, sleep
 from types import SimpleNamespace
 
@@ -297,6 +297,11 @@ def test_every_worksheet_row_is_ready_blocked_or_unsupported(tmp_path: Path) -> 
             {
                 "row": {"pasta": "131-2026", "row_number": 8},
                 "tema": generate_control_sheet.OUT_OF_SCOPE,
+                "demanda": "013300/2026",
+                "razao_social": "CLIENTE",
+                "especialista": "Bruno Henrique Santana Leal",
+                "kick_off": "01/07/2026",
+                "link": "",
                 "report_ready_text": "PRazo prorrogado",
                 "cause": "Tema is unsupported",
                 "explicacao": (
@@ -345,6 +350,11 @@ def test_stop_conditions_are_translated_and_carry_the_original_cause(
     }
     assert by_cause["Pasta is absent"] == {
         "row": {"pasta": None, "row_number": 8},
+        "demanda": "011910/2026",
+        "razao_social": "CLINICA SILVIA",
+        "especialista": "Bruno Henrique Santana Leal",
+        "kick_off": "13/05/2026",
+        "link": "https://missing-pasta.example/",
         "coluna": "nº da pasta",
         "problema": "A coluna nº da pasta está vazia.",
         "solucao": "Preencha o número da pasta, como 115-2026.",
@@ -390,6 +400,11 @@ def test_unsupported_rows_include_tema_and_report_ready_text(
             {
                 "row": {"pasta": "72-2026", "row_number": 10},
                 "tema": generate_control_sheet.OUT_OF_SCOPE,
+                "demanda": "011547/2026",
+                "razao_social": "CASA NOSSA",
+                "especialista": "Christian Albuquerque Alonso",
+                "kick_off": "21/04/2026",
+                "link": "https://out-of-scope.example/",
                 "report_ready_text": "",
                 "cause": "Tema is unsupported",
                 "explicacao": (
@@ -784,6 +799,119 @@ def test_starting_one_engagement_returns_immediately_then_polls_and_downloads(
     assert download.content == b"generated docx"
     disposition = download.headers["content-disposition"]
     assert "40-2026_DENISE%20BARROS%20DE%20ALMEIDA.docx" in disposition
+    service.shutdown()
+
+
+def test_batch_runs_sequentially_and_isolates_stop_and_gate_failures(
+    tmp_path: Path,
+) -> None:
+    sheet_store = SheetStore(tmp_path / "sheets")
+    app = create_app(
+        static_dir=tmp_path / "missing-web",
+        sheet_store=sheet_store,
+    )
+    first_entered = Event()
+    release_first = Event()
+    active_lock = Lock()
+    active = 0
+    max_active = 0
+    start_order: list[int] = []
+
+    def assemble(master, output_root, engagement, gated_root, **options):
+        nonlocal active, max_active
+        with active_lock:
+            active += 1
+            max_active = max(max_active, active)
+            start_order.append(engagement.row_number)
+        try:
+            if len(start_order) == 1:
+                first_entered.set()
+                release_first.wait(timeout=5)
+            if len(start_order) == 2:
+                raise StopCondition("Capture Origin indisponível")
+            if len(start_order) == 3:
+                raise GateRejected("block-integrity recusou o documento")
+            progress = options["progress"]
+            for stage in STAGES:
+                progress(stage, 3 if stage == "derive_pages" else None)
+            document = (
+                Path(output_root)
+                / f"RELATÓRIO TÉCNICO FINAL - {engagement.pasta}_{engagement.razao_social}.docx"
+            )
+            document.parent.mkdir(parents=True, exist_ok=True)
+            document.write_bytes(f"document for row {engagement.row_number}".encode())
+            return SimpleNamespace(
+                pages=(object(), object(), object()),
+                previews=(),
+                report=SimpleNamespace(
+                    status="draft",
+                    document=document,
+                    gate_report=SimpleNamespace(results=()),
+                    context=SimpleNamespace(pendencias=()),
+                ),
+            )
+        finally:
+            with active_lock:
+                active -= 1
+
+    service = RunService(
+        store=RunStore(tmp_path / "runs"),
+        master=tmp_path / "MASTER.docx",
+        output_root=tmp_path / "outputs",
+        gated_drop_root=tmp_path / "gated",
+        assembler=assemble,
+        no_llm=True,
+    )
+    app.state.run_service = service
+    client = TestClient(app)
+    uploaded = _upload(client, FIXTURE).json()
+    row_numbers = [
+        engagement["row"]["row_number"]
+        for engagement in uploaded["engagements"][:4]
+    ]
+
+    response = client.post(
+        "/api/batches",
+        json={
+            "sheet_id": uploaded["sheet_id"],
+            "row_numbers": row_numbers,
+        },
+    )
+
+    assert response.status_code == 202
+    batch = response.json()
+    assert response.headers["location"] == f"/api/batches/{batch['batch_id']}"
+    assert [run["engagement"]["row_number"] for run in batch["runs"]] == row_numbers
+    assert first_entered.wait(timeout=2)
+    working = client.get(response.headers["location"]).json()
+    assert working["runs"][0]["outcome"] == "running"
+    assert [run["outcome"] for run in working["runs"][1:]] == [
+        "queued",
+        "queued",
+        "queued",
+    ]
+
+    release_first.set()
+    deadline = monotonic() + 3
+    finished = working
+    while any(
+        run["outcome"] in {"queued", "running"} for run in finished["runs"]
+    ) and monotonic() < deadline:
+        sleep(0.01)
+        finished = client.get(response.headers["location"]).json()
+
+    assert [run["outcome"] for run in finished["runs"]] == [
+        "finished",
+        "stopped",
+        "rejected",
+        "finished",
+    ]
+    assert finished["runs"][1]["reason"] == "Capture Origin indisponível"
+    assert finished["runs"][2]["reason"] == "block-integrity recusou o documento"
+    assert finished["runs"][0]["download_url"]
+    assert finished["runs"][3]["download_url"]
+    assert start_order == row_numbers
+    assert max_active == 1
     service.shutdown()
 
 

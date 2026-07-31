@@ -65,6 +65,11 @@ class UnsupportedRow:
     reason: str
     report_ready_text: str = ""
     tema: str = ""
+    demanda: str = ""
+    razao_social: str = ""
+    especialista: str = ""
+    kick_off_text: str = ""
+    link_text: str = ""
 
 
 @dataclass(frozen=True)
@@ -74,6 +79,11 @@ class StopCondition:
     row_number: int
     cause: str
     report_ready_text: str = ""
+    demanda: str = ""
+    razao_social: str = ""
+    especialista: str = ""
+    kick_off_text: str = ""
+    link_text: str = ""
 
 
 RowOutcome: TypeAlias = Engagement | UnsupportedRow | StopCondition
@@ -97,6 +107,13 @@ def _text(value: str | datetime | None) -> str:
 def _display_text(value: str | datetime | None) -> str:
     """Return spreadsheet text for display without interpreting or normalising it."""
     return "" if value is None else str(value)
+
+
+def _display_cell(value: str | datetime | None) -> str:
+    """Return a sheet cell as a consultant would expect to read it."""
+    if isinstance(value, datetime):
+        return value.strftime("%d/%m/%Y")
+    return _display_text(value)
 
 
 def _cnpj(value: str | datetime | None) -> str:
@@ -284,10 +301,22 @@ def read_control_sheet(path: str | Path) -> tuple[RowOutcome, ...]:
     outcomes: list[RowOutcome] = []
     for row_number, row in rows[1:]:
         report_ready_text = _display_text(_value(row, columns, "complete"))
+        blocked_row = {
+            "demanda": _display_cell(_value(row, columns, "demanda")),
+            "razao_social": _display_cell(_value(row, columns, "razao_social")),
+            "especialista": _display_cell(_value(row, columns, "especialista")),
+            "kick_off_text": _display_cell(_value(row, columns, "kick_off")),
+            "link_text": _display_cell(_value(row, columns, "link")),
+        }
         tema = _text(_value(row, columns, "tema"))
         if not tema:
             outcomes.append(
-                StopCondition(row_number, "Tema is absent", report_ready_text)
+                StopCondition(
+                    row_number,
+                    "Tema is absent",
+                    report_ready_text,
+                    **blocked_row,
+                )
             )
             continue
         if _normalise(tema) != _normalise(IN_SCOPE_TEMA):
@@ -297,25 +326,43 @@ def read_control_sheet(path: str | Path) -> tuple[RowOutcome, ...]:
                     reason="Tema is unsupported",
                     report_ready_text=report_ready_text,
                     tema=tema,
+                    **blocked_row,
                 )
             )
             continue
         pasta = _text(_value(row, columns, "pasta"))
         if not pasta:
             outcomes.append(
-                StopCondition(row_number, "Pasta is absent", report_ready_text)
+                StopCondition(
+                    row_number,
+                    "Pasta is absent",
+                    report_ready_text,
+                    **blocked_row,
+                )
             )
             continue
         link = _link(_value(row, columns, "link"))
         if isinstance(link, str):
-            outcomes.append(StopCondition(row_number, link, report_ready_text))
+            outcomes.append(
+                StopCondition(
+                    row_number,
+                    link,
+                    report_ready_text,
+                    **blocked_row,
+                )
+            )
             continue
         try:
             cnpj = _cnpj(_value(row, columns, "cnpj"))
             kick_off = _kick_off(_value(row, columns, "kick_off"))
         except ValueError as error:
             outcomes.append(
-                StopCondition(row_number, str(error), report_ready_text)
+                StopCondition(
+                    row_number,
+                    str(error),
+                    report_ready_text,
+                    **blocked_row,
+                )
             )
             continue
         outcomes.append(

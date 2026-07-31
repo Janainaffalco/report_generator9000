@@ -148,6 +148,11 @@ class EngagementOut(BaseModel):
 
 class StopConditionOut(BaseModel):
     row: RowRef
+    demanda: str
+    razao_social: str
+    especialista: str
+    kick_off: str
+    link: str
     coluna: str
     problema: str
     solucao: str
@@ -158,6 +163,11 @@ class StopConditionOut(BaseModel):
 class UnsupportedRowOut(BaseModel):
     row: RowRef
     tema: str
+    demanda: str
+    razao_social: str
+    especialista: str
+    kick_off: str
+    link: str
     report_ready_text: str
     cause: str
     explicacao: str
@@ -346,6 +356,11 @@ def _build_response(
     stop_conditions = [
         StopConditionOut(
             row=row_ref(outcome.row_number, pasta_by_row.get(outcome.row_number, "")),
+            demanda=outcome.demanda,
+            razao_social=outcome.razao_social,
+            especialista=outcome.especialista,
+            kick_off=outcome.kick_off_text,
+            link=outcome.link_text,
             coluna=remedy.coluna,
             problema=remedy.problema,
             solucao=remedy.solucao,
@@ -373,6 +388,11 @@ def _build_response(
                         pasta_by_row.get(outcome.row_number, ""),
                     ),
                     tema=outcome.tema,
+                    demanda=outcome.demanda,
+                    razao_social=outcome.razao_social,
+                    especialista=outcome.especialista,
+                    kick_off=outcome.kick_off_text,
+                    link=outcome.link_text,
                     report_ready_text=outcome.report_ready_text,
                     cause=outcome.reason,
                     explicacao=(

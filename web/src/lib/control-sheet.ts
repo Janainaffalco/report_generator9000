@@ -16,6 +16,11 @@ export interface Engagement {
 
 export interface StopCondition {
   row: RowRef
+  demanda: string
+  razao_social: string
+  especialista: string
+  kick_off: string
+  link: string
   coluna: string
   problema: string
   solucao: string
@@ -26,6 +31,11 @@ export interface StopCondition {
 export interface UnsupportedRow {
   row: RowRef
   tema: string
+  demanda: string
+  razao_social: string
+  especialista: string
+  kick_off: string
+  link: string
   report_ready_text: string
   cause: string
   explicacao: string

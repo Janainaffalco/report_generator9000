@@ -56,6 +56,11 @@ const fixture: ControlSheetResponse = {
   stop_conditions: [
     {
       row: { pasta: null, row_number: 8 },
+      demanda: "011800/2026",
+      razao_social: "EMPRESA COM DADO PENDENTE LTDA",
+      especialista: "Bruno Henrique Santana Leal",
+      kick_off: "25/04/2026",
+      link: "https://pendente.example/",
       coluna: "nº da pasta",
       problema: "A coluna nº da pasta está vazia.",
       solucao: "Preencha o número da pasta, como 115-2026.",
@@ -69,10 +74,14 @@ const fixture: ControlSheetResponse = {
       {
         row: { pasta: "72-2026", row_number: 10 },
         tema: "Implantação de Loja Virtual",
+        demanda: "011547/2026",
+        razao_social: "CASA NOSSA",
+        especialista: "Christian Albuquerque Alonso",
+        kick_off: "21/04/2026",
+        link: "https://out-of-scope.example/",
         report_ready_text: "Prazo prorrogado",
         cause: "Tema is unsupported",
-        explicacao:
-          "Ainda não existe um Master aprovado para este Tema.",
+        explicacao: "Ainda não existe um Master aprovado para este Tema.",
       },
     ],
   },
@@ -192,7 +201,7 @@ describe("control sheet upload", () => {
     expect(fetch).toHaveBeenLastCalledWith("/api/control-sheet/sheet-july")
   })
 
-  it("uploads via the file dialog and renders the three groups", async () => {
+  it("uploads via the file dialog and renders the Demandas table", async () => {
     vi.mocked(fetch).mockResolvedValueOnce(jsonResponse(200, fixture))
 
     render(<App />)
@@ -213,7 +222,7 @@ describe("control sheet upload", () => {
     expect(screen.getByText("Ainda não suportado")).toBeInTheDocument()
   })
 
-  it("uploads via drag-and-drop and renders the three groups", async () => {
+  it("uploads via drag-and-drop and renders the Demandas table", async () => {
     vi.mocked(fetch).mockResolvedValueOnce(jsonResponse(200, fixture))
 
     render(<App />)
@@ -264,15 +273,93 @@ describe("control sheet upload", () => {
     expect(screen.getByText("DENISE BARROS DE ALMEIDA")).toBeInTheDocument()
     expect(screen.getByText("https://denise.example/")).toBeInTheDocument()
     expect(screen.getByText("011616/2026")).toBeInTheDocument()
-    expect(screen.getByText("Bruno Henrique Santana Leal")).toBeInTheDocument()
+    expect(
+      screen.getAllByText("Bruno Henrique Santana Leal").length
+    ).toBeGreaterThan(0)
     expect(screen.getByText("15/04/2026")).toBeInTheDocument()
     expect(screen.getAllByText("40-2026").length).toBeGreaterThan(0)
-    expect(screen.getAllByText("Link do site")).toHaveLength(2)
-    expect(screen.getAllByText("Início")).toHaveLength(2)
-    expect(screen.getByText("Prazo prorrogado")).toBeInTheDocument()
+    expect(screen.getByText("Link do site")).toBeInTheDocument()
+    expect(screen.getByText("Início")).toBeInTheDocument()
+    expect(screen.getAllByText("Prazo prorrogado")).toHaveLength(2)
     expect(screen.getByText("ok enviado")).toBeInTheDocument()
     expect(screen.queryByText("Capture Origin")).not.toBeInTheDocument()
     expect(screen.queryByText("Kick off")).not.toBeInTheDocument()
+  })
+
+  it("filters the table across row classes and can restore every Demanda", async () => {
+    vi.mocked(fetch).mockResolvedValueOnce(jsonResponse(200, fixture))
+
+    render(<App />)
+    fireEvent.change(screen.getByLabelText("Arquivo de planilha"), {
+      target: { files: [makeFile()] },
+    })
+    await screen.findByRole("heading", { name: "Demandas da planilha" })
+
+    fireEvent.change(screen.getByLabelText("Filtrar Demandas"), {
+      target: { value: "implantacao" },
+    })
+
+    expect(screen.getByText("CASA NOSSA")).toBeInTheDocument()
+    expect(
+      screen.queryByText("Implantação de Loja Virtual")
+    ).not.toBeInTheDocument()
+    expect(
+      screen.queryByText("DENISE BARROS DE ALMEIDA")
+    ).not.toBeInTheDocument()
+    expect(screen.getByText("1–1 de 1 Demandas")).toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole("button", { name: /Limpar/ }))
+
+    expect(screen.getByText("DENISE BARROS DE ALMEIDA")).toBeInTheDocument()
+    expect(screen.getByText("1–4 de 4 Demandas")).toBeInTheDocument()
+    expect(
+      screen.getByRole("combobox", { name: "Filtrar por situação" })
+    ).toBeInTheDocument()
+    expect(
+      screen.getByRole("combobox", {
+        name: "Filtrar por Relatório pronto?",
+      })
+    ).toBeInTheDocument()
+  })
+
+  it("derives the Relatório pronto filter from distinct sheet values", async () => {
+    vi.mocked(fetch).mockResolvedValueOnce(jsonResponse(200, fixture))
+
+    render(<App />)
+    fireEvent.change(screen.getByLabelText("Arquivo de planilha"), {
+      target: { files: [makeFile()] },
+    })
+    await screen.findByRole("heading", { name: "Demandas da planilha" })
+
+    const reportFilter = screen.getByRole("combobox", {
+      name: "Filtrar por Relatório pronto?",
+    })
+    const statusFilter = screen.getByRole("combobox", {
+      name: "Filtrar por situação",
+    })
+    expect(screen.getByLabelText("Filtrar Demandas")).toHaveClass("rounded-sm")
+    expect(reportFilter).toHaveClass("rounded-sm")
+    expect(statusFilter).toHaveClass("rounded-sm")
+
+    fireEvent.click(reportFilter)
+    const postponedOptions = await screen.findAllByRole("option", {
+      name: /prazo prorrogado/i,
+    })
+    expect(postponedOptions).toHaveLength(1)
+    expect(
+      screen.getByRole("option", {
+        name: "ok enviado",
+      })
+    ).toBeInTheDocument()
+    expect(
+      postponedOptions[0].closest('[data-slot="select-content"]')
+    ).toHaveClass("rounded-sm")
+
+    expect(
+      screen.queryByRole("option", {
+        name: "preenchido",
+      })
+    ).not.toBeInTheDocument()
   })
 
   it("restricts generation to one selected Engagement", async () => {
@@ -288,9 +375,15 @@ describe("control sheet upload", () => {
       name: "Selecione um trabalho",
     })
     expect(generateButton).toBeDisabled()
-    expect(screen.getByText("Pronto para gerar").parentElement).toHaveClass(
-      "sticky"
-    )
+    expect(
+      screen.getByRole("heading", { name: "Demandas da planilha" })
+    ).toBeInTheDocument()
+    expect(
+      screen.getByRole("columnheader", { name: /Pasta/ })
+    ).toBeInTheDocument()
+    expect(
+      screen.getByRole("columnheader", { name: /Situação/ })
+    ).toBeInTheDocument()
 
     const firstCheckbox = screen.getByRole("checkbox", {
       name: /DENISE BARROS DE ALMEIDA.*linha 2/,
@@ -311,13 +404,25 @@ describe("control sheet upload", () => {
     })
     fireEvent.click(secondCheckbox)
 
-    expect(secondCheckbox).toBeChecked()
-    expect(firstCheckbox).not.toBeChecked()
+    expect(
+      screen.getByRole("checkbox", {
+        name: /OUTRA EMPRESA LTDA.*linha 5/,
+      })
+    ).toBeChecked()
+    expect(
+      screen.getByRole("checkbox", {
+        name: /DENISE BARROS DE ALMEIDA.*linha 2/,
+      })
+    ).not.toBeChecked()
     expect(
       screen.getByRole("button", { name: "Gerar relatório" })
     ).toBeEnabled()
 
-    fireEvent.click(secondCheckbox)
+    fireEvent.click(
+      screen.getByRole("checkbox", {
+        name: /OUTRA EMPRESA LTDA.*linha 5/,
+      })
+    )
 
     expect(
       await screen.findByRole("button", {
@@ -344,7 +449,11 @@ describe("control sheet upload", () => {
 
     fireEvent.click(rowOne)
 
-    expect(rowOne).toBeChecked()
+    expect(
+      screen.getByRole("checkbox", {
+        name: /DENISE BARROS DE ALMEIDA.*pasta 40-2026.*linha 2/,
+      })
+    ).toBeChecked()
     expect(rowTwo).not.toBeChecked()
     expect(
       screen.getByRole("button", { name: "Gerar relatório" })
@@ -421,7 +530,7 @@ describe("control sheet upload", () => {
     expect(window.location.pathname).toBe("/enviar")
   })
 
-  it("shows Stop Condition rows with no checkbox and only Portuguese consultant copy", async () => {
+  it("shows original Stop Condition fields and moves its explanation to a tooltip", async () => {
     vi.mocked(fetch).mockResolvedValueOnce(jsonResponse(200, fixture))
 
     render(<App />)
@@ -430,24 +539,34 @@ describe("control sheet upload", () => {
     })
     await screen.findByText("Não dá para gerar")
 
-    const stopHeading = screen.getByText("Não dá para gerar")
-    const stopSection = stopHeading.closest("section") as HTMLElement
-    expect(within(stopSection).queryByRole("checkbox")).not.toBeInTheDocument()
-
+    const stopRow = screen
+      .getByText("EMPRESA COM DADO PENDENTE LTDA")
+      .closest("tr") as HTMLElement
+    expect(within(stopRow).queryByRole("checkbox")).not.toBeInTheDocument()
+    expect(within(stopRow).getByText("011800/2026")).toBeInTheDocument()
+    expect(within(stopRow).getByText("25/04/2026")).toBeInTheDocument()
     expect(
-      within(stopSection).getByText("A coluna nº da pasta está vazia.")
+      within(stopRow).getByText("https://pendente.example/")
     ).toBeInTheDocument()
     expect(
-      within(stopSection).getByText(
-        "Preencha o número da pasta, como 115-2026."
-      )
-    ).toBeInTheDocument()
-    expect(
-      within(stopSection).queryByText(/Pasta is absent/)
+      within(stopRow).queryByText("A coluna nº da pasta está vazia.")
     ).not.toBeInTheDocument()
     expect(
-      within(stopSection).getByText(/prefere parar a inventar um valor/i)
+      within(stopRow).queryByText(/Pasta is absent/)
+    ).not.toBeInTheDocument()
+    expect(within(stopRow).getByText("Bloqueada")).toBeInTheDocument()
+    const explanation = within(stopRow).getByRole("button", {
+      name: "Por que a linha 8 está bloqueada?",
+    })
+    fireEvent.focus(explanation)
+    expect(
+      await screen.findByText("A coluna nº da pasta está vazia.")
     ).toBeInTheDocument()
+    expect(
+      screen.getByText("Preencha o número da pasta, como 115-2026.")
+    ).toBeInTheDocument()
+    expect(stopRow).toHaveAttribute("data-status", "blocked")
+    expect(stopRow).toHaveClass("bg-destructive/5")
   })
 
   it("lists unsupported rows distinctly and without a checkbox", async () => {
@@ -457,14 +576,42 @@ describe("control sheet upload", () => {
     fireEvent.change(screen.getByLabelText("Arquivo de planilha"), {
       target: { files: [makeFile()] },
     })
-    const heading = await screen.findByText("Ainda não suportado")
-    const section = heading.closest("section") as HTMLElement
+    await screen.findByText("Ainda não suportado")
+    const unsupportedRow = screen
+      .getByText("CASA NOSSA")
+      .closest("tr") as HTMLElement
 
     expect(
-      within(section).getByText("Implantação de Loja Virtual")
+      within(unsupportedRow).getByText(/Prazo prorrogado/)
     ).toBeInTheDocument()
-    expect(within(section).getByText(/Prazo prorrogado/)).toBeInTheDocument()
-    expect(within(section).queryByRole("checkbox")).not.toBeInTheDocument()
+    expect(within(unsupportedRow).getByText("011547/2026")).toBeInTheDocument()
+    expect(
+      within(unsupportedRow).getByText("Christian Albuquerque Alonso")
+    ).toBeInTheDocument()
+    expect(
+      within(unsupportedRow).getByText("https://out-of-scope.example/")
+    ).toBeInTheDocument()
+    expect(
+      within(unsupportedRow).queryByText("Implantação de Loja Virtual")
+    ).not.toBeInTheDocument()
+    expect(
+      within(unsupportedRow).getByText("Tema sem suporte")
+    ).toBeInTheDocument()
+    const explanation = within(unsupportedRow).getByRole("button", {
+      name: "Por que a linha 10 ainda não é suportada?",
+    })
+    fireEvent.focus(explanation)
+    expect(
+      await screen.findByText("Implantação de Loja Virtual")
+    ).toBeInTheDocument()
+    expect(
+      screen.getByText("Ainda não existe um Master aprovado para este Tema.")
+    ).toBeInTheDocument()
+    expect(
+      within(unsupportedRow).queryByRole("checkbox")
+    ).not.toBeInTheDocument()
+    expect(unsupportedRow).toHaveAttribute("data-status", "unsupported")
+    expect(unsupportedRow).toHaveClass("bg-amber-50/70")
   })
 
   it("says so instead of an empty list when nothing is generatable", async () => {
@@ -479,12 +626,14 @@ describe("control sheet upload", () => {
       target: { files: [makeFile()] },
     })
 
-    await screen.findByText(
-      "Nenhuma linha desta planilha está pronta para gerar."
-    )
+    await screen.findByRole("heading", { name: "Demandas da planilha" })
     expect(screen.queryByRole("checkbox")).not.toBeInTheDocument()
     expect(screen.getByText("Não dá para gerar")).toBeInTheDocument()
     expect(screen.getByText("Ainda não suportado")).toBeInTheDocument()
+    expect(screen.getByText("1–2 de 2 Demandas")).toBeInTheDocument()
+    expect(
+      screen.getByRole("button", { name: "Selecione um trabalho" })
+    ).toBeDisabled()
   })
 
   it("returns to the drop area with the 422 detail and accepts a corrected upload without a reload", async () => {
