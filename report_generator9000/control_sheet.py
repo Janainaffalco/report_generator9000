@@ -44,6 +44,7 @@ class Engagement:
     especialista: str
     capture_origin: str
     published_domain: str | None
+    report_ready_text: str = ""
 
     @property
     def kick_off_br(self) -> str:
@@ -57,11 +58,13 @@ class Engagement:
 
 
 @dataclass(frozen=True)
-class SkippedRow:
-    """A row which is deliberately not in this pipeline's scope."""
+class UnsupportedRow:
+    """A real engagement whose Tema has no supported Master yet."""
 
     row_number: int
     reason: str
+    report_ready_text: str = ""
+    tema: str = ""
 
 
 @dataclass(frozen=True)
@@ -70,9 +73,10 @@ class StopCondition:
 
     row_number: int
     cause: str
+    report_ready_text: str = ""
 
 
-RowOutcome: TypeAlias = Engagement | SkippedRow | StopCondition
+RowOutcome: TypeAlias = Engagement | UnsupportedRow | StopCondition
 
 
 @dataclass(frozen=True)
@@ -90,8 +94,16 @@ def _text(value: str | datetime | None) -> str:
     return "" if value is None else str(value).strip()
 
 
+def _display_text(value: str | datetime | None) -> str:
+    """Return spreadsheet text for display without interpreting or normalising it."""
+    return "" if value is None else str(value)
+
+
 def _cnpj(value: str | datetime | None) -> str:
-    digits = "".join(character for character in _text(value) if character.isdigit())
+    text = _text(value)
+    if not text:
+        raise ValueError("CNPJ is absent")
+    digits = "".join(character for character in text if character.isdigit())
     if len(digits) not in (13, 14):
         raise ValueError("CNPJ must contain 13 or 14 digits")
     if len(digits) == 13:
@@ -103,6 +115,8 @@ def _kick_off(value: str | datetime | None) -> datetime:
     if isinstance(value, datetime):
         return value.replace(hour=0, minute=0, second=0, microsecond=0)
     text = _text(value)
+    if not text:
+        raise ValueError("Kick off is absent")
     for pattern in ("%d/%m/%Y", "%Y-%m-%d"):
         try:
             return datetime.strptime(text, pattern)
@@ -262,33 +276,47 @@ def _value(row: dict[str, _Cell], columns: dict[str, str], field: str) -> str | 
 
 
 def read_control_sheet(path: str | Path) -> tuple[RowOutcome, ...]:
-    """Read every data row, making skips and Stop Conditions explicit."""
+    """Classify every data row by the action currently available for it."""
     rows = _rows(path)
     if not rows:
         raise ValueError("control sheet: no header row")
     columns = _headers(rows[0][1])
     outcomes: list[RowOutcome] = []
     for row_number, row in rows[1:]:
+        report_ready_text = _display_text(_value(row, columns, "complete"))
         tema = _text(_value(row, columns, "tema"))
-        if _normalise(tema) != _normalise(IN_SCOPE_TEMA):
-            outcomes.append(SkippedRow(row_number, "Tema is out of scope"))
+        if not tema:
+            outcomes.append(
+                StopCondition(row_number, "Tema is absent", report_ready_text)
+            )
             continue
-        if _text(_value(row, columns, "complete")):
-            outcomes.append(SkippedRow(row_number, "already complete"))
+        if _normalise(tema) != _normalise(IN_SCOPE_TEMA):
+            outcomes.append(
+                UnsupportedRow(
+                    row_number=row_number,
+                    reason="Tema is unsupported",
+                    report_ready_text=report_ready_text,
+                    tema=tema,
+                )
+            )
             continue
         pasta = _text(_value(row, columns, "pasta"))
         if not pasta:
-            outcomes.append(StopCondition(row_number, "Pasta is absent"))
+            outcomes.append(
+                StopCondition(row_number, "Pasta is absent", report_ready_text)
+            )
             continue
         link = _link(_value(row, columns, "link"))
         if isinstance(link, str):
-            outcomes.append(StopCondition(row_number, link))
+            outcomes.append(StopCondition(row_number, link, report_ready_text))
             continue
         try:
             cnpj = _cnpj(_value(row, columns, "cnpj"))
             kick_off = _kick_off(_value(row, columns, "kick_off"))
         except ValueError as error:
-            outcomes.append(StopCondition(row_number, str(error)))
+            outcomes.append(
+                StopCondition(row_number, str(error), report_ready_text)
+            )
             continue
         outcomes.append(
             Engagement(
@@ -301,6 +329,7 @@ def read_control_sheet(path: str | Path) -> tuple[RowOutcome, ...]:
                 especialista=_text(_value(row, columns, "especialista")),
                 capture_origin=link[0],
                 published_domain=link[1],
+                report_ready_text=report_ready_text,
             )
         )
     return tuple(outcomes)
@@ -309,8 +338,8 @@ def read_control_sheet(path: str | Path) -> tuple[RowOutcome, ...]:
 def read_row_pastas(path: str | Path) -> dict[int, str]:
     """Every data row's Pasta cell, including rows that stop or are skipped.
 
-    `StopCondition` and `SkippedRow` carry only a row number, but a row is addressed by
-    Pasta *and* row number, so callers presenting those rows need the Pasta separately.
+    `StopCondition` and `UnsupportedRow` do not carry Pasta, but a row is addressed by Pasta
+    *and* row number, so callers presenting those rows need the Pasta separately.
     """
     rows = _rows(path)
     if not rows:

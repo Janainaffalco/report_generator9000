@@ -9,9 +9,8 @@ import { Card, CardContent } from "@/components/ui/card"
 import type {
   ControlSheetResponse,
   Engagement,
-  RowRef,
-  SkippedRows,
   StopCondition,
+  UnsupportedRows,
 } from "@/lib/control-sheet"
 import { rowKey } from "@/lib/control-sheet"
 import { cn } from "@/lib/utils"
@@ -98,7 +97,7 @@ export function WorkGroups({
         onGenerate={onGenerate}
       />
       <StopConditionSection stopConditions={data.stop_conditions} />
-      <SkippedSection skipped={data.skipped_rows} />
+      <UnsupportedSection unsupported={data.unsupported_rows} />
     </div>
   )
 }
@@ -193,6 +192,10 @@ function ReadySection({
                         value={engagement.especialista}
                       />
                       <Field label="Início" value={engagement.kick_off} />
+                      <Field
+                        label="Relatório pronto?"
+                        value={engagement.report_ready_text || "—"}
+                      />
                     </div>
                   </CardContent>
                 </Card>
@@ -244,6 +247,9 @@ function StopConditionSection({
                   <p className="mt-1 text-sm text-muted-foreground">
                     {stop.solucao}
                   </p>
+                  <p className="mt-2 text-xs text-muted-foreground">
+                    Relatório pronto?: {stop.report_ready_text || "—"}
+                  </p>
                 </CardContent>
               </Card>
             </li>
@@ -254,57 +260,54 @@ function StopConditionSection({
   )
 }
 
-function SkippedSection({ skipped }: { skipped: SkippedRows }) {
-  const [open, setOpen] = useState(false)
-
+function UnsupportedSection({
+  unsupported,
+}: {
+  unsupported: UnsupportedRows
+}) {
   return (
-    <section aria-labelledby="skipped-heading" className="text-left">
+    <section aria-labelledby="unsupported-heading" className="text-left">
       <h2
-        id="skipped-heading"
+        id="unsupported-heading"
         className="font-display text-2xl font-semibold text-heading"
       >
-        Ficou de fora
+        Ainda não suportado
       </h2>
-      {skipped.total === 0 ? (
+      <p className="mt-2 text-sm text-muted-foreground">
+        São Demandas reais, mas ainda não existe um Master aprovado para
+        gerar estes relatórios.
+      </p>
+      {unsupported.total === 0 ? (
         <p className="mt-3 text-base text-muted-foreground">
-          Nenhuma linha desta planilha ficou de fora.
+          Todos os Temas desta planilha já têm suporte.
         </p>
       ) : (
-        <details
-          className="mt-4 rounded-md border border-border bg-canvas px-4 py-3"
-          open={open}
-          onToggle={(event) => setOpen(event.currentTarget.open)}
-        >
-          <summary className="cursor-pointer list-none font-medium text-foreground">
-            {skipped.resumo}
-          </summary>
-          {open && (
-            <ul className="mt-3 flex flex-col gap-4">
-              {skipped.reasons.map((reason) => (
-                <li key={reason.cause}>
-                  <p className="font-medium text-foreground">
-                    {reason.titulo}{" "}
-                    <span className="text-muted-foreground">
-                      ({reason.total})
+        <ul className="mt-4 flex flex-col gap-3">
+          {unsupported.rows.map((item) => (
+            <li key={rowKey(item.row)}>
+              <Card className="border-hairline-soft bg-muted/40 px-4 py-3">
+                <CardContent className="px-0">
+                  <div className="flex items-center justify-between gap-3">
+                    <Badge variant="secondary">Tema sem suporte</Badge>
+                    <span className="text-xs text-muted-foreground">
+                      Pasta {item.row.pasta ?? "—"} · linha{" "}
+                      {item.row.row_number}
                     </span>
+                  </div>
+                  <p className="mt-2 font-medium text-foreground">
+                    {item.tema}
                   </p>
                   <p className="mt-1 text-sm text-muted-foreground">
-                    {reason.explicacao}
+                    {item.explicacao}
                   </p>
-                  <ul className="mt-2 flex flex-wrap gap-2">
-                    {reason.rows.map((row: RowRef) => (
-                      <li key={rowKey(row)}>
-                        <Badge variant="secondary">
-                          Pasta {row.pasta ?? "—"} · linha {row.row_number}
-                        </Badge>
-                      </li>
-                    ))}
-                  </ul>
-                </li>
-              ))}
-            </ul>
-          )}
-        </details>
+                  <p className="mt-2 text-xs text-muted-foreground">
+                    Relatório pronto?: {item.report_ready_text || "—"}
+                  </p>
+                </CardContent>
+              </Card>
+            </li>
+          ))}
+        </ul>
       )}
     </section>
   )

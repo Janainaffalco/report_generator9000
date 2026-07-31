@@ -25,6 +25,12 @@ The contracted service type, taken verbatim from the control spreadsheet. Two ex
 former is in scope; each Tema needs its own Master and its own section grammar.
 _Avoid_: report type, category
 
+**Unsupported Row**:
+A real Demanda whose Tema does not have an approved Master yet. It remains visible in the
+row list and is not selectable, distinctly from a row blocked by spreadsheet data that the
+consultant can correct. It is never silently skipped.
+_Avoid_: skipped row, Tema out of scope
+
 **Especialista**:
 The consultant responsible for the engagement, named on the cover.
 _Avoid_: author, owner
@@ -172,8 +178,8 @@ _Avoid_: audit trail, source tracking
 
 **Stop Condition**:
 A precondition that fails loudly and abandons the row rather than guessing — a missing
-Capture Origin, an unparseable nav, a Tema out of scope. Producing nothing is correct;
-producing something invented is not.
+Capture Origin, an unreadable required spreadsheet value, an unparseable nav. Producing
+nothing is correct; producing something invented is not.
 _Avoid_: error, skip, validation failure
 
 **Pendência**:

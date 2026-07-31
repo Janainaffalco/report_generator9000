@@ -13,8 +13,8 @@ from .control_sheet import (
     CONTROL_SHEET_NAME,
     Engagement,
     RowOutcome,
-    SkippedRow,
     StopCondition,
+    UnsupportedRow,
     read_control_sheet,
     read_row_pastas,
 )
@@ -41,15 +41,12 @@ class _Remedy:
     solucao: str
 
 
-@dataclass(frozen=True)
-class _Exclusion:
-    """What a consultant is told about a row the pipeline left out."""
-
-    titulo: str
-    explicacao: str
-
-
 _STOP_CAUSES: dict[str, _Remedy] = {
+    "Tema is absent": _Remedy(
+        "Tema",
+        "A coluna Tema está vazia.",
+        "Preencha o produto contratado na coluna Tema.",
+    ),
     "Link is absent": _Remedy(
         "Link",
         "A coluna Link está vazia.",
@@ -75,10 +72,20 @@ _STOP_CAUSES: dict[str, _Remedy] = {
         "O CNPJ não tem 13 ou 14 dígitos.",
         "Corrija o CNPJ na coluna CNPJ.",
     ),
+    "CNPJ is absent": _Remedy(
+        "CNPJ",
+        "A coluna CNPJ está vazia.",
+        "Preencha o CNPJ na coluna CNPJ.",
+    ),
     "Kick off is not a date": _Remedy(
         "Kick off",
         "A coluna Kick off não tem uma data.",
         "Use uma data no formato dd/mm/aaaa.",
+    ),
+    "Kick off is absent": _Remedy(
+        "Kick off",
+        "A coluna Kick off está vazia.",
+        "Preencha a data de início na coluna Kick off.",
     ),
 }
 
@@ -87,20 +94,6 @@ _UNTRANSLATED_CAUSE = _Remedy(
     "Esta linha foi interrompida por um motivo que ainda não tem explicação em português.",
     "Avise quem cuida do sistema, informando a causa original registrada abaixo.",
 )
-
-_SKIPPED_REASONS: dict[str, _Exclusion] = {
-    "Tema is out of scope": _Exclusion(
-        "Tema fora do escopo",
-        "São linhas de Implantação de Loja Virtual. Ainda não existe um Master aprovado "
-        "para esse Tema, então não há de onde gerar o relatório — a linha está correta, "
-        "só não é deste pipeline.",
-    ),
-    "already complete": _Exclusion(
-        "Relatório já marcado como pronto",
-        "A coluna “Relatório pronto?” já está preenchida, então a linha foi "
-        "deixada de fora.",
-    ),
-}
 
 # The Pendência classes must read correctly and differently: GATED is normal
 # and expected, TOOL_BLOCKED is a defect worth re-running for, and UNDECLARED
@@ -150,6 +143,7 @@ class EngagementOut(BaseModel):
     kick_off: str
     capture_origin: str
     published_domain: str | None
+    report_ready_text: str
 
 
 class StopConditionOut(BaseModel):
@@ -158,20 +152,20 @@ class StopConditionOut(BaseModel):
     problema: str
     solucao: str
     cause: str
+    report_ready_text: str
 
 
-class SkippedReasonOut(BaseModel):
+class UnsupportedRowOut(BaseModel):
+    row: RowRef
+    tema: str
+    report_ready_text: str
     cause: str
-    titulo: str
     explicacao: str
-    total: int
-    rows: list[RowRef]
 
 
-class SkippedRowsOut(BaseModel):
+class UnsupportedRowsOut(BaseModel):
     total: int
-    resumo: str
-    reasons: list[SkippedReasonOut]
+    rows: list[UnsupportedRowOut]
 
 
 class ControlSheetResponse(BaseModel):
@@ -179,7 +173,7 @@ class ControlSheetResponse(BaseModel):
     filename: str
     engagements: list[EngagementOut]
     stop_conditions: list[StopConditionOut]
-    skipped_rows: SkippedRowsOut
+    unsupported_rows: UnsupportedRowsOut
 
 
 class RetainedSheetOut(BaseModel):
@@ -326,12 +320,6 @@ def _read_sheet(path: Path) -> tuple[tuple[RowOutcome, ...], dict[int, str]]:
         raise HTTPException(422, _unreadable_detail(error)) from error
 
 
-def _resumo(total: int) -> str:
-    if total == 1:
-        return "1 linha ficou de fora"
-    return f"{total} linhas ficaram de fora"
-
-
 def _build_response(
     sheet_id: str,
     filename: str,
@@ -350,6 +338,7 @@ def _build_response(
             kick_off=outcome.kick_off_br,
             capture_origin=outcome.capture_origin,
             published_domain=outcome.published_domain,
+            report_ready_text=outcome.report_ready_text,
         )
         for outcome in outcomes
         if isinstance(outcome, Engagement)
@@ -361,36 +350,37 @@ def _build_response(
             problema=remedy.problema,
             solucao=remedy.solucao,
             cause=outcome.cause,
+            report_ready_text=outcome.report_ready_text,
         )
         for outcome in outcomes
         if isinstance(outcome, StopCondition)
         for remedy in (_STOP_CAUSES.get(outcome.cause, _UNTRANSLATED_CAUSE),)
     ]
-    skipped = [outcome for outcome in outcomes if isinstance(outcome, SkippedRow)]
-    reasons = []
-    for cause, exclusion in _SKIPPED_REASONS.items():
-        matching = [row for row in skipped if row.reason == cause]
-        if not matching:
-            continue
-        reasons.append(
-            SkippedReasonOut(
-                cause=cause,
-                titulo=exclusion.titulo,
-                explicacao=exclusion.explicacao,
-                total=len(matching),
-                rows=[
-                    row_ref(row.row_number, pasta_by_row.get(row.row_number, ""))
-                    for row in matching
-                ],
-            )
-        )
+    unsupported = [
+        outcome for outcome in outcomes if isinstance(outcome, UnsupportedRow)
+    ]
     return ControlSheetResponse(
         sheet_id=sheet_id,
         filename=filename,
         engagements=engagements,
         stop_conditions=stop_conditions,
-        skipped_rows=SkippedRowsOut(
-            total=len(skipped), resumo=_resumo(len(skipped)), reasons=reasons
+        unsupported_rows=UnsupportedRowsOut(
+            total=len(unsupported),
+            rows=[
+                UnsupportedRowOut(
+                    row=row_ref(
+                        outcome.row_number,
+                        pasta_by_row.get(outcome.row_number, ""),
+                    ),
+                    tema=outcome.tema,
+                    report_ready_text=outcome.report_ready_text,
+                    cause=outcome.reason,
+                    explicacao=(
+                        "Ainda não existe um Master aprovado para este Tema."
+                    ),
+                )
+                for outcome in unsupported
+            ],
         ),
     )
 

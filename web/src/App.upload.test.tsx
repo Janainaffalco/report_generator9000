@@ -40,6 +40,7 @@ const fixture: ControlSheetResponse = {
       kick_off: "15/04/2026",
       capture_origin: "https://denise.example/",
       published_domain: null,
+      report_ready_text: "Prazo prorrogado",
     },
     {
       row: { pasta: "40-2026", row_number: 5 },
@@ -49,6 +50,7 @@ const fixture: ControlSheetResponse = {
       kick_off: "20/04/2026",
       capture_origin: "https://outra.example/",
       published_domain: null,
+      report_ready_text: "ok enviado",
     },
   ],
   stop_conditions: [
@@ -58,27 +60,19 @@ const fixture: ControlSheetResponse = {
       problema: "A coluna nº da pasta está vazia.",
       solucao: "Preencha o número da pasta, como 115-2026.",
       cause: "Pasta is absent",
+      report_ready_text: "PRazo prorrogado",
     },
   ],
-  skipped_rows: {
-    total: 2,
-    resumo: "2 linhas ficaram de fora",
-    reasons: [
+  unsupported_rows: {
+    total: 1,
+    rows: [
       {
-        cause: "Tema is out of scope",
-        titulo: "Tema fora do escopo",
+        row: { pasta: "72-2026", row_number: 10 },
+        tema: "Implantação de Loja Virtual",
+        report_ready_text: "Prazo prorrogado",
+        cause: "Tema is unsupported",
         explicacao:
-          "São linhas de Implantação de Loja Virtual. Ainda não existe um Master aprovado para esse Tema, então não há de onde gerar o relatório — a linha está correta, só não é deste pipeline.",
-        total: 1,
-        rows: [{ pasta: "72-2026", row_number: 10 }],
-      },
-      {
-        cause: "already complete",
-        titulo: "Relatório já marcado como pronto",
-        explicacao:
-          "A coluna “Relatório pronto?” já está preenchida, então a linha foi deixada de fora.",
-        total: 1,
-        rows: [{ pasta: "90-2026", row_number: 11 }],
+          "Ainda não existe um Master aprovado para este Tema.",
       },
     ],
   },
@@ -216,7 +210,7 @@ describe("control sheet upload", () => {
     expect(formData.get("file")).toBeInstanceOf(File)
 
     expect(screen.getByText("Não dá para gerar")).toBeInTheDocument()
-    expect(screen.getByText("Ficou de fora")).toBeInTheDocument()
+    expect(screen.getByText("Ainda não suportado")).toBeInTheDocument()
   })
 
   it("uploads via drag-and-drop and renders the three groups", async () => {
@@ -275,6 +269,8 @@ describe("control sheet upload", () => {
     expect(screen.getAllByText("40-2026").length).toBeGreaterThan(0)
     expect(screen.getAllByText("Link do site")).toHaveLength(2)
     expect(screen.getAllByText("Início")).toHaveLength(2)
+    expect(screen.getByText("Prazo prorrogado")).toBeInTheDocument()
+    expect(screen.getByText("ok enviado")).toBeInTheDocument()
     expect(screen.queryByText("Capture Origin")).not.toBeInTheDocument()
     expect(screen.queryByText("Kick off")).not.toBeInTheDocument()
   })
@@ -454,30 +450,21 @@ describe("control sheet upload", () => {
     ).toBeInTheDocument()
   })
 
-  it("expands and collapses the Skipped Rows breakdown", async () => {
+  it("lists unsupported rows distinctly and without a checkbox", async () => {
     vi.mocked(fetch).mockResolvedValueOnce(jsonResponse(200, fixture))
 
     render(<App />)
     fireEvent.change(screen.getByLabelText("Arquivo de planilha"), {
       target: { files: [makeFile()] },
     })
-    await screen.findByText("Ficou de fora")
+    const heading = await screen.findByText("Ainda não suportado")
+    const section = heading.closest("section") as HTMLElement
 
-    expect(screen.getByText("2 linhas ficaram de fora")).toBeInTheDocument()
-    expect(screen.queryByText("Tema fora do escopo")).not.toBeInTheDocument()
-
-    fireEvent.click(screen.getByText("2 linhas ficaram de fora"))
-
-    expect(await screen.findByText("Tema fora do escopo")).toBeInTheDocument()
     expect(
-      screen.getByText("Relatório já marcado como pronto")
+      within(section).getByText("Implantação de Loja Virtual")
     ).toBeInTheDocument()
-
-    fireEvent.click(screen.getByText("2 linhas ficaram de fora"))
-
-    await waitFor(() =>
-      expect(screen.queryByText("Tema fora do escopo")).not.toBeInTheDocument()
-    )
+    expect(within(section).getByText(/Prazo prorrogado/)).toBeInTheDocument()
+    expect(within(section).queryByRole("checkbox")).not.toBeInTheDocument()
   })
 
   it("says so instead of an empty list when nothing is generatable", async () => {
@@ -497,7 +484,7 @@ describe("control sheet upload", () => {
     )
     expect(screen.queryByRole("checkbox")).not.toBeInTheDocument()
     expect(screen.getByText("Não dá para gerar")).toBeInTheDocument()
-    expect(screen.getByText("Ficou de fora")).toBeInTheDocument()
+    expect(screen.getByText("Ainda não suportado")).toBeInTheDocument()
   })
 
   it("returns to the drop area with the 422 detail and accepts a corrected upload without a reload", async () => {
@@ -551,10 +538,9 @@ describe("control sheet upload", () => {
       ...fixture,
       sheet_id: "second-sheet-id",
       engagements: [fixture.engagements[0]],
-      skipped_rows: {
+      unsupported_rows: {
         total: 0,
-        resumo: "0 linhas ficaram de fora",
-        reasons: [],
+        rows: [],
       },
     }
     vi.mocked(fetch).mockResolvedValueOnce(jsonResponse(200, secondFixture))

@@ -55,13 +55,13 @@ const retainedSheet = {
       kick_off: "15/04/2026",
       capture_origin: "https://example.test/",
       published_domain: null,
+      report_ready_text: "",
     },
   ],
   stop_conditions: [],
-  skipped_rows: {
+  unsupported_rows: {
     total: 0,
-    resumo: "0 linhas ficaram de fora",
-    reasons: [],
+    rows: [],
   },
 }
 

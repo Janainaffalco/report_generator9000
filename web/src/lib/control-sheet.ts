@@ -11,6 +11,7 @@ export interface Engagement {
   kick_off: string
   capture_origin: string
   published_domain: string | null
+  report_ready_text: string
 }
 
 export interface StopCondition {
@@ -19,20 +20,20 @@ export interface StopCondition {
   problema: string
   solucao: string
   cause: string
+  report_ready_text: string
 }
 
-export interface SkippedReason {
+export interface UnsupportedRow {
+  row: RowRef
+  tema: string
+  report_ready_text: string
   cause: string
-  titulo: string
   explicacao: string
-  total: number
-  rows: RowRef[]
 }
 
-export interface SkippedRows {
+export interface UnsupportedRows {
   total: number
-  resumo: string
-  reasons: SkippedReason[]
+  rows: UnsupportedRow[]
 }
 
 export interface ControlSheetResponse {
@@ -40,7 +41,7 @@ export interface ControlSheetResponse {
   filename: string
   engagements: Engagement[]
   stop_conditions: StopCondition[]
-  skipped_rows: SkippedRows
+  unsupported_rows: UnsupportedRows
 }
 
 export interface RetainedSheet {

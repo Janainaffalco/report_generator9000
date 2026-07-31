@@ -10,8 +10,8 @@ from typing import Sequence
 from .assembly import assemble_output_package
 from .control_sheet import (
     Engagement,
-    SkippedRow,
     StopCondition,
+    UnsupportedRow,
     read_control_sheet_for_pasta,
 )
 from .gated_inputs import load_gated_inputs
@@ -212,8 +212,8 @@ def main(
                 print(
                     f"STOP CONDITION\t{arguments.linha}\t{outcome.cause}"
                 )
-            elif isinstance(outcome, SkippedRow):
-                print(f"SKIPPED\t{arguments.linha}\t{outcome.reason}")
+            elif isinstance(outcome, UnsupportedRow):
+                print(f"UNSUPPORTED\t{arguments.linha}\t{outcome.reason}")
     except (OSError, ValueError) as error:
         parser.error(str(error))
     finally:

@@ -116,12 +116,203 @@ def test_control_sheet_upload_returns_three_groups_from_fixture(tmp_path: Path) 
     body = response.json()
     assert body["filename"] == "Planilha para controle de relatorios.xlsx"
     assert body["sheet_id"]
-    assert [row["row"]["row_number"] for row in body["engagements"]] == [2, 5, 6, 14]
+    assert [row["row"]["row_number"] for row in body["engagements"]] == [
+        2, 5, 6, 7, 14,
+    ]
     assert [row["row"]["row_number"] for row in body["stop_conditions"]] == [
         3, 4, 8, 11, 13, 16,
     ]
-    assert body["skipped_rows"]["total"] == 2
-    assert body["skipped_rows"]["resumo"] == "2 linhas ficaram de fora"
+    assert body["unsupported_rows"]["total"] == 1
+
+
+def test_report_ready_text_is_display_only_and_returned_verbatim(
+    tmp_path: Path,
+) -> None:
+    rows = (
+        (
+            "013300/2026",
+            "130-2026",
+            generate_control_sheet.IN_SCOPE,
+            "52052612000121",
+            "PRAZO MAIÚSCULO",
+            "Bruno Henrique Santana Leal",
+            datetime(2026, 7, 1),
+            "https://prazo.example/",
+            "  PRazo prorrogado  ",
+        ),
+        (
+            "013301/2026",
+            "131-2026",
+            generate_control_sheet.IN_SCOPE,
+            "67671933000181",
+            "RELATÓRIO ENVIADO",
+            "Bruno Henrique Santana Leal",
+            datetime(2026, 7, 2),
+            "https://enviado.example/",
+            "ok Enviado",
+        ),
+    )
+    workbook = generate_control_sheet.build(
+        tmp_path / "status-display-only.xlsx",
+        rows=rows,
+        row_numbers=(2, 3),
+    )
+    client = _client(tmp_path)
+
+    response = _upload(client, workbook)
+
+    assert response.status_code == 200
+    body = response.json()
+    assert [
+            (item["row"]["row_number"], item["report_ready_text"])
+        for item in body["engagements"]
+    ] == [
+        (2, "  PRazo prorrogado  "),
+        (3, "ok Enviado"),
+    ]
+
+
+def test_july_prorogated_rows_are_recovered_from_status_filtering(
+    tmp_path: Path,
+) -> None:
+    row_numbers = (33, 38, 39, 45, 46, 47, 52, 53)
+    statuses = (
+        "Prazo Prorrogado",
+        "Prazo prorrogado",
+        "Prazo prorrogado",
+        "PRazo prorrogado",
+        "PRazo prorrogado",
+        "PRazo prorrogado",
+        "PRazo prorrogado",
+        "PRazo prorrogado",
+    )
+    links = (
+        "https://row-33.example/",
+        "row-38.example",
+        "https://row-39.example/",
+        "",
+        "https://row-46.example/",
+        "https://row-47.example/wp-admin",
+        "https://row-52.example/",
+        "",
+    )
+    rows = tuple(
+        (
+            f"013{row_number:03}/2026",
+            f"{row_number}-2026",
+            generate_control_sheet.IN_SCOPE,
+            "52052612000121",
+            f"CLIENTE {row_number}",
+            "Bruno Henrique Santana Leal",
+            datetime(2026, 7, 1),
+            link,
+            status,
+        )
+        for row_number, link, status in zip(
+            row_numbers, links, statuses, strict=True
+        )
+    )
+    workbook = generate_control_sheet.build(
+        tmp_path / "july-prorogated.xlsx",
+        rows=rows,
+        row_numbers=row_numbers,
+    )
+    client = _client(tmp_path)
+
+    response = _upload(client, workbook)
+
+    assert response.status_code == 200
+    body = response.json()
+    assert [
+        item["row"]["row_number"] for item in body["engagements"]
+    ] == [33, 39, 46, 47, 52]
+    assert [
+        (item["row"]["row_number"], item["coluna"])
+        for item in body["stop_conditions"]
+    ] == [(38, "Link"), (45, "Link"), (53, "Link")]
+    returned_statuses = {
+        item["row"]["row_number"]: item["report_ready_text"]
+        for group in ("engagements", "stop_conditions")
+        for item in body[group]
+    }
+    assert returned_statuses == dict(
+        zip(row_numbers, statuses, strict=True)
+    )
+
+
+def test_every_worksheet_row_is_ready_blocked_or_unsupported(tmp_path: Path) -> None:
+    valid = (
+        "013300/2026",
+        "130-2026",
+        generate_control_sheet.IN_SCOPE,
+        "52052612000121",
+        "CLIENTE",
+        "Bruno Henrique Santana Leal",
+        datetime(2026, 7, 1),
+        "https://cliente.example/",
+        "Prazo prorrogado",
+    )
+    rows = (
+        valid,
+        (*valid[:2], "", *valid[3:]),
+        (valid[0], "", *valid[2:]),
+        (*valid[:7], "", valid[8]),
+        (*valid[:3], "", *valid[4:]),
+        (*valid[:6], "", *valid[7:]),
+        (
+            valid[0],
+            "131-2026",
+            generate_control_sheet.OUT_OF_SCOPE,
+            *valid[3:7],
+            "",
+            "PRazo prorrogado",
+        ),
+    )
+    workbook = generate_control_sheet.build(
+        tmp_path / "every-row.xlsx",
+        rows=rows,
+        row_numbers=(2, 3, 4, 5, 6, 7, 8),
+    )
+    client = _client(tmp_path)
+
+    response = _upload(client, workbook)
+
+    assert response.status_code == 200
+    body = response.json()
+    assert "skipped_rows" not in body
+    assert [item["row"]["row_number"] for item in body["engagements"]] == [2]
+    assert {
+        item["row"]["row_number"]: item["coluna"]
+        for item in body["stop_conditions"]
+    } == {
+        3: "Tema",
+        4: "nº da pasta",
+        5: "Link",
+        6: "CNPJ",
+        7: "Kick off",
+    }
+    assert body["unsupported_rows"] == {
+        "total": 1,
+        "rows": [
+            {
+                "row": {"pasta": "131-2026", "row_number": 8},
+                "tema": generate_control_sheet.OUT_OF_SCOPE,
+                "report_ready_text": "PRazo prorrogado",
+                "cause": "Tema is unsupported",
+                "explicacao": (
+                    "Ainda não existe um Master aprovado para este Tema."
+                ),
+            }
+        ],
+    }
+    returned_rows = {
+        item["row"]["row_number"] for item in body["engagements"]
+    } | {
+        item["row"]["row_number"] for item in body["stop_conditions"]
+    } | {
+        item["row"]["row_number"] for item in body["unsupported_rows"]["rows"]
+    }
+    assert returned_rows == {2, 3, 4, 5, 6, 7, 8}
 
 
 def test_every_engagement_field_named_in_the_contract_is_present(tmp_path: Path) -> None:
@@ -138,6 +329,7 @@ def test_every_engagement_field_named_in_the_contract_is_present(tmp_path: Path)
         "kick_off": "15/04/2026",
         "capture_origin": "https://denise.example/",
         "published_domain": None,
+        "report_ready_text": "",
     }
 
 
@@ -157,6 +349,7 @@ def test_stop_conditions_are_translated_and_carry_the_original_cause(
         "problema": "A coluna nº da pasta está vazia.",
         "solucao": "Preencha o número da pasta, como 115-2026.",
         "cause": "Pasta is absent",
+        "report_ready_text": "",
     }
     assert by_cause["Link is absent"]["coluna"] == "Link"
     assert by_cause["Link is absent"]["problema"] == "A coluna Link está vazia."
@@ -183,23 +376,28 @@ def test_stop_conditions_are_translated_and_carry_the_original_cause(
     }
 
 
-def test_skipped_rows_are_grouped_by_reason_with_counts(tmp_path: Path) -> None:
+def test_unsupported_rows_include_tema_and_report_ready_text(
+    tmp_path: Path,
+) -> None:
     client = _client(tmp_path)
 
     response = _upload(client, FIXTURE)
 
-    skipped = response.json()["skipped_rows"]
-    reasons = {reason["cause"]: reason for reason in skipped["reasons"]}
-    assert reasons["Tema is out of scope"]["titulo"] == "Tema fora do escopo"
-    assert reasons["Tema is out of scope"]["total"] == 1
-    assert reasons["Tema is out of scope"]["rows"] == [
-        {"pasta": "72-2026", "row_number": 10}
-    ]
-    assert reasons["already complete"]["titulo"] == "Relatório já marcado como pronto"
-    assert reasons["already complete"]["total"] == 1
-    assert reasons["already complete"]["rows"] == [
-        {"pasta": "26-2026", "row_number": 7}
-    ]
+    unsupported = response.json()["unsupported_rows"]
+    assert unsupported == {
+        "total": 1,
+        "rows": [
+            {
+                "row": {"pasta": "72-2026", "row_number": 10},
+                "tema": generate_control_sheet.OUT_OF_SCOPE,
+                "report_ready_text": "",
+                "cause": "Tema is unsupported",
+                "explicacao": (
+                    "Ainda não existe um Master aprovado para este Tema."
+                ),
+            }
+        ],
+    }
 
 
 def test_zero_engagement_workbook_returns_200_with_empty_list(tmp_path: Path) -> None:
@@ -212,7 +410,10 @@ def test_zero_engagement_workbook_returns_200_with_empty_list(tmp_path: Path) ->
     body = response.json()
     assert body["engagements"] == []
     assert body["stop_conditions"] == []
-    assert body["skipped_rows"] == {"total": 0, "resumo": "0 linhas ficaram de fora", "reasons": []}
+    assert body["unsupported_rows"] == {
+        "total": 0,
+        "rows": [],
+    }
 
 
 def test_non_workbook_upload_returns_422(tmp_path: Path) -> None:
@@ -396,7 +597,7 @@ def test_retained_sheet_listing_is_most_recent_first_with_ready_counts(
             "sheet_id": older["sheet_id"],
             "filename": "controle junho.xlsx",
             "uploaded_at": older_uploaded_at.isoformat(),
-            "ready_count": 4,
+            "ready_count": 5,
         },
     ]
 

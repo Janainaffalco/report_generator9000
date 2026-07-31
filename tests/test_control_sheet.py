@@ -5,8 +5,8 @@ from pathlib import Path
 
 from report_generator9000.control_sheet import (
     Engagement,
-    SkippedRow,
     StopCondition,
+    UnsupportedRow,
     read_control_sheet,
 )
 
@@ -53,9 +53,24 @@ def test_committed_workbook_exercises_every_control_sheet_outcome() -> None:
             capture_origin="https://lari.example/",
             published_domain=None,
         ),
-        SkippedRow(7, "already complete"),
+        Engagement(
+            row_number=7,
+            demanda="011289/2026",
+            pasta="26-2026",
+            razao_social="SANTANA BELLINI",
+            cnpj="18.034.491/0001-57",
+            kick_off=datetime(2026, 3, 24),
+            especialista="Christian Albuquerque Alonso",
+            capture_origin="https://complete.example/",
+            published_domain=None,
+            report_ready_text="ok",
+        ),
         StopCondition(8, "Pasta is absent"),
-        SkippedRow(10, "Tema is out of scope"),
+        UnsupportedRow(
+            row_number=10,
+            reason="Tema is unsupported",
+            tema="Implantacao de Loja Virtual",
+        ),
         StopCondition(11, "CNPJ must contain 13 or 14 digits"),
         StopCondition(13, "Kick off is not a date"),
         Engagement(
