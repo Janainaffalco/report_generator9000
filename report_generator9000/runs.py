@@ -40,7 +40,9 @@ StageName = Literal[
     "assemble",
     "gate",
 ]
-RunOutcome = Literal["queued", "running", "finished", "stopped", "rejected"]
+RunOutcome = Literal[
+    "queued", "running", "finished", "stopped", "rejected", "failed"
+]
 
 STAGES: tuple[StageName, ...] = (
     "read_row",
@@ -421,7 +423,11 @@ class RunService:
                 error=type(error).__name__,
                 detail={"traceback": traceback.format_exc()},
             )
-            self._terminal(run_id, "rejected", str(error))
+            # Not "rejected": nothing conferred this document and found it
+            # defective -- the pipeline broke before it could. Reporting a
+            # browser timeout or a provider outage as a gate rejection sends
+            # the consultant to inspect a report that was never produced.
+            self._terminal(run_id, "failed", str(error))
         else:
             current = self.store.get(run_id)
             if current is None:

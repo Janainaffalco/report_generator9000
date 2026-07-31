@@ -52,6 +52,21 @@ export function GenerationRun({
     )
   }
 
+  if (run.outcome === "failed") {
+    return (
+      <TerminalCard
+        title="A geração não pôde ser concluída"
+        name={name}
+        explanation={
+          run.reason ??
+          "Uma falha técnica interrompeu a geração antes da entrega. " +
+            "Tente novamente."
+        }
+        onBack={onBackToRows}
+      />
+    )
+  }
+
   if (run.outcome === "rejected") {
     return (
       <TerminalCard

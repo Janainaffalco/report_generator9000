@@ -364,4 +364,28 @@ describe("resumable generation screens", () => {
       screen.queryByRole("link", { name: "Baixar .docx" })
     ).not.toBeInTheDocument()
   })
+
+  it("reports an infrastructure failure without calling it a defect", async () => {
+    // A crash is not a gate rejection: nothing conferred this document and
+    // found it wanting, so the consultant must not be sent to inspect it.
+    vi.mocked(fetch).mockResolvedValueOnce(
+      response({
+        ...base,
+        outcome: "failed",
+        current_stage: null,
+        reason: "Timeout 10000ms exceeded.",
+      })
+    )
+
+    render(<App />)
+
+    await screen.findByText("A geração não pôde ser concluída")
+    expect(screen.getByText("Timeout 10000ms exceeded.")).toBeInTheDocument()
+    expect(
+      screen.queryByText(/isso é um defeito da geração/i)
+    ).not.toBeInTheDocument()
+    expect(
+      screen.queryByRole("link", { name: "Baixar .docx" })
+    ).not.toBeInTheDocument()
+  })
 })

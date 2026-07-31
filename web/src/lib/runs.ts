@@ -1,5 +1,5 @@
 export type RunOutcome =
-  "queued" | "running" | "finished" | "stopped" | "rejected"
+  "queued" | "running" | "finished" | "stopped" | "rejected" | "failed"
 export type StageState = "pending" | "current" | "done"
 
 export interface RunStage {

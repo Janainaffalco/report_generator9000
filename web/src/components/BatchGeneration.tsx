@@ -3,6 +3,7 @@ import {
   CircleIcon,
   LoaderCircleIcon,
   OctagonXIcon,
+  TriangleAlertIcon,
 } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
@@ -17,7 +18,12 @@ interface BatchGenerationProps {
   onBackToRows: () => void
 }
 
-const terminalOutcomes = new Set(["finished", "stopped", "rejected"])
+const terminalOutcomes = new Set([
+  "finished",
+  "stopped",
+  "rejected",
+  "failed",
+])
 
 export function BatchGeneration({
   batch,
@@ -123,6 +129,9 @@ function outcomeCopy(run: RunResponse) {
   }
   if (run.outcome === "stopped") {
     return { label: "Stop Condition", icon: OctagonXIcon }
+  }
+  if (run.outcome === "failed") {
+    return { label: "Falha na geração", icon: TriangleAlertIcon }
   }
   return { label: "Recusado pelos gates", icon: OctagonXIcon }
 }

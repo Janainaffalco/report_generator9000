@@ -9,6 +9,7 @@ import pytest
 
 from report_generator9000.control_sheet import Engagement
 from report_generator9000.runs import (
+    GateRejected,
     PACKAGED_MASTER_PATH,
     RunService,
     RunStore,
@@ -78,7 +79,7 @@ def test_unexpected_exception_puts_traceback_in_run_log_and_keeps_reason(
 
     finished = service.store.get(record.run_id)
     assert finished is not None
-    assert finished.outcome == "rejected"
+    assert finished.outcome == "failed"
     assert finished.reason == str(KeyError("missing-thing"))
 
     error_events = [
@@ -94,6 +95,29 @@ def test_unexpected_exception_puts_traceback_in_run_log_and_keeps_reason(
     ]
     assert tracebacks
     assert any("KeyError" in tb for tb in tracebacks)
+
+
+def test_a_gate_rejection_stays_distinct_from_an_infrastructure_failure(
+    tmp_path,
+) -> None:
+    """Only a gate that conferred the document may report "rejected".
+
+    A crash and a rejection mean opposite things to a consultant: one says
+    the report was inspected and found defective, the other says no report
+    exists. Collapsing them sends them to look at a document that was never
+    produced.
+    """
+
+    def rejected(*args, **options):
+        raise GateRejected("as conferências recusaram o documento")
+
+    service = _service(tmp_path, rejected)
+    record = service.submit(_engagement(), sheet_id="sheet-1")
+    service.shutdown()
+
+    finished = service.store.get(record.run_id)
+    assert finished is not None
+    assert finished.outcome == "rejected"
 
 
 def test_worker_thread_events_carry_run_id(tmp_path, recording_sink) -> None:
