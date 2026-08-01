@@ -229,6 +229,19 @@ class BatchResponse(BaseModel):
     runs: list[RunResponse]
 
 
+class PastRunOut(BaseModel):
+    run_id: str
+    razao_social: str
+    pasta: str
+    demanda: str
+    generated_at: str
+    page_count: int
+    status: str
+    filename: str
+    review_url: str
+    download_url: str
+
+
 class PendenciaOut(BaseModel):
     classification: str
     classification_label: str
@@ -554,6 +567,24 @@ def create_app(
             sheet_id=records[0].sheet_id,
             runs=[_run_response(record) for record in records],
         )
+
+    @app.get("/api/runs")
+    def past_runs() -> list[PastRunOut]:
+        return [
+            PastRunOut(
+                run_id=record.run_id,
+                razao_social=str(record.engagement.get("razao_social", "")),
+                pasta=str(record.engagement.get("pasta", "")),
+                demanda=str(record.engagement.get("demanda", "")),
+                generated_at=record.updated_at,
+                page_count=len(record.previews),
+                status=record.report_status or "draft",
+                filename=record.filename or "",
+                review_url=f"/relatorios/{record.run_id}",
+                download_url=f"/api/runs/{record.run_id}/download",
+            )
+            for record in app.state.run_service.retained_runs()
+        ]
 
     @app.get("/api/runs/{run_id}")
     def get_run(run_id: str) -> RunResponse:

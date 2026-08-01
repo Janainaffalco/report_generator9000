@@ -27,7 +27,7 @@ from .gemini_provider import (
 from .previews import PreviewRender
 from .prose import ProseConfig, ProseProvider
 from .retention import RETENTION
-from .run_context import Pendencia
+from .run_context import Pendencia, load_run_context
 
 
 StageName = Literal[
@@ -118,6 +118,7 @@ class RunStore:
             engagement={
                 "row_number": engagement.row_number,
                 "pasta": engagement.pasta,
+                "demanda": engagement.demanda,
                 "razao_social": engagement.razao_social,
             },
             outcome=outcome,
@@ -201,6 +202,11 @@ class RunStore:
             for path in self.directory.glob("*.json")
             if (record := self.get(path.stem)) is not None
         )
+
+    def delete(self, run_id: str) -> None:
+        with self._lock:
+            (self.directory / f"{run_id}.json").unlink(missing_ok=True)
+            (self.directory / f"{run_id}.log").unlink(missing_ok=True)
 
     def discard_expired(self) -> tuple[RunRecord, ...]:
         cutoff = datetime.now(UTC) - RETENTION
@@ -300,6 +306,62 @@ class RunService:
         record = self.store.update(record.run_id, current_stage=STAGES[0])
         self._executor.submit(self._execute, record.run_id, engagement)
         return record
+
+    def retained_runs(self) -> tuple[RunRecord, ...]:
+        """Discover the latest finished Run for each retained output package."""
+        cutoff = datetime.now(UTC).timestamp() - RETENTION.total_seconds()
+        records = tuple(
+            record
+            for record in self.store.all()
+            if record.outcome == "finished" and record.document
+        )
+        retained: list[RunRecord] = []
+        self.output_root.mkdir(parents=True, exist_ok=True)
+        for directory in self.output_root.iterdir():
+            if not directory.is_dir() or directory.name.startswith("."):
+                continue
+            if directory.stat().st_mtime < cutoff:
+                for record in records:
+                    if Path(record.document or "").parent.resolve() == directory.resolve():
+                        self.store.delete(record.run_id)
+                shutil.rmtree(directory)
+                continue
+            try:
+                context = load_run_context(directory / "run.json")
+                pendencias_document = json.loads(
+                    (directory / "pendencias.json").read_text(encoding="utf-8")
+                )
+            except (FileNotFoundError, json.JSONDecodeError, OSError, ValueError):
+                continue
+            if not isinstance(pendencias_document, dict):
+                continue
+            matching = sorted(
+                (
+                    record
+                    for record in records
+                    if Path(record.document or "").parent.resolve()
+                    == directory.resolve()
+                ),
+                key=lambda record: record.updated_at,
+                reverse=True,
+            )
+            if not matching:
+                continue
+            previews = tuple(
+                str(path.resolve())
+                for path in sorted((directory / "previews").glob("*.png"))
+            )
+            retained.append(
+                replace(
+                    matching[0],
+                    report_status=str(pendencias_document.get("status", "draft")),
+                    pendencias=_pendencia_dicts(context.pendencias),
+                    previews=previews,
+                )
+            )
+        return tuple(
+            sorted(retained, key=lambda record: record.updated_at, reverse=True)
+        )
 
     def submit_batch(
         self,

@@ -10,6 +10,7 @@ import {
 
 import { BatchGeneration } from "@/components/BatchGeneration"
 import { GenerationRun } from "@/components/GenerationRun"
+import { PastRuns } from "@/components/PastRuns"
 import { RetainedSheetPicker } from "@/components/RetainedSheetPicker"
 import { UploadPanel } from "@/components/UploadPanel"
 import { WorkGroups } from "@/components/WorkGroups"
@@ -22,8 +23,14 @@ import {
   listRetainedControlSheets,
   uploadControlSheet,
 } from "@/lib/control-sheet"
-import type { BatchResponse, RunResponse } from "@/lib/runs"
-import { getBatch, getRun, startBatch, startRun } from "@/lib/runs"
+import type { BatchResponse, PastRun, RunResponse } from "@/lib/runs"
+import {
+  getBatch,
+  getRun,
+  listPastRuns,
+  startBatch,
+  startRun,
+} from "@/lib/runs"
 import { cn } from "@/lib/utils"
 
 const stages = [
@@ -87,17 +94,20 @@ export function App() {
   )
   const [run, setRun] = useState<RunResponse | null>(null)
   const [batch, setBatch] = useState<BatchResponse | null>(null)
+  const [pastRuns, setPastRuns] = useState<PastRun[] | null>(null)
   const [retainedSheets, setRetainedSheets] = useState<RetainedSheet[]>([])
   const [restoringSheet, setRestoringSheet] = useState(
     window.location.pathname === "/"
   )
 
   const activeStage = currentStage(
-    run || batch
-      ? "/conferir"
-      : controlSheet
-        ? CHOOSING_WORK_PATH
-        : window.location.pathname
+    pastRuns !== null
+      ? "/baixar"
+      : run || batch
+        ? "/conferir"
+        : controlSheet
+          ? CHOOSING_WORK_PATH
+          : window.location.pathname
   )
 
   async function handleFile(file: File) {
@@ -132,6 +142,12 @@ export function App() {
     setErrorDetail(result.detail)
   }, [])
 
+  const refreshPastRuns = useCallback(async () => {
+    const result = await listPastRuns()
+    setPastRuns(result.ok ? result.data : [])
+    setErrorDetail(result.ok ? null : result.detail)
+  }, [])
+
   useEffect(() => {
     const match = window.location.pathname.match(/^\/relatorios\/([^/]+)$/)
     if (match) {
@@ -155,8 +171,15 @@ export function App() {
           setErrorDetail(result.detail)
         }
       })
+      return
     }
-  }, [refreshBatch, refreshRun])
+    if (window.location.pathname === "/relatorios") {
+      void listPastRuns().then((result) => {
+        setPastRuns(result.ok ? result.data : [])
+        setErrorDetail(result.ok ? null : result.detail)
+      })
+    }
+  }, [refreshBatch, refreshPastRuns, refreshRun])
 
   useEffect(() => {
     if (window.location.pathname !== "/") {
@@ -294,6 +317,30 @@ export function App() {
     window.history.pushState({}, "", `/lotes/${batch.batch_id}`)
   }
 
+  async function handleOpenHistory() {
+    setStatus("loading")
+    setErrorDetail(null)
+    await refreshPastRuns()
+    setStatus("idle")
+    setRun(null)
+    setBatch(null)
+    window.history.pushState({}, "", "/relatorios")
+  }
+
+  async function handleOpenPastRun(pastRun: PastRun) {
+    setStatus("loading")
+    setErrorDetail(null)
+    const result = await getRun(pastRun.run_id)
+    setStatus("idle")
+    if (!result.ok) {
+      setErrorDetail(result.detail)
+      return
+    }
+    setPastRuns(null)
+    setRun(result.data)
+    window.history.pushState({}, "", pastRun.review_url)
+  }
+
   return (
     <div className="flex min-h-screen min-w-0 flex-col bg-background">
       <header className="border-b border-border bg-canvas">
@@ -326,12 +373,13 @@ export function App() {
                 </span>
               </Button>
             )}
-            <a
-              className={buttonVariants({ variant: "secondary" })}
-              href="/relatorios"
+            <Button
+              variant="secondary"
+              aria-current={pastRuns !== null ? "page" : undefined}
+              onClick={() => void handleOpenHistory()}
             >
               Relatórios anteriores
-            </a>
+            </Button>
             <a className={buttonVariants({ variant: "ghost" })} href="/enviar">
               Começar de novo
             </a>
@@ -376,7 +424,13 @@ export function App() {
       </header>
 
       <main className="mx-auto flex w-full max-w-(--container-max) min-w-0 flex-1 flex-col items-center px-8 py-14">
-        {run ? (
+        {pastRuns !== null ? (
+          <PastRuns
+            runs={pastRuns}
+            errorDetail={errorDetail}
+            onOpen={(pastRun) => void handleOpenPastRun(pastRun)}
+          />
+        ) : run ? (
           <GenerationRun
             run={run}
             errorDetail={errorDetail}

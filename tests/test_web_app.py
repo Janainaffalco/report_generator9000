@@ -1,4 +1,5 @@
 import json
+import os
 import sys
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -1233,6 +1234,119 @@ def test_expired_run_is_gone_even_when_no_new_run_was_submitted(
     assert client.get(f"/api/runs/{record.run_id}").status_code == 404
     assert client.get(f"/api/runs/{record.run_id}/download").status_code == 404
     assert not path.exists()
+    service.shutdown()
+
+
+def test_past_runs_lists_finished_reports_and_removes_expired_directories(
+    tmp_path: Path,
+) -> None:
+    app = create_app(
+        static_dir=tmp_path / "missing-web",
+        sheet_store=SheetStore(tmp_path / "sheets"),
+    )
+    store = RunStore(tmp_path / "runs")
+    output_root = tmp_path / "outputs"
+    service = RunService(
+        store=store,
+        master=tmp_path / "MASTER.docx",
+        output_root=output_root,
+        gated_drop_root=tmp_path / "gated",
+        no_llm=True,
+    )
+    app.state.run_service = service
+    engagement = Engagement(
+        row_number=2,
+        demanda="011616/2026",
+        pasta="40-2026",
+        razao_social="DENISE BARROS DE ALMEIDA",
+        cnpj="52.052.612/0001-21",
+        kick_off=datetime(2026, 4, 15),
+        especialista="Especialista",
+        capture_origin="https://example.test/",
+        published_domain=None,
+    )
+
+    def finished_run(name: str, age: timedelta):
+        directory = output_root / name
+        previews = directory / "previews"
+        previews.mkdir(parents=True)
+        document = directory / f"{name}.docx"
+        document.write_bytes(b"PK report")
+        preview_paths = tuple(previews / f"page-{page}.png" for page in (1, 2))
+        for preview in preview_paths:
+            preview.write_bytes(_TINY_PNG)
+        record = store.create(engagement, "retained-sheet")
+        record = store.update(
+            record.run_id,
+            outcome="finished",
+            report_status="draft",
+            filename=document.name,
+            document=str(document),
+            previews=tuple(str(path) for path in preview_paths),
+        )
+        timestamp = datetime.now(UTC) - age
+        (directory / "run.json").write_text(
+            json.dumps(
+                {
+                    "pasta": engagement.pasta,
+                    "media": [],
+                    "boilerplate_links": [],
+                    "input_origins": [],
+                    "drop_folder": None,
+                    "capture_folder": None,
+                    "output_paths": [str(document)],
+                    "blocks": [],
+                    "pendencias": [],
+                    "prose_grounding": [],
+                }
+            ),
+            encoding="utf-8",
+        )
+        (directory / "pendencias.json").write_text(
+            json.dumps({"status": "draft", "pendencias": []}),
+            encoding="utf-8",
+        )
+        os.utime(directory, (timestamp.timestamp(), timestamp.timestamp()))
+        return record, directory
+
+    retained, retained_directory = finished_run(
+        "retained", timedelta(days=6, hours=23)
+    )
+    latest = store.create(engagement, "retained-sheet")
+    retained = store.update(
+        latest.run_id,
+        outcome="finished",
+        report_status="draft",
+        filename=retained.filename,
+        document=retained.document,
+        previews=retained.previews,
+    )
+    expired, expired_directory = finished_run(
+        "expired", timedelta(days=7, minutes=1)
+    )
+
+    client = TestClient(app)
+    response = client.get("/api/runs")
+
+    assert response.status_code == 200
+    assert response.json() == [
+        {
+            "run_id": retained.run_id,
+            "razao_social": "DENISE BARROS DE ALMEIDA",
+            "pasta": "40-2026",
+            "demanda": "011616/2026",
+            "generated_at": response.json()[0]["generated_at"],
+            "page_count": 2,
+            "status": "draft",
+            "filename": "retained.docx",
+            "review_url": f"/relatorios/{retained.run_id}",
+            "download_url": f"/api/runs/{retained.run_id}/download",
+        }
+    ]
+    assert retained_directory.exists()
+    assert client.get(response.json()[0]["download_url"]).content == b"PK report"
+    assert not expired_directory.exists()
+    assert store.get(expired.run_id) is None
     service.shutdown()
 
 

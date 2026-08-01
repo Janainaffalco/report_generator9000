@@ -32,6 +32,19 @@ export interface BatchResponse {
   runs: RunResponse[]
 }
 
+export interface PastRun {
+  run_id: string
+  razao_social: string
+  pasta: string
+  demanda: string
+  generated_at: string
+  page_count: number
+  status: "draft" | "complete"
+  filename: string
+  review_url: string
+  download_url: string
+}
+
 export type RunResult =
   | { ok: true; data: RunResponse }
   | { ok: false; detail: string; status?: number }
@@ -136,6 +149,22 @@ export async function getBatch(batchId: string): Promise<BatchResult> {
     return {
       ok: false,
       detail: "Não foi possível atualizar este lote. Tentaremos de novo.",
+    }
+  }
+}
+
+export async function listPastRuns(): Promise<
+  { ok: true; data: PastRun[] } | { ok: false; detail: string }
+> {
+  try {
+    return readResponse<PastRun[]>(
+      await fetch("/api/runs"),
+      "Não foi possível consultar os relatórios anteriores."
+    )
+  } catch {
+    return {
+      ok: false,
+      detail: "Não foi possível consultar os relatórios anteriores.",
     }
   }
 }
