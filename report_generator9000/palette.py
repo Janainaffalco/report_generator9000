@@ -12,10 +12,9 @@ from urllib.parse import urljoin, urlsplit
 
 from PIL import Image, ImageDraw, ImageFont, PngImagePlugin
 from playwright.sync_api import Error as PlaywrightError
-from playwright.sync_api import sync_playwright
 
+from .browser_session import browser_context
 from .capture import NO_CACHE_HEADERS
-
 
 OBSERVED_NEAR_BLACK_LIGHTNESS = 0.05
 OBSERVED_NEAR_WHITE_LIGHTNESS = 0.95
@@ -136,9 +135,7 @@ def _rgb(color: str) -> tuple[int, int, int] | None:
         digits = match.group(1)
         if len(digits) == 3:
             digits = "".join(character * 2 for character in digits)
-        return tuple(
-            int(digits[index : index + 2], 16) for index in (0, 2, 4)
-        )
+        return tuple(int(digits[index : index + 2], 16) for index in (0, 2, 4))
     match = _RGB_COLOR.fullmatch(color.strip())
     if match is None:
         return None
@@ -257,18 +254,14 @@ def extract_observed_colors(
         hex_code = _hex(rgb)
         order.setdefault(hex_code, index)
         rgb_by_hex[hex_code] = rgb
-        area_by_hex[hex_code] = (
-            area_by_hex.get(hex_code, 0) + effective_area
-        )
+        area_by_hex[hex_code] = area_by_hex.get(hex_code, 0) + effective_area
         if effective_area > evidence_area_by_hex.get(hex_code, -1):
             evidence_by_hex[hex_code] = paint
             evidence_area_by_hex[hex_code] = effective_area
 
     usable: list[str] = []
     for hex_code, area in area_by_hex.items():
-        red, green, blue = (
-            channel / 255 for channel in rgb_by_hex[hex_code]
-        )
+        red, green, blue = (channel / 255 for channel in rgb_by_hex[hex_code])
         _hue, lightness, saturation = colorsys.rgb_to_hls(red, green, blue)
         if (
             lightness <= OBSERVED_NEAR_BLACK_LIGHTNESS
@@ -330,65 +323,61 @@ def derive_palette_from_site(capture_origin: str) -> PaletteDerivation:
             "Palette Capture Origin must be unauthenticated HTTP(S)"
         )
     try:
-        with sync_playwright() as playwright:
-            browser = playwright.chromium.launch(headless=True)
-            try:
-                context = browser.new_context(
-                    viewport={"width": 1440, "height": 900},
-                    extra_http_headers=NO_CACHE_HEADERS,
+        with browser_context(
+            viewport={"width": 1440, "height": 900},
+            extra_http_headers=NO_CACHE_HEADERS,
+        ) as context:
+            page = context.new_page()
+            page.goto(
+                capture_origin,
+                wait_until="domcontentloaded",
+                timeout=30_000,
+            )
+            final = urlsplit(page.url)
+            if (
+                final.netloc.casefold() != requested.netloc.casefold()
+                or final.username is not None
+                or final.password is not None
+            ):
+                raise PaletteCollectionError(
+                    "Palette navigation left the declared page host"
                 )
-                page = context.new_page()
-                page.goto(
-                    capture_origin,
-                    wait_until="domcontentloaded",
-                    timeout=30_000,
-                )
-                final = urlsplit(page.url)
-                if (
-                    final.netloc.casefold() != requested.netloc.casefold()
-                    or final.username is not None
-                    or final.password is not None
-                ):
-                    raise PaletteCollectionError(
-                        "Palette navigation left the declared page host"
-                    )
-                page.evaluate(
-                    "() => window.scrollTo(0, Math.max("
-                    "document.body.scrollHeight, "
-                    "document.documentElement.scrollHeight))"
-                )
-                page.wait_for_timeout(300)
-                page.evaluate("() => window.scrollTo(0, 0)")
-                page.wait_for_timeout(100)
-                html = page.content()
-                stylesheet_urls = page.eval_on_selector_all(
-                    'link[rel~="stylesheet"][href]',
-                    "(links) => links.map((link) => link.href)",
-                )
-                stylesheets: list[Stylesheet] = []
-                fetched: set[str] = set()
+            page.evaluate(
+                "() => window.scrollTo(0, Math.max("
+                "document.body.scrollHeight, "
+                "document.documentElement.scrollHeight))"
+            )
+            page.wait_for_timeout(300)
+            page.evaluate("() => window.scrollTo(0, 0)")
+            page.wait_for_timeout(100)
+            html = page.content()
+            stylesheet_urls = page.eval_on_selector_all(
+                'link[rel~="stylesheet"][href]',
+                "(links) => links.map((link) => link.href)",
+            )
+            stylesheets: list[Stylesheet] = []
+            fetched: set[str] = set()
 
-                def fetch_stylesheet(url: str) -> None:
-                    if url in fetched:
-                        return
-                    fetched.add(url)
-                    try:
-                        response = context.request.get(url, timeout=15_000)
-                    except PlaywrightError:
-                        return
-                    if not response.ok:
-                        return
-                    text = response.text()
-                    for match in _CSS_IMPORT.finditer(text):
-                        imported_url = urljoin(url, match.group("url"))
-                        if urlsplit(imported_url).scheme in {"http", "https"}:
-                            fetch_stylesheet(imported_url)
-                    stylesheets.append(Stylesheet(url=url, text=text))
+            def fetch_stylesheet(url: str) -> None:
+                if url in fetched:
+                    return
+                fetched.add(url)
+                try:
+                    response = context.request.get(url, timeout=15_000)
+                except PlaywrightError:
+                    return
+                if not response.ok:
+                    return
+                text = response.text()
+                for match in _CSS_IMPORT.finditer(text):
+                    imported_url = urljoin(url, match.group("url"))
+                    if urlsplit(imported_url).scheme in {"http", "https"}:
+                        fetch_stylesheet(imported_url)
+                stylesheets.append(Stylesheet(url=url, text=text))
 
-                for url in dict.fromkeys(stylesheet_urls):
-                    fetch_stylesheet(url)
-                paint_documents = page.evaluate(
-                    """
+            for url in dict.fromkeys(stylesheet_urls):
+                fetch_stylesheet(url)
+            paint_documents = page.evaluate("""
                     () => {
                       const selectorFor = (element) => {
                         if (element.id) {
@@ -479,26 +468,23 @@ def derive_palette_from_site(capture_origin: str) -> PaletteDerivation:
                       }
                       return paints;
                     }
-                    """
+                    """)
+            paints = tuple(
+                ObservedPaint(
+                    color=str(item["color"]),
+                    selector=str(item["selector"]),
+                    property=str(item["property"]),
+                    painted_area=float(item["painted_area"]),
+                    opacity=float(item["opacity"]),
                 )
-                paints = tuple(
-                    ObservedPaint(
-                        color=str(item["color"]),
-                        selector=str(item["selector"]),
-                        property=str(item["property"]),
-                        painted_area=float(item["painted_area"]),
-                        opacity=float(item["opacity"]),
-                    )
-                    for item in paint_documents
-                )
-                return derive_palette(
-                    html,
-                    tuple(stylesheets),
-                    paints,
-                    page_url=page.url,
-                )
-            finally:
-                browser.close()
+                for item in paint_documents
+            )
+            return derive_palette(
+                html,
+                tuple(stylesheets),
+                paints,
+                page_url=page.url,
+            )
     except PaletteCollectionError:
         raise
     except (OSError, PlaywrightError, ValueError) as error:
@@ -520,7 +506,9 @@ def render_palette(
         raise ValueError("Palette dimensions must be positive")
     parsed = tuple(_rgb(hex_code) for hex_code in hex_codes)
     if any(rgb is None for rgb in parsed):
-        raise ValueError("Palette colours must be three- or six-digit hex codes")
+        raise ValueError(
+            "Palette colours must be three- or six-digit hex codes"
+        )
 
     image = Image.new("RGB", (width, height), "white")
     draw = ImageDraw.Draw(image)
@@ -541,7 +529,9 @@ def render_palette(
     label_font = _font(
         min(max(8, height // 11), max(8, width // (len(hex_codes) * 9)))
     )
-    for index, (hex_code, rgb) in enumerate(zip(hex_codes, parsed, strict=True)):
+    for index, (hex_code, rgb) in enumerate(
+        zip(hex_codes, parsed, strict=True)
+    ):
         assert rgb is not None
         left = round(index * width / len(hex_codes))
         right = round((index + 1) * width / len(hex_codes))

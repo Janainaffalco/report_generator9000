@@ -17,9 +17,9 @@ from playwright.sync_api import (
     Error as PlaywrightError,
     Page,
     Response,
-    sync_playwright,
 )
 
+from .browser_session import browser_context
 from .docx_package import block_embedding_box_emu
 from .events import notice
 from .lista_paginas import ELEMENTO_TRANSVERSAL, Pagina
@@ -230,11 +230,15 @@ def _digest(path: Path) -> str:
 
 def _safe_stem(label: str) -> str:
     folded = unicodedata.normalize("NFKD", label)
-    ascii_label = "".join(
-        character
-        for character in folded
-        if not unicodedata.combining(character)
-    ).encode("ascii", "ignore").decode("ascii")
+    ascii_label = (
+        "".join(
+            character
+            for character in folded
+            if not unicodedata.combining(character)
+        )
+        .encode("ascii", "ignore")
+        .decode("ascii")
+    )
     return _SAFE_STEM.sub("-", ascii_label.casefold()).strip("-") or "pagina"
 
 
@@ -252,9 +256,7 @@ def fitted_emu_dimensions(
     """Hold the Word Slot width and derive height from the real ratio."""
     if min(slot_width_emu, image_width, image_height) <= 0:
         raise ValueError("Slot and image dimensions must be positive")
-    return slot_width_emu, round(
-        slot_width_emu * image_height / image_width
-    )
+    return slot_width_emu, round(slot_width_emu * image_height / image_width)
 
 
 def _burn_partial_capture_badge(image: Image.Image) -> None:
@@ -317,9 +319,7 @@ def build_embedding_derivative(
         image = ImageOps.exif_transpose(source).convert("RGB")
         if image.width > max_width:
             height = max(1, round(image.height * max_width / image.width))
-            image = image.resize(
-                (max_width, height), Image.Resampling.LANCZOS
-            )
+            image = image.resize((max_width, height), Image.Resampling.LANCZOS)
         cropped = False
         if slot_width_emu is not None and max_height_emu is not None:
             max_pixel_height = max(
@@ -479,9 +479,7 @@ def _capture_page(
         or final_url.username is not None
         or final_url.password is not None
     ):
-        raise CaptureError(
-            "Capture navigation left the declared page host"
-        )
+        raise CaptureError("Capture navigation left the declared page host")
     _dismiss_consent(page)
     _force_lazy_rendering(page, config)
     consent_warning = _dismiss_consent(page)
@@ -521,7 +519,9 @@ def _capture_page(
 def _browser_failure(
     pages: tuple[Pagina, ...], reason: str
 ) -> tuple[CaptureFailure, ...]:
-    return tuple(CaptureFailure(pagina=pagina, reason=reason) for pagina in pages)
+    return tuple(
+        CaptureFailure(pagina=pagina, reason=reason) for pagina in pages
+    )
 
 
 def _clear_managed_captures(folder: Path) -> None:
@@ -552,98 +552,87 @@ def capture_site(
     processed_count = 0
 
     try:
-        with sync_playwright() as playwright:
-            browser = playwright.chromium.launch(headless=True)
-            try:
-                context = browser.new_context(
-                    viewport={
-                        "width": settings.viewport_width,
-                        "height": settings.viewport_height,
-                    },
-                    device_scale_factor=settings.device_scale_factor,
-                    extra_http_headers=NO_CACHE_HEADERS,
-                )
-                page = context.new_page()
-                for index, pagina in enumerate(pages, start=1):
-                    stem = f"{index:02d}-{_safe_stem(pagina.titulo_bloco)}"
-                    raw_path = folder / f"{stem}.png"
-                    embedding_path = embedding_folder / f"{stem}.png"
-                    raw_path.unlink(missing_ok=True)
-                    embedding_path.unlink(missing_ok=True)
-                    try:
-                        warning = _capture_page(
-                            page, pagina, raw_path, settings
-                        )
-                        colors = image_color_count(raw_path)
-                        raw_digest = _digest(raw_path)
-                        if colors < settings.minimum_color_count:
-                            failures.append(
-                                CaptureFailure(
-                                    pagina=pagina,
-                                    reason=(
-                                        "Capture em branco ou sem conteúdo "
-                                        f"renderizado ({colors} cores)"
-                                    ),
-                                    raw_path=raw_path,
-                                    evidence=raw_digest,
-                                )
-                            )
-                            continue
-                        with Image.open(raw_path) as raw:
-                            raw_width, raw_height = raw.size
-                        derivative = build_embedding_derivative(
-                            raw_path,
-                            embedding_path,
-                            max_width=settings.embedding_max_width,
-                            slot_width_emu=settings.embedding_slot_width_emu,
-                            max_height_emu=settings.embedding_max_height_emu,
-                        )
-                        captures.append(
-                            Capture(
-                                pagina=pagina,
-                                raw_path=raw_path,
-                                embedding_path=embedding_path,
-                                raw_digest=raw_digest,
-                                embedding_digest=_digest(embedding_path),
-                                raw_width=raw_width,
-                                raw_height=raw_height,
-                                embedding_width=derivative.width,
-                                embedding_height=derivative.height,
-                                cropped=derivative.cropped,
-                                cropped_from_width=(
-                                    derivative.cropped_from_width
-                                ),
-                                cropped_from_height=(
-                                    derivative.cropped_from_height
-                                ),
-                                color_count=colors,
-                                consent_warning=warning,
-                            )
-                        )
-                    except (
-                        CaptureError,
-                        OSError,
-                        PlaywrightError,
-                        ValueError,
-                    ) as error:
+        with browser_context(
+            viewport={
+                "width": settings.viewport_width,
+                "height": settings.viewport_height,
+            },
+            device_scale_factor=settings.device_scale_factor,
+            extra_http_headers=NO_CACHE_HEADERS,
+        ) as context:
+            page = context.new_page()
+            for index, pagina in enumerate(pages, start=1):
+                stem = f"{index:02d}-{_safe_stem(pagina.titulo_bloco)}"
+                raw_path = folder / f"{stem}.png"
+                embedding_path = embedding_folder / f"{stem}.png"
+                raw_path.unlink(missing_ok=True)
+                embedding_path.unlink(missing_ok=True)
+                try:
+                    warning = _capture_page(page, pagina, raw_path, settings)
+                    colors = image_color_count(raw_path)
+                    raw_digest = _digest(raw_path)
+                    if colors < settings.minimum_color_count:
                         failures.append(
                             CaptureFailure(
                                 pagina=pagina,
-                                reason=f"Capture falhou: {error}",
-                                raw_path=(
-                                    raw_path if raw_path.exists() else None
+                                reason=(
+                                    "Capture em branco ou sem conteúdo "
+                                    f"renderizado ({colors} cores)"
                                 ),
-                                evidence=(
-                                    _digest(raw_path)
-                                    if raw_path.exists()
-                                    else "capture-unavailable"
-                                ),
+                                raw_path=raw_path,
+                                evidence=raw_digest,
                             )
                         )
-                    finally:
-                        processed_count += 1
-            finally:
-                browser.close()
+                        continue
+                    with Image.open(raw_path) as raw:
+                        raw_width, raw_height = raw.size
+                    derivative = build_embedding_derivative(
+                        raw_path,
+                        embedding_path,
+                        max_width=settings.embedding_max_width,
+                        slot_width_emu=settings.embedding_slot_width_emu,
+                        max_height_emu=settings.embedding_max_height_emu,
+                    )
+                    captures.append(
+                        Capture(
+                            pagina=pagina,
+                            raw_path=raw_path,
+                            embedding_path=embedding_path,
+                            raw_digest=raw_digest,
+                            embedding_digest=_digest(embedding_path),
+                            raw_width=raw_width,
+                            raw_height=raw_height,
+                            embedding_width=derivative.width,
+                            embedding_height=derivative.height,
+                            cropped=derivative.cropped,
+                            cropped_from_width=(derivative.cropped_from_width),
+                            cropped_from_height=(
+                                derivative.cropped_from_height
+                            ),
+                            color_count=colors,
+                            consent_warning=warning,
+                        )
+                    )
+                except (
+                    CaptureError,
+                    OSError,
+                    PlaywrightError,
+                    ValueError,
+                ) as error:
+                    failures.append(
+                        CaptureFailure(
+                            pagina=pagina,
+                            reason=f"Capture falhou: {error}",
+                            raw_path=(raw_path if raw_path.exists() else None),
+                            evidence=(
+                                _digest(raw_path)
+                                if raw_path.exists()
+                                else "capture-unavailable"
+                            ),
+                        )
+                    )
+                finally:
+                    processed_count += 1
     except PlaywrightError as error:
         failures.extend(
             _browser_failure(
@@ -700,49 +689,44 @@ def extract_site_text(
     extracted: list[ExtractedPageText] = []
     seen: set[str] = set()
     skipped = 0
-    with sync_playwright() as playwright:
-        browser = playwright.chromium.launch(headless=True)
-        try:
-            context = browser.new_context(
-                viewport={
-                    "width": settings.viewport_width,
-                    "height": settings.viewport_height,
-                },
-                device_scale_factor=settings.device_scale_factor,
-                extra_http_headers=NO_CACHE_HEADERS,
-            )
-            page = context.new_page()
-            for pagina in pages:
-                if not pagina.entra_no_briefing or pagina.url in seen:
-                    continue
-                seen.add(pagina.url)
-                # Prose is a best-effort enrichment -- `assembly` already
-                # generates a report from no site text at all under `no_llm`.
-                # So one page that times out, redirects off-host, or refuses
-                # to load costs its own text and nothing more; letting it
-                # escape would fail the whole engagement over an optional
-                # input. This mirrors the per-page tolerance in `capture_site`.
-                try:
-                    text = _page_text(page, pagina, settings)
-                except (CaptureError, PlaywrightError):
-                    skipped += 1
-                    # A failed navigation leaves the tab on a pending
-                    # `chrome-error://` navigation that interrupts the *next*
-                    # page's `goto`. Without recycling the tab, one dead page
-                    # would still take down the page after it -- the very
-                    # cascade this per-page tolerance exists to stop.
-                    page.close()
-                    page = context.new_page()
-                    continue
-                if text:
-                    extracted.append(
-                        ExtractedPageText(
-                            capture_origin=page.url,
-                            text=text,
-                        )
+    with browser_context(
+        viewport={
+            "width": settings.viewport_width,
+            "height": settings.viewport_height,
+        },
+        device_scale_factor=settings.device_scale_factor,
+        extra_http_headers=NO_CACHE_HEADERS,
+    ) as context:
+        page = context.new_page()
+        for pagina in pages:
+            if not pagina.entra_no_briefing or pagina.url in seen:
+                continue
+            seen.add(pagina.url)
+            # Prose is a best-effort enrichment -- `assembly` already
+            # generates a report from no site text at all under `no_llm`.
+            # So one page that times out, redirects off-host, or refuses
+            # to load costs its own text and nothing more; letting it
+            # escape would fail the whole engagement over an optional
+            # input. This mirrors the per-page tolerance in `capture_site`.
+            try:
+                text = _page_text(page, pagina, settings)
+            except (CaptureError, PlaywrightError):
+                skipped += 1
+                # A failed navigation leaves the tab on a pending
+                # `chrome-error://` navigation that interrupts the *next*
+                # page's `goto`. Without recycling the tab, one dead page
+                # would still take down the page after it -- the very
+                # cascade this per-page tolerance exists to stop.
+                page.close()
+                page = context.new_page()
+                continue
+            if text:
+                extracted.append(
+                    ExtractedPageText(
+                        capture_origin=page.url,
+                        text=text,
                     )
-        finally:
-            browser.close()
+                )
     if skipped:
         notice(
             "extract_site_text_pages_skipped",

@@ -13,6 +13,7 @@ from PIL import Image
 
 from .artifact_paths import engagement_artifact_key
 from .block_stamping import BlockImage, stamp_blocks
+from .browser_session import run_browser_session
 from .capture import (
     CaptureRun,
     capture_config_from_master,
@@ -326,17 +327,18 @@ def assemble_output_package(
         dir=output_root_path,
     ) as temporary:
         staging_root = Path(temporary)
-        staged = _assemble_staged_package(
-            master,
-            staging_root,
-            engagement,
-            gated_drop_root,
-            prose_provider=prose_provider,
-            prose_config=prose_config,
-            no_llm=no_llm,
-            preview_renderer=preview_renderer,
-            progress=progress,
-        )
+        with run_browser_session():
+            staged = _assemble_staged_package(
+                master,
+                staging_root,
+                engagement,
+                gated_drop_root,
+                prose_provider=prose_provider,
+                prose_config=prose_config,
+                no_llm=no_llm,
+                preview_renderer=preview_renderer,
+                progress=progress,
+            )
 
         def promoted(path: str | Path) -> Path:
             relative = Path(path).resolve().relative_to(staged.directory)

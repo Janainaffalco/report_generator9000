@@ -17,12 +17,11 @@ from playwright.sync_api import (
     Error as PlaywrightError,
     Page,
     TimeoutError as PlaywrightTimeoutError,
-    sync_playwright,
 )
 
+from .browser_session import browser_context
 from .capture import NO_CACHE_HEADERS
 from .run_context import Artifact, Pendencia
-
 
 CLIENT_LOGO_PART = "word/media/image2.png"
 CLIENT_LOGO_PIXEL_SIZE = (1200, 600)
@@ -120,9 +119,7 @@ class _DeclarationParser(HTMLParser):
         classes = set(attributes.get("class", "").casefold().split())
         normalized_tag = tag.casefold()
         parent_custom = (
-            self._context[-1].in_custom_logo
-            if self._context
-            else False
+            self._context[-1].in_custom_logo if self._context else False
         )
         parent_elementor = (
             self._context[-1].in_elementor_site_logo
@@ -140,8 +137,7 @@ class _DeclarationParser(HTMLParser):
         )
         if (
             normalized_tag == "script"
-            and attributes.get("type", "").casefold()
-            == "application/ld+json"
+            and attributes.get("type", "").casefold() == "application/ld+json"
         ):
             self._script_parts = []
         if normalized_tag != "img":
@@ -193,11 +189,7 @@ def _positive_int(value: object) -> int | None:
 
 def _organization_nodes(value: Any) -> list[dict[str, Any]]:
     if isinstance(value, list):
-        return [
-            node
-            for item in value
-            for node in _organization_nodes(item)
-        ]
+        return [node for item in value for node in _organization_nodes(item)]
     if not isinstance(value, dict):
         return []
     nodes = [value]
@@ -217,9 +209,7 @@ def _is_organization(node: dict[str, Any]) -> bool:
     )
 
 
-def _json_ld_logo(
-    documents: list[str], page_url: str
-) -> DeclaredLogo | None:
+def _json_ld_logo(documents: list[str], page_url: str) -> DeclaredLogo | None:
     for document in documents:
         try:
             value = json.loads(document)
@@ -314,9 +304,7 @@ def _declared_http_url(source: object, page_url: str) -> str | None:
     return resolved
 
 
-def resolve_declared_logo(
-    html: str, page_url: str
-) -> DeclaredLogo | None:
+def resolve_declared_logo(html: str, page_url: str) -> DeclaredLogo | None:
     """Resolve the first supported logo declaration in strict priority order."""
     parser = _DeclarationParser()
     parser.feed(html)
@@ -403,9 +391,7 @@ def _download_rasterized(
         raster_page.close()
 
 
-def _failure(
-    classification: str, reason: str
-) -> LogoFailure:
+def _failure(classification: str, reason: str) -> LogoFailure:
     return LogoFailure(
         classification=classification,
         reason=reason,
@@ -433,55 +419,47 @@ def capture_client_logo(
     output = folder / _LOGO_FILENAME
     output.unlink(missing_ok=True)
     try:
-        with sync_playwright() as playwright:
-            browser = playwright.chromium.launch(headless=True)
+        with browser_context(
+            viewport={"width": 1600, "height": 900},
+            device_scale_factor=2,
+            extra_http_headers=NO_CACHE_HEADERS,
+        ) as context:
+            page = context.new_page()
+            page.goto(
+                capture_origin,
+                wait_until="domcontentloaded",
+                timeout=30_000,
+            )
+            final_url = urlsplit(page.url)
+            if (
+                final_url.netloc.casefold() != parsed.netloc.casefold()
+                or final_url.username is not None
+                or final_url.password is not None
+            ):
+                return _failure(
+                    "TOOL_BLOCKED",
+                    "Capture do logo deixou o host do Capture Origin",
+                )
             try:
-                context = browser.new_context(
-                    viewport={"width": 1600, "height": 900},
-                    device_scale_factor=2,
-                    extra_http_headers=NO_CACHE_HEADERS,
+                page.wait_for_load_state("networkidle", timeout=10_000)
+            except PlaywrightTimeoutError:
+                pass
+            declared = resolve_declared_logo(page.content(), page.url)
+            if declared is None:
+                return _failure(
+                    "UNDECLARED",
+                    "site não declara logo em nenhuma fonte suportada",
                 )
-                page = context.new_page()
-                page.goto(
-                    capture_origin,
-                    wait_until="domcontentloaded",
-                    timeout=30_000,
+            rendered = _matching_rendered_image(page, declared.url)
+            if rendered is not None:
+                content = rendered.screenshot(
+                    animations="disabled", scale="device"
                 )
-                final_url = urlsplit(page.url)
-                if (
-                    final_url.netloc.casefold()
-                    != parsed.netloc.casefold()
-                    or final_url.username is not None
-                    or final_url.password is not None
-                ):
-                    return _failure(
-                        "TOOL_BLOCKED",
-                        "Capture do logo deixou o host do Capture Origin",
-                    )
-                try:
-                    page.wait_for_load_state(
-                        "networkidle", timeout=10_000
-                    )
-                except PlaywrightTimeoutError:
-                    pass
-                declared = resolve_declared_logo(page.content(), page.url)
-                if declared is None:
-                    return _failure(
-                        "UNDECLARED",
-                        "site não declara logo em nenhuma fonte suportada",
-                    )
-                rendered = _matching_rendered_image(page, declared.url)
-                if rendered is not None:
-                    content = rendered.screenshot(
-                        animations="disabled", scale="device"
-                    )
-                    acquisition = "rendered-element"
-                else:
-                    content = _download_rasterized(page, declared)
-                    acquisition = "download-rasterized"
-                fitted = _fit_to_slot(content, slot_pixel_size)
-            finally:
-                browser.close()
+                acquisition = "rendered-element"
+            else:
+                content = _download_rasterized(page, declared)
+                acquisition = "download-rasterized"
+            fitted = _fit_to_slot(content, slot_pixel_size)
     except (OSError, PlaywrightError, ValueError) as error:
         return _failure(
             "TOOL_BLOCKED",
