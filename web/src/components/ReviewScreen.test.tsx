@@ -61,6 +61,7 @@ describe("ReviewScreen", () => {
               name: "documento cnpj",
               required_action: "Fornecer documento cnpj no valores.json",
               page: "documento",
+              preview_page: 4,
             },
             {
               classification: "TOOL_BLOCKED",
@@ -70,6 +71,7 @@ describe("ReviewScreen", () => {
               name: "captura da PÁGINA HOME",
               required_action: "Gerar novamente",
               page: "PÁGINA HOME",
+              preview_page: null,
             },
             {
               classification: "UNDECLARED",
@@ -79,6 +81,7 @@ describe("ReviewScreen", () => {
               name: "paleta de cores",
               required_action: "Revisar a paleta no Word",
               page: "documento",
+              preview_page: null,
             },
           ],
           checks: [],
@@ -121,6 +124,13 @@ describe("ReviewScreen", () => {
     expect(
       screen.getByText(/podem ser resolvidas agora ou depois, direto no Word/i)
     ).toBeInTheDocument()
+
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: /página 4 · clique para ver no documento/i,
+      })
+    )
+    expect(screen.getByText("Página 4 de 5")).toBeInTheDocument()
   })
 
   it("states the report is ready for signature when there are no Pendências", async () => {

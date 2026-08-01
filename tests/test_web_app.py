@@ -19,6 +19,7 @@ from report_generator9000.prose import (
     ProseResponse,
 )
 from report_generator9000.run_context import Pendencia
+from report_generator9000.previews import PreviewRender
 from report_generator9000.sheet_store import SheetStore
 from report_generator9000.control_sheet import Engagement
 from report_generator9000.runs import GateRejected, RunService, RunStore, STAGES
@@ -1240,6 +1241,8 @@ def _finished_run_client(
     *,
     gate_report: GateReport,
     pendencias: tuple[Pendencia, ...],
+    media_pages: dict[str, int] | None = None,
+    text_pages: dict[str, int] | None = None,
 ) -> tuple[TestClient, str]:
     sheet_store = SheetStore(tmp_path / "sheets")
     app = create_app(static_dir=tmp_path / "missing-web", sheet_store=sheet_store)
@@ -1269,6 +1272,11 @@ def _finished_run_client(
         return SimpleNamespace(
             pages=(object(), object(), object()),
             previews=previews,
+            preview_render=PreviewRender(
+                pages=previews,
+                media_pages=media_pages or {},
+                text_pages=text_pages or {},
+            ),
             report=SimpleNamespace(
                 status=("complete" if not pendencias else "draft"),
                 document=document,
@@ -1359,7 +1367,11 @@ def test_finished_report_returns_pendencias_checks_and_download_filename(
         ),
     )
     client, run_id = _finished_run_client(
-        tmp_path, gate_report=gate_report, pendencias=pendencias
+        tmp_path,
+        gate_report=gate_report,
+        pendencias=pendencias,
+        media_pages={"cafefeed": 4},
+        text_pages={"[PENDÊNCIA: NÃO FORNECIDO — cnpj_doc]": 2},
     )
 
     response = client.get(f"/api/runs/{run_id}/report")
@@ -1381,6 +1393,9 @@ def test_finished_report_returns_pendencias_checks_and_download_filename(
         item["classification"]: item for item in body["pendencias"]
     }
     assert set(by_classification) == {"UNDECLARED", "TOOL_BLOCKED", "GATED"}
+    assert by_classification["TOOL_BLOCKED"]["preview_page"] == 4
+    assert by_classification["GATED"]["preview_page"] == 2
+    assert by_classification["UNDECLARED"]["preview_page"] is None
     for item in body["pendencias"]:
         assert "slot" not in item
         assert item["name"]

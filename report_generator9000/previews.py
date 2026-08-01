@@ -5,8 +5,9 @@ from __future__ import annotations
 import re
 import textwrap
 from collections import defaultdict
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Protocol
+from typing import Iterator, Protocol, overload
 from zipfile import ZipFile
 from xml.etree import ElementTree
 
@@ -16,6 +17,36 @@ from .docx_package import Slot, open_docx_package, page_geometry_emu
 
 
 _MANAGED_PREVIEW = re.compile(r"^preview-\d{3}\.png$")
+_TEXT_MARKER = re.compile(r"\[[^\[\]\r\n]+\]")
+
+
+@dataclass(frozen=True)
+class PreviewRender:
+    """Rendered pages and exact evidence-to-page joins."""
+
+    pages: tuple[Path, ...]
+    media_pages: dict[str, int]
+    text_pages: dict[str, int]
+
+    def __len__(self) -> int:
+        return len(self.pages)
+
+    def __iter__(self) -> Iterator[Path]:
+        return iter(self.pages)
+
+    @overload
+    def __getitem__(self, index: int) -> Path: ...
+
+    @overload
+    def __getitem__(self, index: slice) -> tuple[Path, ...]: ...
+
+    def __getitem__(self, index: int | slice) -> Path | tuple[Path, ...]:
+        return self.pages[index]
+
+    def page_for_evidence(self, evidence: str) -> int | None:
+        return self.media_pages.get(evidence.lower()) or self.text_pages.get(
+            evidence
+        )
 
 
 class PreviewRenderer(Protocol):
@@ -25,7 +56,7 @@ class PreviewRenderer(Protocol):
         self,
         document: Path,
         output_folder: Path,
-    ) -> tuple[Path, ...]: ...
+    ) -> tuple[Path, ...] | PreviewRender: ...
 
 
 class DocumentPreviewRenderer:
@@ -49,7 +80,7 @@ class DocumentPreviewRenderer:
         self,
         document: Path,
         output_folder: Path,
-    ) -> tuple[Path, ...]:
+    ) -> PreviewRender:
         output_folder.mkdir(parents=True, exist_ok=True)
         for path in output_folder.iterdir():
             if path.is_file() and _MANAGED_PREVIEW.fullmatch(path.name):
@@ -71,6 +102,9 @@ class DocumentPreviewRenderer:
         media_sizes = {
             item.part_name: (item.width, item.height)
             for item in package.media
+        }
+        media_digests = {
+            item.part_name: item.sha256.lower() for item in package.media
         }
         with ZipFile(document) as archive:
             geometry = page_geometry_emu(
@@ -114,6 +148,8 @@ class DocumentPreviewRenderer:
         note_font = self._font(18)
         y = self.margin
         rendered: list[Path] = []
+        media_pages: dict[str, int] = {}
+        text_pages: dict[str, int] = {}
 
         def finish_page() -> None:
             nonlocal page, draw, y
@@ -173,6 +209,9 @@ class DocumentPreviewRenderer:
                             if slot.media_part in media_sizes
                         )
                     ensure_space(text_height + bound_image_height)
+                    page_number = len(rendered) + 1
+                    for marker in _TEXT_MARKER.findall(text):
+                        text_pages.setdefault(marker, page_number)
                     for line in lines:
                         draw.text(
                             (self.margin, y),
@@ -189,6 +228,9 @@ class DocumentPreviewRenderer:
                         slot
                     )
                     ensure_space(rendered_height + 24)
+                    digest = media_digests.get(slot.media_part)
+                    if digest is not None:
+                        media_pages.setdefault(digest, len(rendered) + 1)
                     with archive.open(slot.media_part) as source:
                         with Image.open(source) as embedded:
                             visual = ImageOps.exif_transpose(
@@ -203,10 +245,15 @@ class DocumentPreviewRenderer:
                             y += visual.height + 24
         if y > self.margin or not rendered:
             finish_page()
-        return tuple(rendered)
+        return PreviewRender(
+            pages=tuple(rendered),
+            media_pages=media_pages,
+            text_pages=text_pages,
+        )
 
 
 __all__ = [
     "DocumentPreviewRenderer",
+    "PreviewRender",
     "PreviewRenderer",
 ]

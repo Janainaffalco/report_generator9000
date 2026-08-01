@@ -236,6 +236,7 @@ class PendenciaOut(BaseModel):
     name: str
     required_action: str
     page: str
+    preview_page: int | None
 
 
 class CheckOut(BaseModel):
@@ -309,6 +310,7 @@ def _report_response(record: RunRecord) -> FinishedReportResponse:
                 name=item["name"],
                 required_action=item["required_action"],
                 page=item["page"],
+                preview_page=item.get("preview_page"),
             )
             for item in record.pendencias
         ],

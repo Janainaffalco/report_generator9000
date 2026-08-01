@@ -1,4 +1,5 @@
 from pathlib import Path
+import hashlib
 
 import pytest
 from PIL import Image, ImageChops
@@ -107,3 +108,30 @@ def test_preview_keeps_a_block_heading_with_its_tall_image(
     assert red_bbox is not None
     _left, top, _right, _bottom = red_bbox
     assert top == DocumentPreviewRenderer.margin + 57
+
+
+def test_preview_indexes_media_digests_and_text_markers(
+    tmp_path: Path,
+) -> None:
+    marker = "[PENDÊNCIA: NÃO FORNECIDO — cnpj_doc]"
+    image = png_bytes(100, 50, red=255, green=0, blue=0)
+    document = build_docx(
+        tmp_path / "report.docx",
+        paragraphs=[
+            paragraph(marker),
+            paragraph(image="rIdImage", extent=(5_400_000, 2_700_000)),
+        ],
+        media={"media/capture.png": image},
+        relationships=[
+            RelationshipSpec(id="rIdImage", target="media/capture.png")
+        ],
+    )
+
+    preview = DocumentPreviewRenderer().render(
+        document,
+        tmp_path / "previews",
+    )
+
+    digest = hashlib.sha256(image).hexdigest()
+    assert preview.media_pages[digest] == 1
+    assert preview.text_pages[marker] == 1

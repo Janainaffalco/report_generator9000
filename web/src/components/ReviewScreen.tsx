@@ -199,7 +199,11 @@ export function ReviewScreen({ run, onBack }: ReviewScreenProps) {
                   </p>
                   <ul className="flex flex-col gap-3">
                     {report.pendencias.map((pendencia, index) => (
-                      <PendenciaItem key={index} pendencia={pendencia} />
+                      <PendenciaItem
+                        key={index}
+                        pendencia={pendencia}
+                        onNavigate={setCurrentPage}
+                      />
                     ))}
                   </ul>
                 </>
@@ -241,7 +245,13 @@ export function ReviewScreen({ run, onBack }: ReviewScreenProps) {
   )
 }
 
-function PendenciaItem({ pendencia }: { pendencia: Pendencia }) {
+function PendenciaItem({
+  pendencia,
+  onNavigate,
+}: {
+  pendencia: Pendencia
+  onNavigate: (page: number) => void
+}) {
   const style = CLASS_STYLE[pendencia.classification] ?? UNKNOWN_CLASS_STYLE
   const Icon = style.icon
   return (
@@ -261,9 +271,19 @@ function PendenciaItem({ pendencia }: { pendencia: Pendencia }) {
         {pendencia.classification_explanation}
       </p>
       <p className="mt-2 text-sm">{pendencia.required_action}</p>
-      <p className="mt-1 text-xs text-muted-foreground">
-        Página: {pendencia.page}
-      </p>
+      {pendencia.preview_page === null ? (
+        <p className="mt-1 text-xs text-muted-foreground">
+          Local no documento: {pendencia.page}
+        </p>
+      ) : (
+        <button
+          type="button"
+          className="mt-1 text-left text-xs font-medium text-primary active:underline"
+          onClick={() => onNavigate(pendencia.preview_page!)}
+        >
+          Página {pendencia.preview_page} · clique para ver no documento
+        </button>
+      )}
     </li>
   )
 }

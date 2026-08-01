@@ -7,6 +7,7 @@ export interface Pendencia {
   name: string
   required_action: string
   page: string
+  preview_page: number | null
 }
 
 export interface Check {

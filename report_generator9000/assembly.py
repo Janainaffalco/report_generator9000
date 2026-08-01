@@ -41,9 +41,8 @@ from .logo import CLIENT_LOGO_PART, LogoCapture, capture_client_logo
 from .palette import PaletteCollectionError, derive_palette_from_site
 from .prose import ProseConfig, ProseProvider
 from .placeholders import render_placeholder, slot_pixel_dimensions
-from .previews import DocumentPreviewRenderer, PreviewRenderer
+from .previews import DocumentPreviewRenderer, PreviewRender, PreviewRenderer
 from .run_context import Pendencia
-
 
 ProgressCallback = Callable[[str, int | None], None]
 
@@ -57,6 +56,7 @@ class OutputPackage:
     capture_run: CaptureRun
     previews: tuple[Path, ...]
     raw_captures: tuple[Path, ...]
+    preview_render: PreviewRender | None
 
 
 def _assemble_staged_package(
@@ -72,6 +72,7 @@ def _assemble_staged_package(
     progress: ProgressCallback | None = None,
 ) -> OutputPackage:
     """Build an engagement package below a disposable staging root."""
+
     def report_progress(stage: str, page_count: int | None = None) -> None:
         if progress is not None:
             progress(stage, page_count)
@@ -157,11 +158,11 @@ def _assemble_staged_package(
     }
     block_images_list: list[BlockImage] = []
     capture_pendencias: list[Pendencia] = [
-        item for item in captures.pendencias
+        item
+        for item in captures.pendencias
         if item.slot.startswith("capture:")
-        and item.evidence not in {
-            failure.pendencia.evidence for failure in captures.failures
-        }
+        and item.evidence
+        not in {failure.pendencia.evidence for failure in captures.failures}
     ]
     for index, page in enumerate(pages, start=1):
         captured = captures_by_page.get(page)
@@ -187,9 +188,7 @@ def _assemble_staged_package(
             675,
         )
         placeholder_path = (
-            captures.folder
-            / "embutir"
-            / f"{index:02d}-tool-blocked.png"
+            captures.folder / "embutir" / f"{index:02d}-tool-blocked.png"
         )
         placeholder_path.write_bytes(content)
         digest = hashlib.sha256(content).hexdigest()
@@ -201,9 +200,7 @@ def _assemble_staged_package(
                 origin="placeholder",
             )
         )
-        capture_pendencias.append(
-            replace(failure.pendencia, evidence=digest)
-        )
+        capture_pendencias.append(replace(failure.pendencia, evidence=digest))
     block_images = tuple(block_images_list)
     if no_llm:
         site_text = ()
@@ -250,15 +247,22 @@ def _assemble_staged_package(
         if preview_renderer is None
         else preview_renderer
     )
-    previews = renderer.render(
+    rendered_preview = renderer.render(
         generated.document,
         directory / "previews",
     )
+    preview_render = (
+        rendered_preview
+        if isinstance(rendered_preview, PreviewRender)
+        else None
+    )
+    previews = (
+        rendered_preview.pages
+        if preview_render is not None
+        else tuple(rendered_preview)
+    )
     raw_captures = tuple(
-        [
-            capture.raw_path.resolve()
-            for capture in captures.captures
-        ]
+        [capture.raw_path.resolve() for capture in captures.captures]
         + [
             failure.raw_path.resolve()
             for failure in captures.failures
@@ -301,6 +305,7 @@ def _assemble_staged_package(
         capture_run=captures,
         previews=previews,
         raw_captures=raw_captures,
+        preview_render=preview_render,
     )
 
 
@@ -345,12 +350,8 @@ def assemble_output_package(
             return (final_directory / relative).resolve()
 
         final_document = promoted(staged.report.document)
-        final_context_document = promoted(
-            staged.report.context_document
-        )
-        final_pendencias_document = promoted(
-            staged.report.pendencias_document
-        )
+        final_context_document = promoted(staged.report.context_document)
+        final_pendencias_document = promoted(staged.report.pendencias_document)
         final_pendencias_json = promoted(staged.report.pendencias_json)
         final_previews = tuple(promoted(path) for path in staged.previews)
         final_raw_captures = tuple(
@@ -358,12 +359,14 @@ def assemble_output_package(
         )
         final_capture_folder = promoted(staged.capture_run.folder)
         final_media = tuple(
-            replace(
-                artifact,
-                source=str(promoted(artifact.source)),
+            (
+                replace(
+                    artifact,
+                    source=str(promoted(artifact.source)),
+                )
+                if artifact.origin == "capture" and artifact.source is not None
+                else artifact
             )
-            if artifact.origin == "capture" and artifact.source is not None
-            else artifact
             for artifact in staged.report.context.media
         )
         final_context = replace(
@@ -389,8 +392,7 @@ def assemble_output_package(
         if not gate_report.passed:
             raise GateRejected(
                 "STOP CONDITION: correctness gates rejected the staged "
-                "output package:\n"
-                + gate_report.format()
+                "output package:\n" + gate_report.format()
             )
         if progress is not None:
             progress("gate", None)
@@ -447,6 +449,7 @@ def assemble_output_package(
             capture_run=final_capture_run,
             previews=final_previews,
             raw_captures=final_raw_captures,
+            preview_render=staged.preview_render,
         )
 
 

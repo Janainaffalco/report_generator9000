@@ -24,6 +24,7 @@ from .gemini_provider import (
     GeminiProseProvider,
     GeminiSettings,
 )
+from .previews import PreviewRender
 from .prose import ProseConfig, ProseProvider
 from .retention import RETENTION
 from .run_context import Pendencia
@@ -245,7 +246,8 @@ def _check_dicts(gate_report: GateReport) -> tuple[dict[str, object], ...]:
 
 
 def _pendencia_dicts(
-    pendencias: tuple[Pendencia, ...]
+    pendencias: tuple[Pendencia, ...],
+    preview_render: PreviewRender | None = None,
 ) -> tuple[dict[str, object], ...]:
     """Translate Pendências into the durable shape a RunRecord stores."""
     return tuple(
@@ -254,6 +256,11 @@ def _pendencia_dicts(
             "classification": item.classification,
             "name": item.name,
             "page": item.page,
+            "preview_page": (
+                preview_render.page_for_evidence(item.evidence)
+                if preview_render is not None
+                else None
+            ),
             "required_action": item.required_action,
         }
         for item in pendencias
@@ -451,7 +458,10 @@ class RunService:
                 document=str(package.report.document.resolve()),
                 reason=None,
                 checks=_check_dicts(package.report.gate_report),
-                pendencias=_pendencia_dicts(package.report.context.pendencias),
+                pendencias=_pendencia_dicts(
+                    package.report.context.pendencias,
+                    getattr(package, "preview_render", None),
+                ),
                 previews=tuple(
                     str(path.resolve()) for path in package.previews
                 ),
