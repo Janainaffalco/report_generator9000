@@ -33,7 +33,7 @@ jobs:
           python-version: "3.13"
           cache: pip
       - run: python -m pip install --upgrade pip
-      - run: python -m pip install --editable . pytest
+      - run: python -m pip install --editable . --group dev
       - run: python -m playwright install --with-deps chromium
       - run: python -m pytest
 

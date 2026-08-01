@@ -40,10 +40,12 @@ report_generator9000 = [
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = [".", "tests"]
+addopts = "-n auto"
 
 [dependency-groups]
 dev = [
     "fonttools>=4.55",
     "httpx2>=2,<3",
     "pytest>=8",
+    "pytest-xdist>=3.8,<4",
 ]
