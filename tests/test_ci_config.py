@@ -16,3 +16,11 @@ def test_ci_uses_the_web_package_manager_pin() -> None:
     assert package["packageManager"] != "pnpm@11.13.0"
     assert "package_json_file: web/package.json" in workflow
     assert 'version: "11"' not in workflow
+
+
+def test_container_build_does_not_wait_for_tests() -> None:
+    workflow = (ROOT / ".github" / "workflows" / "tests.yml").read_text(
+        "utf-8"
+    )
+
+    assert "\n    needs: test\n" not in workflow
