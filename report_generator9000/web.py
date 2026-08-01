@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import json
+import shutil
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 from xml.etree.ElementTree import ParseError
@@ -19,6 +22,14 @@ from .control_sheet import (
     read_row_pastas,
 )
 from .run_context import classification_label
+from .gated_inputs import (
+    GATED_IMAGE_PARTS,
+    GATED_VALUE_SLOTS,
+    VALUES_FILE,
+    GatedInputError,
+    gated_drop_folder,
+    load_gated_inputs,
+)
 from .runs import RunRecord, STAGES, default_run_service
 from .sheet_store import SheetStore, default_sheet_store
 
@@ -250,6 +261,8 @@ class PendenciaOut(BaseModel):
     required_action: str
     page: str
     preview_page: int | None
+    attachment_filename: str | None
+    attachment_value_key: str | None
 
 
 class CheckOut(BaseModel):
@@ -305,6 +318,8 @@ def _run_response(record: RunRecord) -> RunResponse:
 
 
 def _report_response(record: RunRecord) -> FinishedReportResponse:
+    image_filenames = {slot: filename for slot, filename, _part in GATED_IMAGE_PARTS}
+    value_slots = {slot for slot, _tokens in GATED_VALUE_SLOTS}
     return FinishedReportResponse(
         run_id=record.run_id,
         status=record.report_status or "draft",
@@ -324,6 +339,18 @@ def _report_response(record: RunRecord) -> FinishedReportResponse:
                 required_action=item["required_action"],
                 page=item["page"],
                 preview_page=item.get("preview_page"),
+                attachment_filename=(
+                    image_filenames.get(str(item.get("slot")))
+                    or (VALUES_FILE if item.get("slot") in value_slots else None)
+                    if item["classification"] == "GATED"
+                    else None
+                ),
+                attachment_value_key=(
+                    str(item.get("slot"))
+                    if item["classification"] == "GATED"
+                    and item.get("slot") in value_slots
+                    else None
+                ),
             )
             for item in record.pendencias
         ],
@@ -625,6 +652,96 @@ def create_app(
                 404, "Esta geração ainda não tem um relatório para revisar."
             )
         return _report_response(record)
+
+    @app.post("/api/runs/{run_id}/attachments", status_code=202)
+    async def attach_gated_inputs(
+        run_id: str,
+        response: Response,
+        files: list[UploadFile] = File(...),
+    ) -> RunResponse:
+        record = app.state.run_service.store.get(run_id)
+        if record is None or record.outcome != "finished":
+            raise HTTPException(404, "Este relatório não está disponível para anexos.")
+        path = store.path(record.sheet_id)
+        if path is None:
+            raise HTTPException(404, _EXPIRED_SHEET_DETAIL)
+        outcomes, _ = _read_sheet(path)
+        engagement = next(
+            (
+                item for item in outcomes
+                if isinstance(item, Engagement)
+                and item.row_number == record.engagement["row_number"]
+            ),
+            None,
+        )
+        if engagement is None:
+            raise HTTPException(422, "A Demanda deste relatório não pode ser refeita.")
+        image_filenames = {
+            slot: filename for slot, filename, _part in GATED_IMAGE_PARTS
+        }
+        value_slots = {slot for slot, _tokens in GATED_VALUE_SLOTS}
+        expected = {
+            image_filenames.get(str(item.get("slot")))
+            or (VALUES_FILE if item.get("slot") in value_slots else None)
+            for item in record.pendencias
+            if item.get("classification") == "GATED"
+        } - {None}
+        pending_value_slots = {
+            str(item.get("slot"))
+            for item in record.pendencias
+            if item.get("classification") == "GATED"
+            and item.get("slot") in value_slots
+        }
+        names = [file.filename or "" for file in files]
+        unknown = sorted(set(names) - expected)
+        if not files or unknown or len(names) != len(set(names)):
+            reason = ", ".join(unknown) if unknown else "nomes repetidos ou nenhum arquivo"
+            raise HTTPException(422, f"Anexo sem Pendência GATED correspondente: {reason}.")
+        payloads = [(file.filename or "", await file.read()) for file in files]
+        if VALUES_FILE in names:
+            try:
+                supplied_values = json.loads(dict(payloads)[VALUES_FILE])
+            except (json.JSONDecodeError, UnicodeDecodeError):
+                supplied_values = {}
+            if not isinstance(supplied_values, dict) or not (
+                set(supplied_values) & pending_value_slots
+            ):
+                raise HTTPException(
+                    422,
+                    "valores.json não satisfaz nenhuma Pendência GATED deste relatório.",
+                )
+        target = gated_drop_folder(app.state.run_service.gated_drop_root, engagement)
+        with tempfile.TemporaryDirectory() as temporary:
+            validation_root = Path(temporary)
+            validation_folder = gated_drop_folder(validation_root, engagement)
+            if target.exists():
+                shutil.copytree(target, validation_folder)
+            else:
+                validation_folder.mkdir(parents=True)
+            for name, content in payloads:
+                (validation_folder / name).write_bytes(content)
+            values_path = validation_folder / VALUES_FILE
+            if not values_path.exists():
+                values_path.write_text(
+                    json.dumps(
+                        {
+                            "pasta": engagement.pasta,
+                            "razao_social": engagement.razao_social,
+                        },
+                        ensure_ascii=False,
+                    ),
+                    encoding="utf-8",
+                )
+            try:
+                load_gated_inputs(validation_root, engagement)
+            except GatedInputError as error:
+                raise HTTPException(422, f"Anexo inválido: {error}") from error
+            target.mkdir(parents=True, exist_ok=True)
+            for validated in validation_folder.iterdir():
+                shutil.copy2(validated, target / validated.name)
+        rerun = app.state.run_service.submit(engagement, record.sheet_id)
+        response.headers["Location"] = f"/api/runs/{rerun.run_id}"
+        return _run_response(rerun)
 
     @app.get("/api/runs/{run_id}/previews/{page}")
     def get_preview_page(run_id: str, page: int) -> FileResponse:

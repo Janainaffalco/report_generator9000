@@ -206,4 +206,70 @@ describe("ReviewScreen", () => {
       "/api/runs/run-1/previews/5"
     )
   })
+
+  it("maps several attachments to Pendências before starting the rerun", async () => {
+    const onRegenerated = vi.fn()
+    vi.stubGlobal(
+      "fetch",
+      vi
+        .fn()
+        .mockResolvedValueOnce(
+          response({
+            run_id: "run-1",
+            status: "draft",
+            page_count: 1,
+            filename: run.filename,
+            download_url: run.download_url,
+            pendencias: [
+              {
+                classification: "GATED",
+                classification_label: "NÃO FORNECIDO",
+                classification_explanation: "Normal e esperado.",
+                name: "paleta de cores",
+                required_action: "Anexar paleta.png",
+                page: "documento",
+                preview_page: null,
+                attachment_filename: "paleta.png",
+              },
+              {
+                classification: "GATED",
+                classification_label: "NÃO FORNECIDO",
+                classification_explanation: "Normal e esperado.",
+                name: "painel WordPress",
+                required_action: "Anexar painel.png",
+                page: "documento",
+                preview_page: null,
+                attachment_filename: "painel.png",
+              },
+            ],
+            checks: [],
+          })
+        )
+        .mockResolvedValueOnce(
+          response({ ...run, run_id: "rerun-2", outcome: "running" })
+        )
+    )
+    render(<ReviewScreen run={run} onRegenerated={onRegenerated} />)
+    const input = await screen.findByLabelText("Anexar itens disponíveis")
+    fireEvent.change(input, {
+      target: {
+        files: [
+          new File(["palette"], "paleta.png", { type: "image/png" }),
+          new File(["panel"], "painel.png", { type: "image/png" }),
+        ],
+      },
+    })
+    expect(screen.getByText(/paleta.png → paleta de cores/)).toBeInTheDocument()
+    expect(
+      screen.getByText(/painel.png → painel WordPress/)
+    ).toBeInTheDocument()
+    fireEvent.click(
+      screen.getByRole("button", { name: "Anexar e gerar novamente" })
+    )
+    await vi.waitFor(() => expect(onRegenerated).toHaveBeenCalled())
+    expect(fetch).toHaveBeenLastCalledWith(
+      "/api/runs/run-1/attachments",
+      expect.objectContaining({ method: "POST" })
+    )
+  })
 })

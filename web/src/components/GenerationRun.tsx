@@ -24,6 +24,7 @@ interface GenerationRunProps {
   onRefresh: () => void
   onBackToRows: () => void
   onBackToBatch?: () => void
+  onRegenerated?: (run: RunResponse) => void
 }
 
 export function GenerationRun({
@@ -32,11 +33,19 @@ export function GenerationRun({
   onRefresh,
   onBackToRows,
   onBackToBatch,
+  onRegenerated,
 }: GenerationRunProps) {
   const name = `${run.engagement.pasta} · ${run.engagement.razao_social}`
 
   if (run.outcome === "finished") {
-    return <ReviewScreen key={run.run_id} run={run} onBack={onBackToBatch} />
+    return (
+      <ReviewScreen
+        key={run.run_id}
+        run={run}
+        onBack={onBackToBatch}
+        onRegenerated={onRegenerated}
+      />
+    )
   }
 
   if (run.outcome === "stopped") {

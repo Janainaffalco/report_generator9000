@@ -12,7 +12,7 @@ import {
 import { Badge } from "@/components/ui/badge"
 import { Button, buttonVariants } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
-import { getReport, previewPageUrl } from "@/lib/report"
+import { attachGatedInputs, getReport, previewPageUrl } from "@/lib/report"
 import type { FinishedReport, Pendencia, PendenciaClass } from "@/lib/report"
 import type { RunResponse } from "@/lib/runs"
 import { cn } from "@/lib/utils"
@@ -20,6 +20,7 @@ import { cn } from "@/lib/utils"
 interface ReviewScreenProps {
   run: RunResponse
   onBack?: () => void
+  onRegenerated?: (run: RunResponse) => void
 }
 
 const CLASS_STYLE: Record<
@@ -40,10 +41,19 @@ const UNKNOWN_CLASS_STYLE = {
   icon: HelpCircleIcon,
 } as const
 
-export function ReviewScreen({ run, onBack }: ReviewScreenProps) {
+export function ReviewScreen({
+  run,
+  onBack,
+  onRegenerated,
+}: ReviewScreenProps) {
   const [report, setReport] = useState<FinishedReport | null>(null)
   const [errorDetail, setErrorDetail] = useState<string | null>(null)
   const [currentPage, setCurrentPage] = useState(1)
+  const [attachments, setAttachments] = useState<File[]>([])
+  const [attachmentMatches, setAttachmentMatches] = useState(
+    new Map<string, string[]>()
+  )
+  const [attaching, setAttaching] = useState(false)
 
   useEffect(() => {
     let cancelled = false
@@ -94,6 +104,54 @@ export function ReviewScreen({ run, onBack }: ReviewScreenProps) {
       : report.status === "draft"
         ? "Rascunho com Pendências"
         : report.status
+  const attachmentTargets = report.pendencias.reduce((targets, item) => {
+    if (item.attachment_filename && !item.attachment_value_key) {
+      const names = targets.get(item.attachment_filename) ?? []
+      targets.set(item.attachment_filename, [...names, item.name])
+    }
+    return targets
+  }, new Map<string, string[]>())
+  const valueAttachmentTargets = report.pendencias.filter(
+    (item) => item.attachment_value_key
+  )
+
+  async function selectAttachments(files: File[]) {
+    const matches = new Map(attachmentTargets)
+    const valuesFile = files.find((file) => file.name === "valores.json")
+    if (valuesFile) {
+      try {
+        const values = JSON.parse(await valuesFile.text()) as Record<
+          string,
+          unknown
+        >
+        matches.set(
+          valuesFile.name,
+          valueAttachmentTargets
+            .filter(
+              (item) =>
+                item.attachment_value_key && item.attachment_value_key in values
+            )
+            .map((item) => item.name)
+        )
+      } catch {
+        matches.set(valuesFile.name, [])
+      }
+    }
+    setAttachments(files)
+    setAttachmentMatches(matches)
+  }
+
+  async function regenerate() {
+    setAttaching(true)
+    setErrorDetail(null)
+    const result = await attachGatedInputs(run.run_id, attachments)
+    setAttaching(false)
+    if (!result.ok) {
+      setErrorDetail(result.detail)
+      return
+    }
+    onRegenerated?.(result.data as RunResponse)
+  }
 
   return (
     <>
@@ -206,6 +264,41 @@ export function ReviewScreen({ run, onBack }: ReviewScreenProps) {
                       />
                     ))}
                   </ul>
+                  {attachmentTargets.size > 0 && (
+                    <div className="flex flex-col gap-3 border-t pt-4">
+                      <label
+                        className="text-sm font-medium"
+                        htmlFor="gated-files"
+                      >
+                        Anexar itens disponíveis
+                      </label>
+                      <input
+                        id="gated-files"
+                        type="file"
+                        multiple
+                        onChange={(event) =>
+                          void selectAttachments(
+                            Array.from(event.target.files ?? [])
+                          )
+                        }
+                      />
+                      <ul className="text-xs text-muted-foreground">
+                        {attachments.map((file) => (
+                          <li key={file.name}>
+                            {file.name} →{" "}
+                            {attachmentMatches.get(file.name)?.join(", ") ||
+                              "nenhuma Pendência correspondente"}
+                          </li>
+                        ))}
+                      </ul>
+                      <Button
+                        disabled={attachments.length === 0 || attaching}
+                        onClick={() => void regenerate()}
+                      >
+                        {attaching ? "Anexando…" : "Anexar e gerar novamente"}
+                      </Button>
+                    </div>
+                  )}
                 </>
               )}
             </CardContent>

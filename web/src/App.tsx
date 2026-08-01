@@ -437,6 +437,10 @@ export function App() {
             onRefresh={() => void refreshRun(run.run_id)}
             onBackToRows={() => void handleBackToRows()}
             onBackToBatch={batch ? handleBackToBatch : undefined}
+            onRegenerated={(rerun) => {
+              setRun(rerun)
+              window.history.pushState({}, "", `/relatorios/${rerun.run_id}`)
+            }}
           />
         ) : batch ? (
           <BatchGeneration

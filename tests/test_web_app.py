@@ -12,6 +12,7 @@ from fastapi.testclient import TestClient
 
 from report_generator9000.gates.results import GateReport, GateResult, Violation
 from report_generator9000.generate import StopCondition
+from report_generator9000.gated_inputs import load_gated_inputs
 from report_generator9000.master import build_master
 from report_generator9000.prose import (
     GroundedField,
@@ -29,6 +30,7 @@ from report_generator9000.web import DEFAULT_STATIC_DIR, create_app
 
 sys.path.insert(0, str(Path(__file__).with_name("fixtures")))
 import generate_control_sheet  # noqa: E402
+import generate_gated_drop_folders  # noqa: E402
 from tests.test_lista_paginas import serve_fixture_site  # noqa: E402
 from tests.test_master_build import approved_source  # noqa: E402
 
@@ -1324,6 +1326,8 @@ def test_past_runs_lists_finished_reports_and_removes_expired_directories(
     expired, expired_directory = finished_run(
         "expired", timedelta(days=7, minutes=1)
     )
+    expired_gated = tmp_path / "gated" / expired_directory.name
+    expired_gated.mkdir(parents=True)
 
     client = TestClient(app)
     response = client.get("/api/runs")
@@ -1346,6 +1350,7 @@ def test_past_runs_lists_finished_reports_and_removes_expired_directories(
     assert retained_directory.exists()
     assert client.get(response.json()[0]["download_url"]).content == b"PK report"
     assert not expired_directory.exists()
+    assert not expired_gated.exists()
     assert store.get(expired.run_id) is None
     service.shutdown()
 
@@ -1365,6 +1370,15 @@ def _finished_run_client(
         progress = options["progress"]
         for stage in STAGES:
             progress(stage, 3 if stage == "derive_pages" else None)
+        supplied_slots = {
+            slot
+            for slot, _path, _part in load_gated_inputs(
+                gated_root, engagement
+            ).images
+        }
+        effective_pendencias = tuple(
+            item for item in pendencias if item.slot not in supplied_slots
+        )
         document = (
             Path(output_root)
             / f"{engagement.pasta}_{engagement.razao_social}"
@@ -1392,10 +1406,10 @@ def _finished_run_client(
                 text_pages=text_pages or {},
             ),
             report=SimpleNamespace(
-                status=("complete" if not pendencias else "draft"),
+                status=("complete" if not effective_pendencias else "draft"),
                 document=document,
                 gate_report=gate_report,
-                context=SimpleNamespace(pendencias=pendencias),
+                context=SimpleNamespace(pendencias=effective_pendencias),
             ),
         )
 
@@ -1540,6 +1554,61 @@ def test_finished_report_with_no_pendencias_is_complete_and_empty(
     body = response.json()
     assert body["status"] == "complete"
     assert body["pendencias"] == []
+
+
+def test_gated_attachment_is_validated_written_and_starts_a_full_rerun(
+    tmp_path: Path,
+) -> None:
+    pendencia = Pendencia(
+        slot="paleta",
+        classification="GATED",
+        reason="não fornecida",
+        evidence="digest",
+        name="paleta de cores",
+        page="documento",
+        required_action="Anexar paleta.png",
+    )
+    client, run_id = _finished_run_client(
+        tmp_path, gate_report=GateReport(results=()), pendencias=(pendencia,)
+    )
+    report = client.get(f"/api/runs/{run_id}/report").json()
+    assert report["pendencias"][0]["attachment_filename"] == "paleta.png"
+
+    rejected = client.post(
+        f"/api/runs/{run_id}/attachments",
+        files=[("files", ("desconhecido.png", _TINY_PNG, "image/png"))],
+    )
+    assert rejected.status_code == 422
+    assert "sem Pendência GATED correspondente" in rejected.json()["detail"]
+
+    fixture_root = generate_gated_drop_folders.build(tmp_path / "gated-fixture")
+    palette = (
+        fixture_root
+        / "partial"
+        / generate_gated_drop_folders.ENGAGEMENT_FOLDER
+        / "paleta.png"
+    ).read_bytes()
+    attached = client.post(
+        f"/api/runs/{run_id}/attachments",
+        files=[("files", ("paleta.png", palette, "image/png"))],
+    )
+    assert attached.status_code == 202
+    rerun = attached.json()
+    assert rerun["run_id"] != run_id
+    deadline = monotonic() + 2
+    while rerun["outcome"] == "running" and monotonic() < deadline:
+        sleep(0.01)
+        rerun = client.get(f"/api/runs/{rerun['run_id']}").json()
+    assert rerun["stage_history"] == list(STAGES)
+    assert client.get(f"/api/runs/{rerun['run_id']}/report").json()[
+        "pendencias"
+    ] == []
+    gated_folder = (
+        client.app.state.run_service.gated_drop_root
+        / "40-2026_DENISE BARROS DE ALMEIDA"
+    )
+    assert (gated_folder / "paleta.png").read_bytes() == palette
+    assert (gated_folder / "valores.json").is_file()
 
 
 def test_report_endpoint_404s_before_the_run_finishes(tmp_path: Path) -> None:

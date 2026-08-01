@@ -8,6 +8,28 @@ export interface Pendencia {
   required_action: string
   page: string
   preview_page: number | null
+  attachment_filename: string | null
+  attachment_value_key: string | null
+}
+
+export async function attachGatedInputs(runId: string, files: File[]) {
+  const body = new FormData()
+  files.forEach((file) => body.append("files", file))
+  try {
+    const response = await fetch(`/api/runs/${runId}/attachments`, {
+      method: "POST",
+      body,
+    })
+    const data = await response.json()
+    return response.ok
+      ? { ok: true as const, data }
+      : { ok: false as const, detail: data.detail as string }
+  } catch {
+    return {
+      ok: false as const,
+      detail: "Não foi possível anexar os arquivos.",
+    }
+  }
 }
 
 export interface Check {

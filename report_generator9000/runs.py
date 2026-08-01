@@ -325,6 +325,10 @@ class RunService:
                     if Path(record.document or "").parent.resolve() == directory.resolve():
                         self.store.delete(record.run_id)
                 shutil.rmtree(directory)
+                shutil.rmtree(
+                    self.gated_drop_root / directory.name,
+                    ignore_errors=True,
+                )
                 continue
             try:
                 context = load_run_context(directory / "run.json")
@@ -410,6 +414,10 @@ class RunService:
                     path=str(document.parent),
                 )
                 shutil.rmtree(document.parent, ignore_errors=True)
+                shutil.rmtree(
+                    self.gated_drop_root / document.parent.name,
+                    ignore_errors=True,
+                )
 
     def shutdown(self) -> None:
         self._executor.shutdown(wait=True)
