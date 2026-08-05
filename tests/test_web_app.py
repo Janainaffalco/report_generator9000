@@ -36,6 +36,15 @@ from tests.test_master_build import approved_source  # noqa: E402
 
 
 FIXTURE = Path(__file__).parent / "fixtures" / "control-sheet-cases.xlsx"
+SHELL_SOURCE = Path(__file__).parent.parent / "web" / "index.html"
+ROBOTS_META = '<meta name="robots" content="noindex, nofollow" />'
+
+
+def _assert_crawler_headers(response) -> None:
+    robots_tag = response.headers["x-robots-tag"]
+    assert "noindex" in robots_tag
+    assert "nofollow" in robots_tag
+    assert response.headers["referrer-policy"] == "no-referrer"
 
 
 def _client(tmp_path: Path) -> TestClient:
@@ -91,6 +100,56 @@ def test_app_serves_the_frontend_and_supports_spa_routes(tmp_path: Path) -> None
     assert "--primary: #e60023" in asset_response.text
 
 
+def test_robots_txt_disallows_everything_even_without_a_frontend_build(
+    tmp_path: Path,
+) -> None:
+    client = TestClient(create_app(static_dir=tmp_path / "missing-web"))
+
+    response = client.get("/robots.txt")
+
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("text/plain")
+    assert "Disallow: /" in response.text
+    assert 'data-testid="app-shell"' not in response.text
+    assert "<html" not in response.text.lower()
+
+
+def test_robots_txt_does_not_break_the_spa_fallback(tmp_path: Path) -> None:
+    static_dir = tmp_path / "web"
+    static_dir.mkdir(parents=True)
+    (static_dir / "index.html").write_text(
+        '<main data-testid="app-shell">Relatórios SEBRAETEC</main>',
+        encoding="utf-8",
+    )
+    client = TestClient(create_app(static_dir=static_dir))
+
+    robots_response = client.get("/robots.txt")
+    spa_response = client.get("/enviar", headers={"accept": "text/html"})
+
+    assert robots_response.status_code == 200
+    assert "Disallow: /" in robots_response.text
+    assert spa_response.status_code == 200
+    assert 'data-testid="app-shell"' in spa_response.text
+
+
+def test_crawler_headers_are_set_on_the_application_shell_and_json_api(
+    tmp_path: Path,
+) -> None:
+    static_dir = tmp_path / "web"
+    static_dir.mkdir(parents=True)
+    (static_dir / "index.html").write_text(
+        '<main data-testid="app-shell">Relatórios SEBRAETEC</main>',
+        encoding="utf-8",
+    )
+    client = TestClient(create_app(static_dir=static_dir))
+
+    shell_response = client.get("/")
+    health_response = client.get("/api/health")
+
+    _assert_crawler_headers(shell_response)
+    _assert_crawler_headers(health_response)
+
+
 def test_health_endpoint_does_not_depend_on_the_frontend_build(tmp_path: Path) -> None:
     client = TestClient(create_app(static_dir=tmp_path / "missing"))
 
@@ -109,6 +168,11 @@ def test_packaged_frontend_is_the_served_application_shell() -> None:
     assert response.status_code == 200
     assert "Relatórios · SEBRAETEC" in response.text
     assert "fonts.googleapis.com" not in response.text
+    assert ROBOTS_META in response.text
+
+
+def test_shell_source_carries_the_robots_directive_without_a_build() -> None:
+    assert ROBOTS_META in SHELL_SOURCE.read_text(encoding="utf-8")
 
 
 def test_control_sheet_upload_returns_three_groups_from_fixture(tmp_path: Path) -> None:
@@ -1658,6 +1722,21 @@ def test_preview_page_images_are_served_as_png(tmp_path: Path) -> None:
     assert first.headers["content-type"] == "image/png"
     assert first.content[:8] == b"\x89PNG\r\n\x1a\n"
     assert missing.status_code == 404
+
+
+def test_crawler_header_reaches_the_docx_download_and_preview_image(
+    tmp_path: Path,
+) -> None:
+    client, run_id = _finished_run_client(
+        tmp_path, gate_report=GateReport(results=()), pendencias=()
+    )
+
+    download = client.get(f"/api/runs/{run_id}/download")
+    preview = client.get(f"/api/runs/{run_id}/previews/1")
+
+    for response in (download, preview):
+        assert response.status_code == 200
+        _assert_crawler_headers(response)
 
 
 def test_every_page_of_the_document_is_reachable_in_the_preview(

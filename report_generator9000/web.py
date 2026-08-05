@@ -3,13 +3,14 @@ from __future__ import annotations
 import json
 import shutil
 import tempfile
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from pathlib import Path
 from xml.etree.ElementTree import ParseError
 from zipfile import BadZipFile
 
-from fastapi import FastAPI, File, HTTPException, Response, UploadFile
-from fastapi.responses import FileResponse
+from fastapi import FastAPI, File, HTTPException, Request, Response, UploadFile
+from fastapi.responses import FileResponse, PlainTextResponse
 from pydantic import BaseModel
 
 from .control_sheet import (
@@ -35,6 +36,10 @@ from .sheet_store import SheetStore, default_sheet_store
 
 
 DEFAULT_STATIC_DIR = Path(__file__).with_name("web_dist")
+
+_ROBOTS_TXT = "User-agent: *\nDisallow: /\n"
+_X_ROBOTS_TAG = "noindex, nofollow"
+_REFERRER_POLICY = "no-referrer"
 
 _NOT_XLSX_DETAIL = "Este arquivo não é uma planilha .xlsx que possamos ler."
 _MISSING_WORKSHEET_DETAIL = "A planilha não tem a aba “LV e Site”."
@@ -466,6 +471,20 @@ def create_app(
     app = FastAPI(title="Relatórios SEBRAETEC")
     store = sheet_store if sheet_store is not None else default_sheet_store()
     app.state.run_service = default_run_service()
+
+    @app.middleware("http")
+    async def _crawler_headers(
+        request: Request,
+        call_next: Callable[[Request], Awaitable[Response]],
+    ) -> Response:
+        response = await call_next(request)
+        response.headers["X-Robots-Tag"] = _X_ROBOTS_TAG
+        response.headers["Referrer-Policy"] = _REFERRER_POLICY
+        return response
+
+    @app.get("/robots.txt")
+    def robots_txt() -> PlainTextResponse:
+        return PlainTextResponse(_ROBOTS_TXT)
 
     @app.get("/api/health")
     def health() -> dict[str, str]:
