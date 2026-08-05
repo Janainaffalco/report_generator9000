@@ -8,6 +8,28 @@ permissions:
   contents: read
 
 jobs:
+  shell:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          package_json_file: web/package.json
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: pnpm
+          cache-dependency-path: web/pnpm-lock.yaml
+      - working-directory: web
+        run: pnpm install --frozen-lockfile
+      - working-directory: web
+        run: pnpm build
+      - uses: actions/upload-artifact@v4
+        with:
+          name: web-shell
+          path: report_generator9000/web_dist
+          if-no-files-found: error
+
   web:
     runs-on: ubuntu-latest
     steps:
@@ -26,13 +48,16 @@ jobs:
         run: pnpm test
       - working-directory: web
         run: pnpm lint
-      - working-directory: web
-        run: pnpm build
 
   python:
     runs-on: ubuntu-latest
+    needs: shell
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: web-shell
+          path: report_generator9000/web_dist
       - uses: actions/setup-python@v5
         with:
           python-version: "3.13"

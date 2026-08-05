@@ -24,3 +24,14 @@ def test_container_build_does_not_wait_for_tests() -> None:
     )
 
     assert "\n    needs: test\n" not in workflow
+
+
+def test_python_job_receives_the_built_frontend_shell() -> None:
+    workflow = (ROOT / ".github" / "workflows" / "tests.yml").read_text(
+        "utf-8"
+    )
+
+    assert "actions/upload-artifact@v4" in workflow
+    assert "actions/download-artifact@v4" in workflow
+    assert "name: web-shell" in workflow
+    assert "path: report_generator9000/web_dist" in workflow
