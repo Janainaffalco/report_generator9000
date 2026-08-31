@@ -10,8 +10,19 @@ from xml.etree.ElementTree import ParseError
 from zipfile import BadZipFile
 
 from fastapi import FastAPI, File, HTTPException, Request, Response, UploadFile
-from fastapi.responses import FileResponse, PlainTextResponse
+from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse
 from pydantic import BaseModel
+
+from .auth import (
+    UNAUTHENTICATED_DETAIL,
+    clear_session_cookie,
+    is_public_path,
+    login_failed_detail,
+    passwords_match,
+    request_is_authenticated,
+    resolve_password,
+    set_session_cookie,
+)
 
 from .control_sheet import (
     CONTROL_SHEET_NAME,
@@ -144,6 +155,10 @@ _GATE_LABELS = {
     "block-integrity": "Todo título de Bloco tem sua imagem",
     "pendencias-agreement": "A lista de Pendências bate com o documento",
 }
+
+
+class LoginRequest(BaseModel):
+    password: str
 
 
 class RowRef(BaseModel):
@@ -467,10 +482,23 @@ def create_app(
     *,
     static_dir: Path = DEFAULT_STATIC_DIR,
     sheet_store: SheetStore | None = None,
+    app_password: str | None = None,
 ) -> FastAPI:
     app = FastAPI(title="Relatórios SEBRAETEC")
     store = sheet_store if sheet_store is not None else default_sheet_store()
     app.state.run_service = default_run_service()
+    app.state.app_password = resolve_password(app_password)
+
+    @app.middleware("http")
+    async def _require_session(
+        request: Request,
+        call_next: Callable[[Request], Awaitable[Response]],
+    ) -> Response:
+        if is_public_path(request.url.path):
+            return await call_next(request)
+        if request_is_authenticated(request, app.state.app_password):
+            return await call_next(request)
+        return JSONResponse({"detail": UNAUTHENTICATED_DETAIL}, status_code=401)
 
     @app.middleware("http")
     async def _crawler_headers(
@@ -488,6 +516,25 @@ def create_app(
 
     @app.get("/api/health")
     def health() -> dict[str, str]:
+        return {"status": "ok"}
+
+    @app.post("/api/login")
+    def login(body: LoginRequest) -> Response:
+        secret = app.state.app_password
+        if not passwords_match(body.password, secret):
+            raise HTTPException(401, login_failed_detail())
+        response = Response(status_code=204)
+        set_session_cookie(response, secret)
+        return response
+
+    @app.post("/api/logout")
+    def logout() -> Response:
+        response = Response(status_code=204)
+        clear_session_cookie(response)
+        return response
+
+    @app.get("/api/session")
+    def session() -> dict[str, str]:
         return {"status": "ok"}
 
     @app.post("/api/control-sheet")

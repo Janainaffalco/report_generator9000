@@ -1,21 +1,27 @@
 import "@testing-library/jest-dom/vitest"
 
 import { cleanup, render, screen } from "@testing-library/react"
-import { afterEach, describe, expect, it } from "vitest"
+import { afterEach, describe, expect, it, vi } from "vitest"
 
 import { App, currentStage } from "@/App"
+
+vi.mock("@/lib/session", () => ({
+  getSession: vi.fn(async () => true),
+  login: vi.fn(),
+  logout: vi.fn(),
+}))
 
 describe("upload shell", () => {
   afterEach(() => {
     cleanup()
   })
 
-  it("presents the approved first-stage structure and honest delivery copy", () => {
+  it("presents the approved first-stage structure and honest delivery copy", async () => {
     window.history.replaceState({}, "", "/enviar")
     render(<App />)
 
     expect(
-      screen.getByText("Gerador de Relatórios SEBRAETEC")
+      await screen.findByText("Gerador de Relatórios SEBRAETEC")
     ).toBeInTheDocument()
     expect(
       screen.queryByText("sem cadastro · sem senha")
@@ -60,12 +66,12 @@ describe("upload shell", () => {
     ).toBeInTheDocument()
   })
 
-  it("points the first stepper step at the root path, not the drop-area route", () => {
+  it("points the first stepper step at the root path, not the drop-area route", async () => {
     window.history.replaceState({}, "", "/enviar")
     render(<App />)
 
     expect(
-      screen.getByRole("link", { name: "1·Enviar planilha" })
+      await screen.findByRole("link", { name: "1·Enviar planilha" })
     ).toHaveAttribute("href", "/")
   })
 })

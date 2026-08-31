@@ -83,12 +83,13 @@ GEMINI_FALLBACK_MODEL=gemini-3.5-flash-lite
 GEMINI_OUTPUT_BUDGET=1024
 GEMINI_TIMEOUT_SECONDS=60
 GEMINI_MAX_ATTEMPTS=3
+REPORT_APP_PASSWORD=COLOQUE_A_SENHA_COMPARTILHADA_AQUI
 REPORT_DATA_ROOT=/app/data
 REPORT_GATED_DROP_ROOT=/app/data/gated
 REPORT_LOG_LEVEL=INFO
 ```
 
-`GEMINI_API_KEY` é segredo de **runtime**: deixe **Build Variable desmarcado**.
+`GEMINI_API_KEY` e `REPORT_APP_PASSWORD` são segredos de **runtime**: deixe **Build Variable desmarcado**. Sem `REPORT_APP_PASSWORD` a aplicação não entrega planilhas, Runs nem downloads — o healthcheck continua respondendo.
 Nenhuma variável dessa lista é necessária durante o build. Se os modelos
 configurados não estiverem liberados para a chave da demo, troque-os por IDs
 estáveis disponíveis nessa conta; não use aliases preview, experimental ou

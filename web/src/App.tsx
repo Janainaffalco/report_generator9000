@@ -10,6 +10,7 @@ import {
 
 import { BatchGeneration } from "@/components/BatchGeneration"
 import { GenerationRun } from "@/components/GenerationRun"
+import { LoginForm } from "@/components/LoginForm"
 import { PastRuns } from "@/components/PastRuns"
 import { RetainedSheetPicker } from "@/components/RetainedSheetPicker"
 import { UploadPanel } from "@/components/UploadPanel"
@@ -31,6 +32,7 @@ import {
   startBatch,
   startRun,
 } from "@/lib/runs"
+import { getSession, logout } from "@/lib/session"
 import { cn } from "@/lib/utils"
 
 const stages = [
@@ -99,6 +101,9 @@ export function App() {
   const [restoringSheet, setRestoringSheet] = useState(
     window.location.pathname === "/"
   )
+  const [auth, setAuth] = useState<"checking" | "signed-out" | "signed-in">(
+    "checking"
+  )
 
   const activeStage = currentStage(
     pastRuns !== null
@@ -149,6 +154,15 @@ export function App() {
   }, [])
 
   useEffect(() => {
+    void getSession().then((ok) => {
+      setAuth(ok ? "signed-in" : "signed-out")
+    })
+  }, [])
+
+  useEffect(() => {
+    if (auth !== "signed-in") {
+      return
+    }
     const match = window.location.pathname.match(/^\/relatorios\/([^/]+)$/)
     if (match) {
       void getRun(match[1]).then((result) => {
@@ -179,9 +193,12 @@ export function App() {
         setErrorDetail(result.ok ? null : result.detail)
       })
     }
-  }, [refreshBatch, refreshPastRuns, refreshRun])
+  }, [auth, refreshBatch, refreshPastRuns, refreshRun])
 
   useEffect(() => {
+    if (auth !== "signed-in") {
+      return
+    }
     if (window.location.pathname !== "/") {
       return
     }
@@ -204,7 +221,7 @@ export function App() {
       }
       setRestoringSheet(false)
     })
-  }, [])
+  }, [auth])
 
   useEffect(() => {
     if (!run || run.outcome !== "running") {
@@ -327,6 +344,18 @@ export function App() {
     window.history.pushState({}, "", "/relatorios")
   }
 
+  async function handleLogout() {
+    await logout()
+    setAuth("signed-out")
+    setControlSheet(null)
+    setRun(null)
+    setBatch(null)
+    setPastRuns(null)
+    setRetainedSheets([])
+    setErrorDetail(null)
+    setRestoringSheet(false)
+  }
+
   async function handleOpenPastRun(pastRun: PastRun) {
     setStatus("loading")
     setErrorDetail(null)
@@ -349,7 +378,7 @@ export function App() {
             Gerador de Relatórios SEBRAETEC
           </span>
           <div className="flex shrink-0 flex-wrap items-center justify-start gap-3 sm:flex-nowrap sm:justify-end sm:gap-4">
-            {batch && (
+            {auth === "signed-in" && batch && (
               <Button
                 className="batch-jump"
                 aria-current={!run ? "page" : undefined}
@@ -373,19 +402,27 @@ export function App() {
                 </span>
               </Button>
             )}
-            <Button
-              variant="secondary"
-              aria-current={pastRuns !== null ? "page" : undefined}
-              onClick={() => void handleOpenHistory()}
-            >
-              Relatórios anteriores
-            </Button>
-            <a className={buttonVariants({ variant: "ghost" })} href="/enviar">
-              Começar de novo
-            </a>
+            {auth === "signed-in" && (
+              <>
+                <Button
+                  variant="secondary"
+                  aria-current={pastRuns !== null ? "page" : undefined}
+                  onClick={() => void handleOpenHistory()}
+                >
+                  Relatórios anteriores
+                </Button>
+                <a className={buttonVariants({ variant: "ghost" })} href="/enviar">
+                  Começar de novo
+                </a>
+                <Button variant="ghost" onClick={() => void handleLogout()}>
+                  Sair
+                </Button>
+              </>
+            )}
           </div>
         </div>
 
+        {auth === "signed-in" && (
         <nav
           aria-label="Etapas da geração"
           className="mx-auto w-full max-w-(--container-max) px-8"
@@ -421,10 +458,17 @@ export function App() {
             ))}
           </ol>
         </nav>
+        )}
       </header>
 
       <main className="mx-auto flex w-full max-w-(--container-max) min-w-0 flex-1 flex-col items-center px-8 py-14">
-        {pastRuns !== null ? (
+        {auth === "checking" ? (
+          <p role="status" className="mt-10 text-sm text-muted-foreground">
+            Verificando o acesso…
+          </p>
+        ) : auth === "signed-out" ? (
+          <LoginForm onSignedIn={() => setAuth("signed-in")} />
+        ) : pastRuns !== null ? (
           <PastRuns
             runs={pastRuns}
             errorDetail={errorDetail}

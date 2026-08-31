@@ -12,6 +12,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 
 import { App } from "@/App"
 import type { ControlSheetResponse } from "@/lib/control-sheet"
+
+vi.mock("@/lib/session", () => ({
+  getSession: vi.fn(async () => true),
+  login: vi.fn(),
+  logout: vi.fn(),
+}))
 import type { BatchResponse, RunResponse } from "@/lib/runs"
 
 function jsonResponse(status: number, body: unknown) {
@@ -267,7 +273,7 @@ describe("control sheet upload", () => {
 
     render(<App />)
 
-    const input = screen.getByLabelText("Arquivo de planilha")
+    const input = await screen.findByLabelText("Arquivo de planilha")
     fireEvent.change(input, { target: { files: [makeFile()] } })
 
     await screen.findByText("Pronto para gerar")
@@ -288,7 +294,7 @@ describe("control sheet upload", () => {
 
     render(<App />)
 
-    const dropzone = screen.getByTestId("control-sheet-dropzone")
+    const dropzone = await screen.findByTestId("control-sheet-dropzone")
     fireEvent.drop(dropzone, {
       dataTransfer: { files: [makeFile()] },
     })
@@ -307,7 +313,7 @@ describe("control sheet upload", () => {
 
     render(<App />)
 
-    const input = screen.getByLabelText("Arquivo de planilha")
+    const input = await screen.findByLabelText("Arquivo de planilha")
     fireEvent.change(input, { target: { files: [makeFile()] } })
 
     const status = await screen.findByRole("status")
@@ -325,7 +331,7 @@ describe("control sheet upload", () => {
     vi.mocked(fetch).mockResolvedValueOnce(jsonResponse(200, fixture))
 
     render(<App />)
-    fireEvent.change(screen.getByLabelText("Arquivo de planilha"), {
+    fireEvent.change(await screen.findByLabelText("Arquivo de planilha"), {
       target: { files: [makeFile()] },
     })
 
@@ -351,7 +357,7 @@ describe("control sheet upload", () => {
     vi.mocked(fetch).mockResolvedValueOnce(jsonResponse(200, fixture))
 
     render(<App />)
-    fireEvent.change(screen.getByLabelText("Arquivo de planilha"), {
+    fireEvent.change(await screen.findByLabelText("Arquivo de planilha"), {
       target: { files: [makeFile()] },
     })
     await screen.findByRole("heading", { name: "Demandas da planilha" })
@@ -387,7 +393,7 @@ describe("control sheet upload", () => {
     vi.mocked(fetch).mockResolvedValueOnce(jsonResponse(200, fixture))
 
     render(<App />)
-    fireEvent.change(screen.getByLabelText("Arquivo de planilha"), {
+    fireEvent.change(await screen.findByLabelText("Arquivo de planilha"), {
       target: { files: [makeFile()] },
     })
     await screen.findByRole("heading", { name: "Demandas da planilha" })
@@ -427,7 +433,7 @@ describe("control sheet upload", () => {
     vi.mocked(fetch).mockResolvedValueOnce(jsonResponse(200, fixture))
 
     render(<App />)
-    fireEvent.change(screen.getByLabelText("Arquivo de planilha"), {
+    fireEvent.change(await screen.findByLabelText("Arquivo de planilha"), {
       target: { files: [makeFile()] },
     })
     await screen.findByText("Pronto para gerar")
@@ -494,7 +500,7 @@ describe("control sheet upload", () => {
     vi.mocked(fetch).mockResolvedValueOnce(jsonResponse(200, fixture))
 
     render(<App />)
-    fireEvent.change(screen.getByLabelText("Arquivo de planilha"), {
+    fireEvent.change(await screen.findByLabelText("Arquivo de planilha"), {
       target: { files: [makeFile()] },
     })
     await screen.findByText("Pronto para gerar")
@@ -525,7 +531,7 @@ describe("control sheet upload", () => {
       .mockResolvedValueOnce(jsonResponse(202, runningFixture))
 
     render(<App />)
-    fireEvent.change(screen.getByLabelText("Arquivo de planilha"), {
+    fireEvent.change(await screen.findByLabelText("Arquivo de planilha"), {
       target: { files: [makeFile()] },
     })
     await screen.findByText("Pronto para gerar")
@@ -566,7 +572,7 @@ describe("control sheet upload", () => {
       .mockResolvedValueOnce(jsonResponse(202, batchFixture))
 
     render(<App />)
-    fireEvent.change(screen.getByLabelText("Arquivo de planilha"), {
+    fireEvent.change(await screen.findByLabelText("Arquivo de planilha"), {
       target: { files: [makeFile()] },
     })
     await screen.findByText("Pronto para gerar")
@@ -610,7 +616,7 @@ describe("control sheet upload", () => {
       )
 
     render(<App />)
-    fireEvent.change(screen.getByLabelText("Arquivo de planilha"), {
+    fireEvent.change(await screen.findByLabelText("Arquivo de planilha"), {
       target: { files: [makeFile()] },
     })
     await screen.findByText("Pronto para gerar")
@@ -632,7 +638,7 @@ describe("control sheet upload", () => {
     vi.mocked(fetch).mockResolvedValueOnce(jsonResponse(200, fixture))
 
     render(<App />)
-    fireEvent.change(screen.getByLabelText("Arquivo de planilha"), {
+    fireEvent.change(await screen.findByLabelText("Arquivo de planilha"), {
       target: { files: [makeFile()] },
     })
     await screen.findByText("Não dá para gerar")
@@ -671,7 +677,7 @@ describe("control sheet upload", () => {
     vi.mocked(fetch).mockResolvedValueOnce(jsonResponse(200, fixture))
 
     render(<App />)
-    fireEvent.change(screen.getByLabelText("Arquivo de planilha"), {
+    fireEvent.change(await screen.findByLabelText("Arquivo de planilha"), {
       target: { files: [makeFile()] },
     })
     await screen.findByText("Ainda não suportado")
@@ -720,7 +726,7 @@ describe("control sheet upload", () => {
     vi.mocked(fetch).mockResolvedValueOnce(jsonResponse(200, zeroEngagements))
 
     render(<App />)
-    fireEvent.change(screen.getByLabelText("Arquivo de planilha"), {
+    fireEvent.change(await screen.findByLabelText("Arquivo de planilha"), {
       target: { files: [makeFile()] },
     })
 
@@ -742,7 +748,7 @@ describe("control sheet upload", () => {
     )
 
     render(<App />)
-    fireEvent.change(screen.getByLabelText("Arquivo de planilha"), {
+    fireEvent.change(await screen.findByLabelText("Arquivo de planilha"), {
       target: { files: [makeFile("errado.xlsx")] },
     })
 
@@ -753,7 +759,7 @@ describe("control sheet upload", () => {
     ).toBeEnabled()
 
     vi.mocked(fetch).mockResolvedValueOnce(jsonResponse(200, fixture))
-    fireEvent.change(screen.getByLabelText("Arquivo de planilha"), {
+    fireEvent.change(await screen.findByLabelText("Arquivo de planilha"), {
       target: { files: [makeFile()] },
     })
 
@@ -767,7 +773,7 @@ describe("control sheet upload", () => {
     vi.mocked(fetch).mockResolvedValueOnce(jsonResponse(200, fixture))
 
     render(<App />)
-    fireEvent.change(screen.getByLabelText("Arquivo de planilha"), {
+    fireEvent.change(await screen.findByLabelText("Arquivo de planilha"), {
       target: { files: [makeFile()] },
     })
     await screen.findByText("Pronto para gerar")
@@ -807,7 +813,7 @@ describe("control sheet upload", () => {
     vi.mocked(fetch).mockResolvedValueOnce(jsonResponse(200, fixture))
 
     render(<App />)
-    fireEvent.change(screen.getByLabelText("Arquivo de planilha"), {
+    fireEvent.change(await screen.findByLabelText("Arquivo de planilha"), {
       target: { files: [makeFile()] },
     })
     await screen.findByText("Pronto para gerar")
@@ -839,7 +845,7 @@ describe("control sheet upload", () => {
     vi.mocked(fetch).mockResolvedValueOnce(jsonResponse(200, fixture))
 
     render(<App />)
-    fireEvent.change(screen.getByLabelText("Arquivo de planilha"), {
+    fireEvent.change(await screen.findByLabelText("Arquivo de planilha"), {
       target: { files: [makeFile()] },
     })
     await screen.findByText("Pronto para gerar")

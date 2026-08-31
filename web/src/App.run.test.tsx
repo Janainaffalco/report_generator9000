@@ -12,6 +12,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import { App } from "@/App"
 import type { BatchResponse, RunResponse } from "@/lib/runs"
 
+vi.mock("@/lib/session", () => ({
+  getSession: vi.fn(async () => true),
+  login: vi.fn(),
+  logout: vi.fn(),
+}))
+
 function response(body: unknown, status = 200) {
   return {
     ok: status >= 200 && status < 300,

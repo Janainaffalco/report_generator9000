@@ -27,6 +27,8 @@ from report_generator9000.control_sheet import Engagement
 from report_generator9000.runs import GateRejected, RunService, RunStore, STAGES
 from report_generator9000.web import DEFAULT_STATIC_DIR, create_app
 
+TEST_APP_PASSWORD = "test-shared-password"
+
 
 sys.path.insert(0, str(Path(__file__).with_name("fixtures")))
 import generate_control_sheet  # noqa: E402
@@ -47,9 +49,27 @@ def _assert_crawler_headers(response) -> None:
     assert response.headers["referrer-policy"] == "no-referrer"
 
 
+def _create_app(**kwargs):
+    kwargs.setdefault("app_password", TEST_APP_PASSWORD)
+    return create_app(**kwargs)
+
+
+def _login(client: TestClient, password: str = TEST_APP_PASSWORD) -> None:
+    response = client.post("/api/login", json={"password": password})
+    assert response.status_code == 204, response.text
+
+
+def _authed_client(app) -> TestClient:
+    client = TestClient(app)
+    _login(client)
+    return client
+
+
 def _client(tmp_path: Path) -> TestClient:
     store = SheetStore(tmp_path / "sheets")
-    return TestClient(create_app(static_dir=tmp_path / "missing-web", sheet_store=store))
+    return _authed_client(
+        _create_app(static_dir=tmp_path / "missing-web", sheet_store=store)
+    )
 
 
 def _set_uploaded_at(
@@ -588,16 +608,16 @@ def test_uploaded_sheet_is_retrievable_after_sheet_store_restarts(
     tmp_path: Path,
 ) -> None:
     sheet_directory = tmp_path / "sheets"
-    first_client = TestClient(
-        create_app(
+    first_client = _authed_client(
+        _create_app(
             static_dir=tmp_path / "missing-web",
             sheet_store=SheetStore(sheet_directory),
         )
     )
     uploaded = _upload(first_client, FIXTURE, "controle julho.xlsx")
 
-    restarted_client = TestClient(
-        create_app(
+    restarted_client = _authed_client(
+        _create_app(
             static_dir=tmp_path / "missing-web",
             sheet_store=SheetStore(sheet_directory),
         )
@@ -615,8 +635,8 @@ def test_retained_sheet_rows_are_rederived_from_the_workbook_on_every_read(
     tmp_path: Path,
 ) -> None:
     sheet_directory = tmp_path / "sheets"
-    client = TestClient(
-        create_app(
+    client = _authed_client(
+        _create_app(
             static_dir=tmp_path / "missing-web",
             sheet_store=SheetStore(sheet_directory),
         )
@@ -645,8 +665,8 @@ def test_retained_sheet_listing_is_most_recent_first_with_ready_counts(
     sheet_directory = tmp_path / "sheets"
     static_directory = tmp_path / "missing-web"
     static_directory.mkdir()
-    client = TestClient(
-        create_app(
+    client = _authed_client(
+        _create_app(
             static_dir=static_directory,
             sheet_store=SheetStore(sheet_directory),
         )
@@ -689,8 +709,8 @@ def test_seven_day_sheet_boundary_is_enforced_from_stored_upload_time(
     tmp_path: Path,
 ) -> None:
     sheet_directory = tmp_path / "sheets"
-    client = TestClient(
-        create_app(
+    client = _authed_client(
+        _create_app(
             static_dir=tmp_path / "missing-web",
             sheet_store=SheetStore(sheet_directory),
         )
@@ -900,7 +920,7 @@ def test_starting_one_engagement_returns_immediately_then_polls_and_downloads(
     tmp_path: Path,
 ) -> None:
     sheet_store = SheetStore(tmp_path / "sheets")
-    app = create_app(
+    app = _create_app(
         static_dir=tmp_path / "missing-web",
         sheet_store=sheet_store,
     )
@@ -940,7 +960,7 @@ def test_starting_one_engagement_returns_immediately_then_polls_and_downloads(
         no_llm=True,
     )
     app.state.run_service = service
-    client = TestClient(app)
+    client = _authed_client(app)
     uploaded = _upload(client, FIXTURE)
 
     started_at = monotonic()
@@ -1001,7 +1021,7 @@ def test_batch_runs_sequentially_and_isolates_stop_and_gate_failures(
     tmp_path: Path,
 ) -> None:
     sheet_store = SheetStore(tmp_path / "sheets")
-    app = create_app(
+    app = _create_app(
         static_dir=tmp_path / "missing-web",
         sheet_store=sheet_store,
     )
@@ -1058,7 +1078,7 @@ def test_batch_runs_sequentially_and_isolates_stop_and_gate_failures(
         no_llm=True,
     )
     app.state.run_service = service
-    client = TestClient(app)
+    client = _authed_client(app)
     uploaded = _upload(client, FIXTURE).json()
     row_numbers = [
         engagement["row"]["row_number"]
@@ -1123,7 +1143,7 @@ def test_failed_runs_name_the_terminal_outcome_and_never_offer_a_document(
     outcome: str,
 ) -> None:
     sheet_store = SheetStore(tmp_path / "sheets")
-    app = create_app(
+    app = _create_app(
         static_dir=tmp_path / "missing-web",
         sheet_store=sheet_store,
     )
@@ -1141,7 +1161,7 @@ def test_failed_runs_name_the_terminal_outcome_and_never_offer_a_document(
         no_llm=True,
     )
     app.state.run_service = service
-    client = TestClient(app)
+    client = _authed_client(app)
     uploaded = _upload(client, FIXTURE)
     started = client.post(
         "/api/runs",
@@ -1182,7 +1202,7 @@ def test_http_run_drives_real_workbook_master_cloning_and_gates(
         tmp_path / "master",
     ).master
     sheet_store = SheetStore(tmp_path / "sheets")
-    app = create_app(
+    app = _create_app(
         static_dir=tmp_path / "missing-web",
         sheet_store=sheet_store,
     )
@@ -1195,7 +1215,7 @@ def test_http_run_drives_real_workbook_master_cloning_and_gates(
         prose_config=ProseConfig("test-provider", 200),
     )
     app.state.run_service = service
-    client = TestClient(app)
+    client = _authed_client(app)
 
     with serve_fixture_site() as origin:
         workbook = generate_control_sheet.build(
@@ -1264,7 +1284,7 @@ def test_http_run_drives_real_workbook_master_cloning_and_gates(
 def test_expired_run_is_gone_even_when_no_new_run_was_submitted(
     tmp_path: Path,
 ) -> None:
-    app = create_app(
+    app = _create_app(
         static_dir=tmp_path / "missing-web",
         sheet_store=SheetStore(tmp_path / "sheets"),
     )
@@ -1296,7 +1316,7 @@ def test_expired_run_is_gone_even_when_no_new_run_was_submitted(
     payload["updated_at"] = (datetime.now(UTC) - timedelta(days=8)).isoformat()
     path.write_text(json.dumps(payload), encoding="utf-8")
 
-    client = TestClient(app)
+    client = _authed_client(app)
     assert client.get(f"/api/runs/{record.run_id}").status_code == 404
     assert client.get(f"/api/runs/{record.run_id}/download").status_code == 404
     assert not path.exists()
@@ -1306,7 +1326,7 @@ def test_expired_run_is_gone_even_when_no_new_run_was_submitted(
 def test_past_runs_lists_finished_reports_and_removes_expired_directories(
     tmp_path: Path,
 ) -> None:
-    app = create_app(
+    app = _create_app(
         static_dir=tmp_path / "missing-web",
         sheet_store=SheetStore(tmp_path / "sheets"),
     )
@@ -1393,7 +1413,7 @@ def test_past_runs_lists_finished_reports_and_removes_expired_directories(
     expired_gated = tmp_path / "gated" / expired_directory.name
     expired_gated.mkdir(parents=True)
 
-    client = TestClient(app)
+    client = _authed_client(app)
     response = client.get("/api/runs")
 
     assert response.status_code == 200
@@ -1428,7 +1448,7 @@ def _finished_run_client(
     text_pages: dict[str, int] | None = None,
 ) -> tuple[TestClient, str]:
     sheet_store = SheetStore(tmp_path / "sheets")
-    app = create_app(static_dir=tmp_path / "missing-web", sheet_store=sheet_store)
+    app = _create_app(static_dir=tmp_path / "missing-web", sheet_store=sheet_store)
 
     def assemble(master, output_root, engagement, gated_root, **options):
         progress = options["progress"]
@@ -1486,7 +1506,7 @@ def _finished_run_client(
         no_llm=True,
     )
     app.state.run_service = service
-    client = TestClient(app)
+    client = _authed_client(app)
     uploaded = _upload(client, FIXTURE)
     started = client.post(
         "/api/runs",
@@ -1677,7 +1697,7 @@ def test_gated_attachment_is_validated_written_and_starts_a_full_rerun(
 
 def test_report_endpoint_404s_before_the_run_finishes(tmp_path: Path) -> None:
     sheet_store = SheetStore(tmp_path / "sheets")
-    app = create_app(static_dir=tmp_path / "missing-web", sheet_store=sheet_store)
+    app = _create_app(static_dir=tmp_path / "missing-web", sheet_store=sheet_store)
     release = Event()
 
     def assemble(master, output_root, engagement, gated_root, **options):
@@ -1695,7 +1715,7 @@ def test_report_endpoint_404s_before_the_run_finishes(tmp_path: Path) -> None:
         no_llm=True,
     )
     app.state.run_service = service
-    client = TestClient(app)
+    client = _authed_client(app)
     uploaded = _upload(client, FIXTURE)
     started = client.post(
         "/api/runs",
