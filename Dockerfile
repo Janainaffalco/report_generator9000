@@ -23,6 +23,17 @@ COPY pyproject.toml README.md ./
 COPY report_generator9000/ ./report_generator9000/
 COPY --from=frontend-builder /build/report_generator9000/web_dist ./report_generator9000/web_dist
 
+# LibreOffice renders the certified PDF and review pages from the same
+# generated DOCX -- Montserrat is installed system-wide so that render
+# matches the Master's typography instead of falling back to a substitute.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends libreoffice-writer-nogui \
+    && rm -rf /var/lib/apt/lists/* \
+    && mkdir -p /usr/local/share/fonts/montserrat
+
+COPY report_generator9000/assets/*.ttf /usr/local/share/fonts/montserrat/
+RUN fc-cache -f
+
 RUN python -m pip install --no-cache-dir --no-warn-script-location . \
     && mkdir -p /app/data \
     && chown -R pwuser:pwuser /app/data

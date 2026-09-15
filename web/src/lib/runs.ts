@@ -24,6 +24,7 @@ export interface RunResponse {
   filename: string | null
   reason: string | null
   download_url: string | null
+  pdf_download_url: string | null
 }
 
 export interface BatchResponse {
@@ -43,6 +44,8 @@ export interface PastRun {
   filename: string
   review_url: string
   download_url: string
+  pdf_download_url: string | null
+  pdf_filename: string | null
 }
 
 export type RunResult =

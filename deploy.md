@@ -3,22 +3,21 @@
 Este projeto deve ser publicado como **uma Application com build pack
 Dockerfile**. Não use Nixpacks, Static ou `compose.dev.yaml`: o `Dockerfile` de
 produção já compila o React, instala o backend Python e inclui o Chromium usado
-nas capturas.
+nas capturas e o LibreOffice headless usado para renderizar o PDF certificado e
+as páginas de prévia a partir dele.
 
 ## O que a demo entrega hoje
 
 - upload da planilha de controle;
 - seleção de um atendimento elegível;
 - geração assíncrona, sem interação durante o pipeline;
-- download do relatório em `.docx`.
-
-Esta versão ainda **não oferece prévia renderizada nem download em PDF**. Para a
-demo, apresente o `.docx` gerado e abra-o no Word após o download.
+- prévia renderizada a partir do PDF certificado, página a página;
+- download do relatório em `.docx` e em `.pdf`.
 
 ## Pré-requisitos
 
 - uma VPS com Coolify e pelo menos 2 vCPU, 4 GB de RAM e espaço livre para a
-  imagem Playwright/Chromium;
+  imagem Playwright/Chromium/LibreOffice;
 - acesso do Coolify ao repositório
   `seriouslyvictor/report_generator9000`;
 - uma chave válida do Gemini;

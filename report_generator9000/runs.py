@@ -95,6 +95,8 @@ class RunRecord:
     batch_position: int | None = None
     batch_size: int | None = None
     schema_version: int = 2
+    pdf: str | None = None
+    pdf_filename: str | None = None
 
 
 class RunStore:
@@ -370,12 +372,17 @@ class RunService:
                 str(path.resolve())
                 for path in sorted((directory / "previews").glob("*.png"))
             )
+            document_path = Path(matching[0].document or "")
+            pdf_path = document_path.with_suffix(".pdf")
+            pdf_exists = pdf_path.is_file()
             retained.append(
                 replace(
                     matching[0],
                     report_status=str(pendencias_document.get("status", "draft")),
                     pendencias=_pendencia_dicts(context.pendencias),
                     previews=previews,
+                    pdf=str(pdf_path.resolve()) if pdf_exists else None,
+                    pdf_filename=pdf_path.name if pdf_exists else None,
                 )
             )
         return tuple(
@@ -557,6 +564,16 @@ class RunService:
                 previews=tuple(
                     str(path.resolve()) for path in package.previews
                 ),
+                pdf=(
+                    str(package.pdf.resolve())
+                    if getattr(package, "pdf", None) is not None
+                    else None
+                ),
+                pdf_filename=(
+                    package.pdf.name
+                    if getattr(package, "pdf", None) is not None
+                    else None
+                ),
             )
         finally:
             if managed_provider is not None:
@@ -575,6 +592,8 @@ class RunService:
             completed_stages=current.completed_stages,
             document=None,
             filename=None,
+            pdf=None,
+            pdf_filename=None,
             reason=reason,
         )
 

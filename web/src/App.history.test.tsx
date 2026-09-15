@@ -30,6 +30,8 @@ const pastRun = {
   filename: "RELATÓRIO TÉCNICO FINAL - 40-2026_DENISE.docx",
   review_url: "/relatorios/past-run",
   download_url: "/api/runs/past-run/download",
+  pdf_download_url: "/api/runs/past-run/download/pdf",
+  pdf_filename: "RELATÓRIO TÉCNICO FINAL - 40-2026_DENISE.pdf",
 }
 
 beforeEach(() => {
@@ -62,6 +64,10 @@ it("lists retained reports with direct review and download actions", async () =>
     "href",
     pastRun.download_url
   )
+  expect(screen.getByRole("link", { name: "Baixar .pdf" })).toHaveAttribute(
+    "href",
+    pastRun.pdf_download_url
+  )
   expect(screen.getAllByText(/servidor por sete dias/i)).not.toHaveLength(0)
   expect(screen.getByText(/gerá-los novamente/i)).toBeInTheDocument()
   expect(screen.queryByText(/trinta dias/i)).not.toBeInTheDocument()
@@ -78,6 +84,19 @@ it("states plainly when there are no past reports", async () => {
   expect(
     await screen.findByText("Nenhum relatório anterior")
   ).toBeInTheDocument()
+})
+
+it("omits the PDF download when a past run has no rendered PDF", async () => {
+  vi.mocked(fetch).mockResolvedValueOnce(
+    response([{ ...pastRun, pdf_download_url: null, pdf_filename: null }])
+  )
+
+  render(<App />)
+
+  await screen.findByRole("link", { name: "Baixar .docx" })
+  expect(
+    screen.queryByRole("link", { name: "Baixar .pdf" })
+  ).not.toBeInTheDocument()
 })
 
 it("opens a past run in its review route", async () => {
@@ -98,6 +117,7 @@ it("opens a past run in its review route", async () => {
     filename: pastRun.filename,
     reason: null,
     download_url: pastRun.download_url,
+    pdf_download_url: pastRun.pdf_download_url,
   }
   vi.mocked(fetch)
     .mockResolvedValueOnce(response([pastRun]))

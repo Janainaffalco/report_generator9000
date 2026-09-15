@@ -229,6 +229,19 @@ function RunCard({
                 <DownloadIcon aria-hidden="true" />
                 Baixar relatório
               </a>
+              {run.pdf_download_url && (
+                <a
+                  className={cn(
+                    buttonVariants({ size: "sm", variant: "secondary" }),
+                    layout === "grid" && "flex-1"
+                  )}
+                  href={run.pdf_download_url}
+                  download
+                >
+                  <DownloadIcon aria-hidden="true" />
+                  Baixar PDF
+                </a>
+              )}
               <Button
                 size="sm"
                 variant="secondary"

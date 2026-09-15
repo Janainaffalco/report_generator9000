@@ -2,8 +2,8 @@
 
 Aplicação web que gera o `RELATÓRIO TÉCNICO FINAL` do SEBRAETEC. O fluxo de
 produção é executado sem interação durante a geração: enviar a planilha de
-controle, escolher um atendimento, revisar a prévia renderizada e baixar o
-arquivo `.docx`.
+controle, escolher um atendimento, revisar as páginas renderizadas do PDF
+certificado e baixar os arquivos `.docx` e `.pdf`.
 
 O Gemini é usado somente para os dois campos de prosa permitidos. Capturas,
 substituições, proveniência e gates continuam determinísticos.
@@ -23,7 +23,9 @@ docker run --rm --publish 8000:8000 --env-file .env report-generator9000
 ```
 
 A aplicação fica disponível em `http://localhost:8000`. A imagem contém o
-pipeline completo e o Chromium usado pelo Playwright. Nenhuma credencial é
+pipeline completo, o Chromium usado pelo Playwright e o LibreOffice headless
+usado para renderizar o PDF certificado e as páginas de prévia a partir dele.
+Nenhuma credencial é
 copiada durante o build; `.env.example` documenta o contrato de configuração.
 O Master aprovado faz parte da aplicação como um asset versionado e somente para
 leitura. Monte um volume persistente em `/app/data` para os Gated Drop Folders,

@@ -43,6 +43,7 @@ const running: RunResponse = {
   filename: null,
   reason: null,
   download_url: null,
+  pdf_download_url: null,
 }
 
 const retainedSheet = {

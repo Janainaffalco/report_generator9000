@@ -211,7 +211,7 @@ export function ReviewScreen({
             Página {currentPage} de {report.page_count}
           </p>
           <p className="max-w-md text-center text-xs text-muted-foreground">
-            Prévia aproximada da paginação — confira a paginação final no Word.
+            Páginas do PDF gerado a partir deste .docx.
           </p>
         </div>
 
@@ -231,12 +231,31 @@ export function ReviewScreen({
                     } antes do envio ao cliente.`}
               </p>
               <p className="text-sm font-medium">{report.filename}</p>
-              <a
-                className={cn(buttonVariants({ size: "lg" }), "self-start")}
-                href={report.download_url}
-              >
-                Baixar .docx
-              </a>
+              <p className="text-sm text-muted-foreground">
+                {report.page_count === 1
+                  ? "1 página"
+                  : `${report.page_count} páginas`}
+              </p>
+              <div className="flex flex-wrap gap-2">
+                <a
+                  className={cn(buttonVariants({ size: "lg" }))}
+                  href={report.download_url}
+                  download={report.filename}
+                >
+                  Baixar .docx
+                </a>
+                {report.pdf_download_url && (
+                  <a
+                    className={cn(
+                      buttonVariants({ size: "lg", variant: "secondary" })
+                    )}
+                    href={report.pdf_download_url}
+                    download={report.pdf_filename ?? undefined}
+                  >
+                    Baixar .pdf
+                  </a>
+                )}
+              </div>
             </CardContent>
           </Card>
 

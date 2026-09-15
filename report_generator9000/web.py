@@ -255,6 +255,7 @@ class RunResponse(BaseModel):
     filename: str | None
     reason: str | None
     download_url: str | None
+    pdf_download_url: str | None
 
 
 class BatchResponse(BaseModel):
@@ -274,6 +275,8 @@ class PastRunOut(BaseModel):
     filename: str
     review_url: str
     download_url: str
+    pdf_download_url: str | None
+    pdf_filename: str | None
 
 
 class PendenciaOut(BaseModel):
@@ -302,6 +305,8 @@ class FinishedReportResponse(BaseModel):
     page_count: int
     filename: str
     download_url: str
+    pdf_filename: str | None
+    pdf_download_url: str | None
     pendencias: list[PendenciaOut]
     checks: list[CheckOut]
 
@@ -338,6 +343,11 @@ def _run_response(record: RunRecord) -> RunResponse:
             if record.outcome == "finished" and record.document
             else None
         ),
+        pdf_download_url=(
+            f"/api/runs/{record.run_id}/download/pdf"
+            if record.outcome == "finished" and record.pdf
+            else None
+        ),
     )
 
 
@@ -351,6 +361,10 @@ def _report_response(record: RunRecord) -> FinishedReportResponse:
         page_count=len(record.previews),
         filename=record.filename or "",
         download_url=f"/api/runs/{record.run_id}/download",
+        pdf_filename=record.pdf_filename,
+        pdf_download_url=(
+            f"/api/runs/{record.run_id}/download/pdf" if record.pdf else None
+        ),
         pendencias=[
             PendenciaOut(
                 classification=item["classification"],
@@ -681,6 +695,12 @@ def create_app(
                 filename=record.filename or "",
                 review_url=f"/relatorios/{record.run_id}",
                 download_url=f"/api/runs/{record.run_id}/download",
+                pdf_download_url=(
+                    f"/api/runs/{record.run_id}/download/pdf"
+                    if record.pdf
+                    else None
+                ),
+                pdf_filename=record.pdf_filename,
             )
             for record in app.state.run_service.retained_runs()
         ]
@@ -714,6 +734,27 @@ def create_app(
                 "wordprocessingml.document"
             ),
             filename=record.filename,
+        )
+
+    @app.get("/api/runs/{run_id}/download/pdf")
+    def download_run_pdf(run_id: str) -> FileResponse:
+        record = app.state.run_service.store.get(run_id)
+        if (
+            record is None
+            or record.outcome != "finished"
+            or record.pdf is None
+            or record.pdf_filename is None
+        ):
+            raise HTTPException(
+                404, "Esta geração não tem um PDF para baixar."
+            )
+        pdf_path = Path(record.pdf)
+        if not pdf_path.is_file():
+            raise HTTPException(404, "O PDF desta geração expirou.")
+        return FileResponse(
+            pdf_path,
+            media_type="application/pdf",
+            filename=record.pdf_filename,
         )
 
     @app.get("/api/runs/{run_id}/report")

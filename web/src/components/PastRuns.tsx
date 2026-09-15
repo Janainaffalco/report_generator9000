@@ -114,6 +114,19 @@ export function PastRuns({
                       <DownloadIcon aria-hidden="true" className="size-4" />
                       Baixar .docx
                     </a>
+                    {run.pdf_download_url && (
+                      <a
+                        className={cn(
+                          buttonVariants({ variant: "secondary" }),
+                          "gap-2"
+                        )}
+                        href={run.pdf_download_url}
+                        download={run.pdf_filename ?? undefined}
+                      >
+                        <DownloadIcon aria-hidden="true" className="size-4" />
+                        Baixar .pdf
+                      </a>
+                    )}
                   </div>
                 </CardContent>
               </Card>

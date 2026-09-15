@@ -33,6 +33,7 @@ const run: RunResponse = {
   filename: "RELATÓRIO TÉCNICO FINAL - 40-2026_CLIENTE.docx",
   reason: null,
   download_url: "/api/runs/run-1/download",
+  pdf_download_url: "/api/runs/run-1/download/pdf",
 }
 
 afterEach(() => {
@@ -52,6 +53,8 @@ describe("ReviewScreen", () => {
           page_count: 5,
           filename: run.filename,
           download_url: run.download_url,
+          pdf_filename: "RELATÓRIO TÉCNICO FINAL - 40-2026_CLIENTE.pdf",
+          pdf_download_url: run.pdf_download_url,
           pendencias: [
             {
               classification: "GATED",
@@ -143,6 +146,8 @@ describe("ReviewScreen", () => {
           page_count: 4,
           filename: run.filename,
           download_url: run.download_url,
+          pdf_filename: "RELATÓRIO TÉCNICO FINAL - 40-2026_CLIENTE.pdf",
+          pdf_download_url: run.pdf_download_url,
           pendencias: [],
           checks: [
             {
@@ -172,6 +177,8 @@ describe("ReviewScreen", () => {
           page_count: 5,
           filename: run.filename,
           download_url: run.download_url,
+          pdf_filename: "RELATÓRIO TÉCNICO FINAL - 40-2026_CLIENTE.pdf",
+          pdf_download_url: run.pdf_download_url,
           pendencias: [],
           checks: [
             { label: "Os links apontam para o cliente certo", passed: true },
@@ -189,7 +196,11 @@ describe("ReviewScreen", () => {
     ).toBeInTheDocument()
     // The report resource's page_count is the document's own count.
     expect(screen.getByText("Página 1 de 5")).toBeInTheDocument()
-    expect(screen.getByText(/aproximada da paginação/i)).toBeInTheDocument()
+    expect(screen.queryByText(/aproximada da paginação/i)).not.toBeInTheDocument()
+    expect(
+      screen.getByText(/Páginas do PDF gerado a partir deste \.docx/i)
+    ).toBeInTheDocument()
+    expect(screen.getByText("5 páginas")).toBeInTheDocument()
 
     const pageButtons = screen.getAllByRole("button")
     expect(pageButtons).toHaveLength(5)
@@ -220,6 +231,8 @@ describe("ReviewScreen", () => {
             page_count: 1,
             filename: run.filename,
             download_url: run.download_url,
+            pdf_filename: "RELATÓRIO TÉCNICO FINAL - 40-2026_CLIENTE.pdf",
+            pdf_download_url: run.pdf_download_url,
             pendencias: [
               {
                 classification: "GATED",
@@ -271,5 +284,67 @@ describe("ReviewScreen", () => {
       "/api/runs/run-1/attachments",
       expect.objectContaining({ method: "POST" })
     )
+  })
+
+  it("offers both format downloads with correct hrefs and thumbnails matching the page count", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        response({
+          run_id: "run-1",
+          status: "complete",
+          page_count: 3,
+          filename: run.filename,
+          download_url: run.download_url,
+          pdf_filename: "RELATÓRIO TÉCNICO FINAL - 40-2026_CLIENTE.pdf",
+          pdf_download_url: "/api/runs/run-1/download/pdf",
+          pendencias: [],
+          checks: [],
+        })
+      )
+    )
+
+    render(<ReviewScreen run={run} />)
+
+    const docxLink = await screen.findByRole("link", { name: "Baixar .docx" })
+    expect(docxLink).toHaveAttribute("href", run.download_url)
+
+    const pdfLink = screen.getByRole("link", { name: "Baixar .pdf" })
+    expect(pdfLink).toHaveAttribute("href", "/api/runs/run-1/download/pdf")
+    expect(pdfLink).toHaveAttribute(
+      "download",
+      "RELATÓRIO TÉCNICO FINAL - 40-2026_CLIENTE.pdf"
+    )
+
+    expect(screen.getByText("3 páginas")).toBeInTheDocument()
+    const thumbnails = screen.getAllByRole("img", { name: /^Página \d+$/ })
+    expect(thumbnails).toHaveLength(3)
+  })
+
+  it("hides the PDF download when the run has no rendered PDF", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        response({
+          run_id: "run-1",
+          status: "complete",
+          page_count: 1,
+          filename: run.filename,
+          download_url: run.download_url,
+          pdf_filename: null,
+          pdf_download_url: null,
+          pendencias: [],
+          checks: [],
+        })
+      )
+    )
+
+    render(<ReviewScreen run={run} />)
+
+    await screen.findByRole("link", { name: "Baixar .docx" })
+    expect(
+      screen.queryByRole("link", { name: "Baixar .pdf" })
+    ).not.toBeInTheDocument()
+    expect(screen.getByText("1 página")).toBeInTheDocument()
   })
 })

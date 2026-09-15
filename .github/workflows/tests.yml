@@ -64,6 +64,8 @@ jobs:
           cache: pip
       - run: python -m pip install --upgrade pip
       - run: python -m pip install --editable . --group dev
+      - name: Install LibreOffice for real-renderer tests
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libreoffice-writer-nogui
       - name: Resolve Playwright version
         id: playwright-version
         shell: bash

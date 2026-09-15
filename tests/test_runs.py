@@ -10,6 +10,7 @@ from zipfile import ZipFile
 import pytest
 
 from report_generator9000.control_sheet import Engagement
+from report_generator9000.previews import RenderFailed, RenderRejected
 from report_generator9000.runs import (
     GateRejected,
     PACKAGED_MASTER_PATH,
@@ -185,6 +186,138 @@ def test_a_gate_rejection_stays_distinct_from_an_infrastructure_failure(
     finished = service.store.get(record.run_id)
     assert finished is not None
     assert finished.outcome == "rejected"
+
+
+def test_render_failure_marks_run_failed_with_no_document_or_pdf(
+    tmp_path: Path,
+) -> None:
+    """A render that breaks the pipeline is "failed", never "rejected" or
+    "finished" -- nothing was produced for a consultant to inspect, and no
+    stale document or PDF may linger on the record -- issue #47 item 3."""
+
+    def boom(*args, **options):
+        raise RenderFailed("soffice exploded rendering the PDF")
+
+    service = _service(tmp_path, boom)
+    record = service.submit(_engagement(), sheet_id="sheet-1")
+    service.shutdown()
+
+    finished = service.store.get(record.run_id)
+    assert finished is not None
+    assert finished.outcome == "failed"
+    assert finished.reason == "soffice exploded rendering the PDF"
+    assert finished.document is None
+    assert finished.filename is None
+    assert finished.pdf is None
+    assert finished.pdf_filename is None
+
+
+def test_render_rejection_marks_run_rejected(tmp_path: Path) -> None:
+    """Visual validation failing the render is a rejection, distinct from an
+    infrastructure failure -- something was produced and inspected, and
+    found defective -- issue #47 item 3."""
+
+    def rejected(*args, **options):
+        raise RenderRejected(
+            "STOP CONDITION: the rendered PDF has zero pages"
+        )
+
+    service = _service(tmp_path, rejected)
+    record = service.submit(_engagement(), sheet_id="sheet-1")
+    service.shutdown()
+
+    finished = service.store.get(record.run_id)
+    assert finished is not None
+    assert finished.outcome == "rejected"
+    assert finished.document is None
+    assert finished.pdf is None
+    assert finished.pdf_filename is None
+
+
+def test_expiring_the_output_directory_takes_the_pdf_and_previews_with_it(
+    tmp_path: Path, recording_sink
+) -> None:
+    """The PDF and preview pages belong to the same Pasta directory as the
+    DOCX, so the seven-day retention sweep that removes an expired Pasta
+    removes them too -- issue #47 item 4."""
+    output_root = tmp_path / "outputs"
+    document_dir = output_root / "old-run"
+    document_dir.mkdir(parents=True)
+    document = document_dir / "report.docx"
+    document.write_bytes(b"stale")
+    pdf = document_dir / "report.pdf"
+    pdf.write_bytes(b"%PDF-1.4 stale")
+    previews_dir = document_dir / "previews"
+    previews_dir.mkdir()
+    preview = previews_dir / "preview-001.png"
+    preview.write_bytes(b"stale preview")
+
+    store = RunStore(tmp_path / "runs")
+    record = store.create(_engagement(), sheet_id="sheet-1")
+    expired = replace(
+        record,
+        updated_at=(
+            datetime.now(UTC) - timedelta(days=30)
+        ).isoformat(),
+        document=str(document),
+        pdf=str(pdf),
+        pdf_filename="report.pdf",
+    )
+    store._write(expired)
+
+    def assemble(master, out_root, engagement, gated_root, **options):
+        raise AssertionError("assembler should not run in this test")
+
+    service = RunService(
+        store=store,
+        master=tmp_path / "MASTER.docx",
+        output_root=output_root,
+        gated_drop_root=tmp_path / "gated",
+        assembler=assemble,
+        no_llm=True,
+    )
+    service.submit(_engagement(), sheet_id="sheet-2")
+    service.shutdown()
+
+    assert not document_dir.exists()
+    assert not pdf.exists()
+    assert not preview.exists()
+
+
+def test_successful_run_records_pdf_alongside_the_document(
+    tmp_path: Path,
+) -> None:
+    pdf_path = tmp_path / "outputs" / "report.pdf"
+
+    def assemble(master, output_root, engagement, gated_root, **options):
+        progress = options["progress"]
+        for stage_name in STAGES:
+            progress(stage_name, 3 if stage_name == "derive_pages" else None)
+        document = output_root / "report.docx"
+        document.parent.mkdir(parents=True, exist_ok=True)
+        document.write_bytes(b"generated docx")
+        pdf_path.write_bytes(b"%PDF-1.4 fake")
+        return SimpleNamespace(
+            pages=(object(), object(), object()),
+            previews=(),
+            pdf=pdf_path,
+            report=SimpleNamespace(
+                status="draft",
+                document=document,
+                gate_report=SimpleNamespace(results=()),
+                context=SimpleNamespace(pendencias=()),
+            ),
+        )
+
+    service = _service(tmp_path, assemble)
+    record = service.submit(_engagement(), sheet_id="sheet-1")
+    service.shutdown()
+
+    finished = service.store.get(record.run_id)
+    assert finished is not None
+    assert finished.outcome == "finished"
+    assert finished.pdf == str(pdf_path.resolve())
+    assert finished.pdf_filename == "report.pdf"
 
 
 def test_worker_thread_events_carry_run_id(tmp_path, recording_sink) -> None:

@@ -41,7 +41,7 @@ from .logo import CLIENT_LOGO_PART, LogoCapture, capture_client_logo
 from .palette import PaletteCollectionError, derive_palette_from_site
 from .prose import ProseConfig, ProseProvider
 from .placeholders import render_placeholder, slot_pixel_dimensions
-from .previews import DocumentPreviewRenderer, PreviewRender, PreviewRenderer
+from .previews import OfficePreviewRenderer, PreviewRender, PreviewRenderer
 from .run_context import Pendencia
 from .tema import supported_contract
 
@@ -56,6 +56,7 @@ class OutputPackage:
     pages: tuple[Pagina, ...]
     capture_run: CaptureRun
     previews: tuple[Path, ...]
+    pdf: Path
     raw_captures: tuple[Path, ...]
     preview_render: PreviewRender | None
 
@@ -245,24 +246,16 @@ def _assemble_staged_package(
         report_progress("assemble")
 
     renderer = (
-        DocumentPreviewRenderer()
+        OfficePreviewRenderer()
         if preview_renderer is None
         else preview_renderer
     )
-    rendered_preview = renderer.render(
+    preview_render = renderer.render(
         generated.document,
         directory / "previews",
     )
-    preview_render = (
-        rendered_preview
-        if isinstance(rendered_preview, PreviewRender)
-        else None
-    )
-    previews = (
-        rendered_preview.pages
-        if preview_render is not None
-        else tuple(rendered_preview)
-    )
+    previews = preview_render.pages
+    pdf = preview_render.pdf
     raw_captures = tuple(
         [capture.raw_path.resolve() for capture in captures.captures]
         + [
@@ -281,6 +274,7 @@ def _assemble_staged_package(
         generated.context_document.resolve(),
         generated.pendencias_document.resolve(),
         generated.pendencias_json.resolve(),
+        pdf.resolve(),
         *previews,
         *raw_captures,
     )
@@ -306,6 +300,7 @@ def _assemble_staged_package(
         pages=pages,
         capture_run=captures,
         previews=previews,
+        pdf=pdf,
         raw_captures=raw_captures,
         preview_render=preview_render,
     )
@@ -355,6 +350,7 @@ def assemble_output_package(
         final_context_document = promoted(staged.report.context_document)
         final_pendencias_document = promoted(staged.report.pendencias_document)
         final_pendencias_json = promoted(staged.report.pendencias_json)
+        final_pdf = promoted(staged.pdf)
         final_previews = tuple(promoted(path) for path in staged.previews)
         final_raw_captures = tuple(
             promoted(path) for path in staged.raw_captures
@@ -382,6 +378,7 @@ def assemble_output_package(
                     final_context_document,
                     final_pendencias_document,
                     final_pendencias_json,
+                    final_pdf,
                     *final_previews,
                     *final_raw_captures,
                 )
@@ -450,6 +447,7 @@ def assemble_output_package(
             pages=staged.pages,
             capture_run=final_capture_run,
             previews=final_previews,
+            pdf=final_pdf,
             raw_captures=final_raw_captures,
             preview_render=staged.preview_render,
         )

@@ -15,6 +15,7 @@ dependencies = [
     "pydantic>=2.11,<3",
     "python-dotenv>=1.1,<2",
     "python-multipart>=0.0.32",
+    "pypdfium2>=4.30,<5",
     "uvicorn>=0.35,<1",
 ]
 

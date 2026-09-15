@@ -53,6 +53,7 @@ const base: RunResponse = {
   filename: null,
   reason: null,
   download_url: null,
+  pdf_download_url: null,
 }
 
 const retainedSheet = {
@@ -152,6 +153,7 @@ describe("resumable generation screens", () => {
       filename:
         "RELATÓRIO TÉCNICO FINAL - 40-2026_DENISE BARROS DE ALMEIDA.docx",
       download_url: "/api/runs/persisted-run/download",
+      pdf_download_url: "/api/runs/persisted-run/download/pdf",
     }
     const secondFinished: RunResponse = {
       ...finished,
@@ -163,6 +165,7 @@ describe("resumable generation screens", () => {
       },
       filename: "RELATÓRIO TÉCNICO FINAL - 41-2026_OUTRA EMPRESA LTDA.docx",
       download_url: "/api/runs/second-finished-run/download",
+      pdf_download_url: null,
     }
     const batch: BatchResponse = {
       batch_id: "finished-batch",
@@ -221,6 +224,9 @@ describe("resumable generation screens", () => {
     })
     expect(downloadLinks).toHaveLength(2)
     expect(downloadLinks[0]).toHaveAttribute("href", finished.download_url)
+    const pdfLinks = screen.getAllByRole("link", { name: "Baixar PDF" })
+    expect(pdfLinks).toHaveLength(1)
+    expect(pdfLinks[0]).toHaveAttribute("href", finished.pdf_download_url)
 
     const layoutControls = screen.getByRole("group", {
       name: "Layout da fila",

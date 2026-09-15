@@ -21,7 +21,11 @@ from report_generator9000.prose import (
     ProseResponse,
 )
 from report_generator9000.run_context import Pendencia
-from report_generator9000.previews import PreviewRender
+from report_generator9000.previews import (
+    PreviewRender,
+    RenderFailed,
+    RenderRejected,
+)
 from report_generator9000.sheet_store import SheetStore
 from report_generator9000.control_sheet import Engagement
 from report_generator9000.runs import GateRejected, RunService, RunStore, STAGES
@@ -1019,6 +1023,8 @@ def test_starting_one_engagement_returns_immediately_then_polls_and_downloads(
     assert download.content == b"generated docx"
     disposition = download.headers["content-disposition"]
     assert "40-2026_DENISE%20BARROS%20DE%20ALMEIDA.docx" in disposition
+    # This fake assembler never produced a PDF, so the run offers none.
+    assert finished["pdf_download_url"] is None
     service.shutdown()
 
 
@@ -1140,6 +1146,11 @@ def test_batch_runs_sequentially_and_isolates_stop_and_gate_failures(
     [
         (StopCondition("Capture Origin indisponÃ­vel"), "stopped"),
         (GateRejected("block-integrity recusou o documento"), "rejected"),
+        (RenderFailed("soffice explodiu ao converter para PDF"), "failed"),
+        (
+            RenderRejected("STOP CONDITION: PDF renderizado com zero páginas"),
+            "rejected",
+        ),
     ],
 )
 def test_failed_runs_name_the_terminal_outcome_and_never_offer_a_document(
@@ -1183,7 +1194,12 @@ def test_failed_runs_name_the_terminal_outcome_and_never_offer_a_document(
     assert record["reason"] == str(error)
     assert record["filename"] is None
     assert record["download_url"] is None
+    assert record["pdf_download_url"] is None
     assert client.get(f"/api/runs/{record['run_id']}/download").status_code == 404
+    assert (
+        client.get(f"/api/runs/{record['run_id']}/download/pdf").status_code
+        == 404
+    )
     service.shutdown()
 
 
@@ -1283,6 +1299,11 @@ def test_http_run_drives_real_workbook_master_cloning_and_gates(
     assert downloaded.status_code == 200
     assert downloaded.content[:2] == b"PK"
     assert "40-2026_CLIENTE.docx" in record["filename"]
+    assert record["pdf_download_url"]
+    pdf_downloaded = client.get(record["pdf_download_url"])
+    assert pdf_downloaded.status_code == 200
+    assert pdf_downloaded.content[:4] == b"%PDF"
+    assert pdf_downloaded.headers["content-type"] == "application/pdf"
     service.shutdown()
 
 
@@ -1363,6 +1384,8 @@ def test_past_runs_lists_finished_reports_and_removes_expired_directories(
         previews.mkdir(parents=True)
         document = directory / f"{name}.docx"
         document.write_bytes(b"PK report")
+        pdf = document.with_suffix(".pdf")
+        pdf.write_bytes(_TINY_PDF)
         preview_paths = tuple(previews / f"page-{page}.png" for page in (1, 2))
         for preview in preview_paths:
             preview.write_bytes(_TINY_PNG)
@@ -1374,6 +1397,8 @@ def test_past_runs_lists_finished_reports_and_removes_expired_directories(
             filename=document.name,
             document=str(document),
             previews=tuple(str(path) for path in preview_paths),
+            pdf=str(pdf),
+            pdf_filename=pdf.name,
         )
         timestamp = datetime.now(UTC) - age
         (directory / "run.json").write_text(
@@ -1411,6 +1436,8 @@ def test_past_runs_lists_finished_reports_and_removes_expired_directories(
         filename=retained.filename,
         document=retained.document,
         previews=retained.previews,
+        pdf=retained.pdf,
+        pdf_filename=retained.pdf_filename,
     )
     expired, expired_directory = finished_run(
         "expired", timedelta(days=7, minutes=1)
@@ -1434,13 +1461,24 @@ def test_past_runs_lists_finished_reports_and_removes_expired_directories(
             "filename": "retained.docx",
             "review_url": f"/relatorios/{retained.run_id}",
             "download_url": f"/api/runs/{retained.run_id}/download",
+            "pdf_download_url": f"/api/runs/{retained.run_id}/download/pdf",
+            "pdf_filename": "retained.pdf",
         }
     ]
     assert retained_directory.exists()
+    assert (retained_directory / "retained.pdf").exists()
     assert client.get(response.json()[0]["download_url"]).content == b"PK report"
+    assert (
+        client.get(response.json()[0]["pdf_download_url"]).content == _TINY_PDF
+    )
     assert not expired_directory.exists()
+    assert not (expired_directory / "expired.pdf").exists()
     assert not expired_gated.exists()
     assert store.get(expired.run_id) is None
+    assert (
+        client.get(f"/api/runs/{expired.run_id}/download/pdf").status_code
+        == 404
+    )
     service.shutdown()
 
 
@@ -1486,11 +1524,15 @@ def _finished_run_client(
         )
         for preview in previews:
             preview.write_bytes(_TINY_PNG)
+        pdf = document.with_suffix(".pdf")
+        pdf.write_bytes(_TINY_PDF)
         return SimpleNamespace(
             pages=(object(), object(), object()),
             previews=previews,
+            pdf=pdf,
             preview_render=PreviewRender(
                 pages=previews,
+                pdf=pdf,
                 media_pages=media_pages or {},
                 text_pages=text_pages or {},
             ),
@@ -1531,6 +1573,12 @@ _TINY_PNG = (
     b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01"
     b"\x08\x02\x00\x00\x00\x90wS\xde\x00\x00\x00\x0cIDATx\x9cc\xf8\xcf\xc0"
     b"\x00\x00\x03\x01\x01\x00\x18\xdd\x8d\xb0\x00\x00\x00\x00IEND\xaeB`\x82"
+)
+
+_TINY_PDF = (
+    b"%PDF-1.4\n1 0 obj<</Type/Catalog/Pages 2 0 R>>endobj\n"
+    b"2 0 obj<</Type/Pages/Kids[]/Count 0>>endobj\n"
+    b"trailer<</Root 1 0 R>>\n%%EOF"
 )
 
 
@@ -1599,6 +1647,12 @@ def test_finished_report_returns_pendencias_checks_and_download_filename(
     assert body["page_count"] == 5
     assert body["filename"].endswith(".docx")
     assert body["download_url"] == f"/api/runs/{run_id}/download"
+    assert body["pdf_filename"].endswith(".pdf")
+    assert body["pdf_download_url"] == f"/api/runs/{run_id}/download/pdf"
+    pdf_download = client.get(body["pdf_download_url"])
+    assert pdf_download.status_code == 200
+    assert pdf_download.content == _TINY_PDF
+    assert pdf_download.headers["content-type"] == "application/pdf"
     assert [check["passed"] for check in body["checks"]] == [True, False, True]
     check_labels = [check["label"] for check in body["checks"]]
     assert "media-provenance" not in check_labels
@@ -1731,6 +1785,9 @@ def test_report_endpoint_404s_before_the_run_finishes(tmp_path: Path) -> None:
     response = client.get(f"/api/runs/{run_id}/report")
 
     assert response.status_code == 404
+    assert (
+        client.get(f"/api/runs/{run_id}/download/pdf").status_code == 404
+    )
     release.set()
     service.shutdown()
 

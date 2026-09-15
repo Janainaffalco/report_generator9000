@@ -11,6 +11,7 @@ from threading import Thread
 from zipfile import ZipFile
 from xml.etree import ElementTree
 
+import pypdfium2 as pdfium
 import pytest
 from PIL import Image
 
@@ -27,6 +28,7 @@ from report_generator9000.gates.blocks import check_block_integrity
 from report_generator9000.generate import StopCondition
 from report_generator9000.logo import CLIENT_LOGO_PART
 from report_generator9000.master import build_master
+from report_generator9000.previews import PreviewRender, RenderFailed
 from report_generator9000.prose import (
     GroundedField,
     ProseConfig,
@@ -51,6 +53,43 @@ class _Provider:
         config: ProseConfig,
     ) -> ProseResponse:
         return self.response
+
+
+class _FakePreviewRenderer:
+    """Writes a real minimal PDF and matching PNGs without needing soffice.
+
+    Used wherever a test exercises assembly plumbing rather than rendering
+    itself -- the real ``OfficePreviewRenderer`` is exercised directly in
+    ``tests/test_previews.py`` and in the one end-to-end assembly test that
+    checks the previews actually depict captured site content.
+    """
+
+    def __init__(self, page_count: int = 2) -> None:
+        self.page_count = page_count
+
+    def render(self, document: Path, output_folder: Path) -> PreviewRender:
+        output_folder = Path(output_folder)
+        output_folder.mkdir(parents=True, exist_ok=True)
+        for path in output_folder.iterdir():
+            if path.is_file() and path.name.startswith("preview-"):
+                path.unlink()
+        pdf_path = Path(document).with_suffix(".pdf")
+        pdf = pdfium.PdfDocument.new()
+        for _ in range(self.page_count):
+            pdf.new_page(595, 842)
+        pdf.save(str(pdf_path))
+        pdf.close()
+        pages = []
+        for index in range(1, self.page_count + 1):
+            path = output_folder / f"preview-{index:03d}.png"
+            Image.new("RGB", (100, 140), "white").save(path)
+            pages.append(path.resolve())
+        return PreviewRender(
+            pages=tuple(pages),
+            pdf=pdf_path,
+            media_pages={},
+            text_pages={},
+        )
 
 
 def _engagement(origin: str) -> Engagement:
@@ -146,10 +185,22 @@ def test_one_engagement_directory_contains_the_complete_handoff_package(
     assert not stale_raw.exists()
     assert not stale_embedding.exists()
 
+    assert package.pdf.is_file()
+    assert package.pdf.parent == package.directory
+    assert package.pdf.stem == package.report.document.stem
+    pdf = pdfium.PdfDocument(str(package.pdf))
+    try:
+        assert len(pdf) == len(package.previews)
+    finally:
+        pdf.close()
+
     preview_has_site_color = False
     for preview in package.previews:
         with Image.open(preview) as image:
-            assert image.size == (1240, 1754)
+            # Real A4-at-150dpi rendering rounds to within a pixel or two of
+            # the nominal size rather than hitting it exactly.
+            assert abs(image.size[0] - 1240) <= 5
+            assert abs(image.size[1] - 1754) <= 5
             colors = image.convert("RGB").resize((200, 200)).getcolors(
                 maxcolors=1_000_000
             )
@@ -245,6 +296,7 @@ def test_one_engagement_directory_contains_the_complete_handoff_package(
         str(package.report.context_document.resolve()),
         str(package.report.pendencias_document.resolve()),
         str(package.report.pendencias_json.resolve()),
+        str(package.pdf.resolve()),
         *(str(path.resolve()) for path in package.previews),
         *(str(path.resolve()) for path in package.raw_captures),
     }
@@ -270,6 +322,7 @@ def test_block_heading_and_capture_land_on_the_same_page(
             _engagement(origin),
             gated_root,
             no_llm=True,
+            preview_renderer=_FakePreviewRenderer(),
         )
 
     with ZipFile(package.report.document) as archive:
@@ -360,6 +413,7 @@ def test_a_gate_failure_never_promotes_the_staged_report(
             _engagement(origin),
             gated_root,
             no_llm=True,
+            preview_renderer=_FakePreviewRenderer(),
         )
 
     output_directory = tmp_path / "outputs" / "40-2026_CLIENTE"
@@ -503,6 +557,7 @@ def test_ungrounded_prose_is_a_marked_pendencia_in_a_certified_package(
             tmp_path / "absent-gated",
             prose_provider=provider,
             prose_config=ProseConfig("configured", 100),
+            preview_renderer=_FakePreviewRenderer(),
         )
 
     assert package.report.gate_report.passed
@@ -593,6 +648,7 @@ def test_successful_assembly_emits_timed_operations_for_each_wrapper(
             _engagement(origin),
             gated_root,
             no_llm=True,
+            preview_renderer=_FakePreviewRenderer(),
         )
 
     for operation_name in ("capture_site", "assemble_docx", "gate_run"):
@@ -629,6 +685,7 @@ def test_capture_site_events_carry_the_ambient_run_id(
                 _engagement(origin),
                 gated_root,
                 no_llm=True,
+                preview_renderer=_FakePreviewRenderer(),
             )
 
     capture_events = [
@@ -695,8 +752,52 @@ def test_extract_site_text_emits_no_events_when_no_llm(
             _engagement(origin),
             gated_root,
             no_llm=True,
+            preview_renderer=_FakePreviewRenderer(),
         )
 
     assert not any(
         event.name == "extract_site_text" for event in recording_sink.events
     )
+
+
+def test_a_render_failure_never_promotes_the_staged_report(
+    tmp_path: Path,
+) -> None:
+    """A renderer that breaks must behave exactly like a gate rejection for
+    promotion purposes: nothing already on disk for this Pasta may change,
+    and the run must never reach the "gate" progress callback -- issue #47
+    item 3, a broken render pipeline is honest failure, not a finished Run.
+    """
+    master = build_master(
+        approved_source(tmp_path / "approved.docx"),
+        tmp_path / "master",
+    ).master
+    gated_root = _gated_root(tmp_path)
+    output_root = tmp_path / "outputs"
+    existing_directory = output_root / "40-2026_CLIENTE"
+    existing_directory.mkdir(parents=True)
+    existing_file = existing_directory / "previous-run.docx"
+    existing_file.write_bytes(b"previous finished run")
+
+    class _FailingRenderer:
+        def render(self, document: Path, output_folder: Path) -> PreviewRender:
+            raise RenderFailed("soffice exploded")
+
+    progress: list[tuple[str, int | None]] = []
+
+    with serve_fixture_site() as origin, pytest.raises(RenderFailed):
+        assemble_output_package(
+            master,
+            output_root,
+            _engagement(origin),
+            gated_root,
+            no_llm=True,
+            preview_renderer=_FailingRenderer(),
+            progress=lambda stage, page_count=None: progress.append(
+                (stage, page_count)
+            ),
+        )
+
+    assert "gate" not in [stage for stage, _ in progress]
+    assert existing_file.is_file()
+    assert existing_file.read_bytes() == b"previous finished run"

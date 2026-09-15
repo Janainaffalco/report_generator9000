@@ -1,30 +1,69 @@
-"""Generate visual DOCX QA previews without requiring an office renderer."""
+"""Render certified review pages: DOCX -> PDF (LibreOffice) -> PNG (pypdfium2).
+
+The PDF and the review pages come from the same certified document, so what a
+consultant reviews on screen is exactly what the PDF download contains -- not
+an approximate QA drawing of it.
+"""
 
 from __future__ import annotations
 
+import os
 import re
-import textwrap
+import shutil
+import subprocess
+import tempfile
 from collections import defaultdict
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterator, Protocol, overload
-from zipfile import ZipFile
-from xml.etree import ElementTree
 
-from PIL import Image, ImageDraw, ImageFont, ImageOps
+import pypdfium2 as pdfium
+from PIL import Image
 
-from .docx_package import Slot, open_docx_package, page_geometry_emu
+from .docx_package import open_docx_package
+from .generate import GateRejected
 
 
 _MANAGED_PREVIEW = re.compile(r"^preview-\d{3}\.png$")
 _TEXT_MARKER = re.compile(r"\[[^\[\]\r\n]+\]")
 
+_RENDER_DPI = 150
+_POINTS_PER_INCH = 72
+_SOFFICE_TIMEOUT_SECONDS = 300
+_WINDOWS_DEFAULT_SOFFICE = Path(
+    r"C:\Program Files\LibreOffice\program\soffice.exe"
+)
+_TAIL_BYTES = 2000
+
+
+class RenderFailed(Exception):
+    """Office conversion or rasterization broke before certifying anything.
+
+    Always means the pipeline itself is broken -- soffice missing, a crash, a
+    timeout, or an unreadable PDF -- never that a produced document was
+    inspected and found defective. A Run that hits this can never be marked
+    finished.
+    """
+
+
+class RenderRejected(GateRejected):
+    """Visual validation inspected the render and found it defective.
+
+    Distinct from ``RenderFailed``: something was produced, but it failed an
+    honest check (zero pages, a page count mismatch, an undecodable page).
+    """
+
+
+def _normalize_whitespace(text: str) -> str:
+    return " ".join(text.split())
+
 
 @dataclass(frozen=True)
 class PreviewRender:
-    """Rendered pages and exact evidence-to-page joins."""
+    """Rendered pages, the PDF they came from, and exact evidence-to-page joins."""
 
     pages: tuple[Path, ...]
+    pdf: Path
     media_pages: dict[str, int]
     text_pages: dict[str, int]
 
@@ -50,210 +89,267 @@ class PreviewRender:
 
 
 class PreviewRenderer(Protocol):
-    """Optional QA renderer; delivery never depends on headless office."""
+    """Renders a certified DOCX into a PDF plus the review pages of that PDF."""
 
     def render(
         self,
         document: Path,
         output_folder: Path,
-    ) -> tuple[Path, ...] | PreviewRender: ...
+    ) -> PreviewRender: ...
 
 
-class DocumentPreviewRenderer:
-    """Render text and embedded images into approximate A4-like PNG pages."""
+def discover_soffice() -> Path | None:
+    """Find the LibreOffice headless executable, or ``None`` if it cannot be found.
 
-    page_size = (1240, 1754)
-    margin = 80
-    footer_height = 60
+    ``REPORT_SOFFICE_PATH`` is an explicit operator override and always wins,
+    even when the path it names does not currently exist -- the caller finds
+    out honestly when the conversion itself fails to launch, rather than this
+    silently falling back to a different soffice.
+    """
+    override = os.environ.get("REPORT_SOFFICE_PATH")
+    if override:
+        return Path(override)
+    for name in ("soffice", "libreoffice"):
+        found = shutil.which(name)
+        if found:
+            return Path(found)
+    if _WINDOWS_DEFAULT_SOFFICE.is_file():
+        return _WINDOWS_DEFAULT_SOFFICE
+    return None
 
-    def _font(self, size: int) -> ImageFont.FreeTypeFont:
-        return ImageFont.truetype(
-            str(
-                Path(__file__).parent
-                / "assets"
-                / "Montserrat-wght.ttf"
-            ),
-            size,
+
+def _clean_stale_previews(output_folder: Path) -> None:
+    output_folder.mkdir(parents=True, exist_ok=True)
+    for path in output_folder.iterdir():
+        if path.is_file() and _MANAGED_PREVIEW.fullmatch(path.name):
+            path.unlink()
+
+
+def _convert_to_pdf(document: Path, soffice: Path) -> Path:
+    pdf_path = document.with_suffix(".pdf")
+    pdf_path.unlink(missing_ok=True)
+    with tempfile.TemporaryDirectory(prefix="soffice-profile-") as profile_dir:
+        profile_uri = Path(profile_dir).resolve().as_uri()
+        command = [
+            str(soffice),
+            "--headless",
+            "--norestore",
+            f"-env:UserInstallation={profile_uri}",
+            "--convert-to",
+            "pdf",
+            "--outdir",
+            str(document.parent),
+            str(document),
+        ]
+        try:
+            result = subprocess.run(
+                command,
+                capture_output=True,
+                timeout=_SOFFICE_TIMEOUT_SECONDS,
+                check=False,
+            )
+        except FileNotFoundError as error:
+            raise RenderFailed(
+                f"soffice executable not found at {soffice}"
+            ) from error
+        except subprocess.TimeoutExpired as error:
+            raise RenderFailed(
+                f"soffice timed out converting {document.name} to PDF after "
+                f"{_SOFFICE_TIMEOUT_SECONDS}s"
+            ) from error
+    combined = (result.stdout or b"") + (result.stderr or b"")
+    stderr_tail = (result.stderr or b"").decode("utf-8", errors="replace")[
+        -_TAIL_BYTES:
+    ]
+    stdout_tail = (result.stdout or b"").decode("utf-8", errors="replace")[
+        -_TAIL_BYTES:
+    ]
+    if result.returncode != 0 or b"could not be loaded" in combined:
+        raise RenderFailed(
+            f"soffice failed to convert {document.name} to PDF "
+            f"(exit {result.returncode}): {stderr_tail or stdout_tail}"
         )
+    if not pdf_path.is_file():
+        raise RenderFailed(
+            f"soffice reported success converting {document.name} but wrote "
+            f"no PDF at {pdf_path}: {stdout_tail or stderr_tail}"
+        )
+    return pdf_path
+
+
+def _pdf_page_count(pdf: pdfium.PdfDocument) -> int:
+    return len(pdf)
+
+
+def _rasterize_pages(
+    pdf: pdfium.PdfDocument,
+    page_count: int,
+    output_folder: Path,
+    dpi: int,
+) -> tuple[list[Path], list[str]]:
+    """Rasterize every page of *pdf* to a numbered PNG, and read its text."""
+    rendered: list[Path] = []
+    page_texts: list[str] = []
+    scale = dpi / _POINTS_PER_INCH
+    for index in range(page_count):
+        page = pdf[index]
+        bitmap = page.render(scale=scale)
+        try:
+            pil_image = bitmap.to_pil()
+        finally:
+            bitmap.close()
+        if pil_image.width <= 0 or pil_image.height <= 0:
+            raise RenderRejected(
+                "STOP CONDITION: page "
+                f"{index + 1} rasterized to an empty image"
+            )
+        path = output_folder / f"preview-{index + 1:03d}.png"
+        pil_image.save(path, format="PNG", optimize=True)
+        rendered.append(path.resolve())
+        text_page = page.get_textpage()
+        try:
+            page_texts.append(text_page.get_text_bounded())
+        finally:
+            text_page.close()
+    return rendered, page_texts
+
+
+class OfficePreviewRenderer:
+    """DOCX -> PDF via LibreOffice headless, PDF -> PNG pages via pypdfium2."""
+
+    dpi = _RENDER_DPI
 
     def render(
         self,
         document: Path,
         output_folder: Path,
     ) -> PreviewRender:
-        output_folder.mkdir(parents=True, exist_ok=True)
-        for path in output_folder.iterdir():
-            if path.is_file() and _MANAGED_PREVIEW.fullmatch(path.name):
-                path.unlink()
+        document = Path(document).resolve()
+        output_folder = Path(output_folder)
+        _clean_stale_previews(output_folder)
 
-        package = open_docx_package(document)
-        slots_by_paragraph = defaultdict(list)
-        for slot in package.slots:
-            if (
-                slot.source_part == "word/document.xml"
-                and slot.media_part is not None
-            ):
-                slots_by_paragraph[slot.paragraph_index].append(slot)
-        body = [
-            paragraph
-            for paragraph in package.paragraphs
-            if paragraph.source_part == "word/document.xml"
-        ]
-        media_sizes = {
-            item.part_name: (item.width, item.height)
-            for item in package.media
-        }
-        media_digests = {
-            item.part_name: item.sha256.lower() for item in package.media
-        }
-        with ZipFile(document) as archive:
-            geometry = page_geometry_emu(
-                ElementTree.fromstring(archive.read("word/document.xml"))
+        soffice = discover_soffice()
+        if soffice is None:
+            raise RenderFailed(
+                "LibreOffice (soffice) was not found -- set "
+                "REPORT_SOFFICE_PATH, put soffice/libreoffice on PATH, or "
+                "install LibreOffice at its default Windows location"
             )
-        emu_to_preview_pixels = (
-            self.page_size[0] / geometry.page_width_emu
-        )
 
-        def rendered_slot_size(slot: Slot) -> tuple[int, int]:
-            if slot.media_part is None:
-                raise ValueError("preview image Slot has no media part")
-            width, height = media_sizes[slot.media_part]
-            width_emu = slot.width_emu
-            height_emu = slot.height_emu
-            rendered_width = max(
-                1,
-                (
-                    round(width_emu * emu_to_preview_pixels)
-                    if width_emu is not None
-                    else min(
-                        self.page_size[0] - 2 * self.margin,
-                        width,
-                    )
-                ),
+        pdf_path = _convert_to_pdf(document, soffice)
+
+        try:
+            pdf = pdfium.PdfDocument(str(pdf_path))
+        except Exception as error:
+            raise RenderFailed(
+                f"pypdfium2 could not open {pdf_path}: {error}"
+            ) from error
+
+        try:
+            page_count = _pdf_page_count(pdf)
+            if page_count == 0:
+                raise RenderRejected(
+                    "STOP CONDITION: the rendered PDF "
+                    f"{pdf_path.name} has zero pages"
+                )
+
+            try:
+                rendered, page_texts = _rasterize_pages(
+                    pdf, page_count, output_folder, self.dpi
+                )
+            except RenderRejected:
+                raise
+            except Exception as error:
+                raise RenderFailed(
+                    f"pypdfium2 could not rasterize {pdf_path.name}: {error}"
+                ) from error
+        finally:
+            pdf.close()
+
+        for path in rendered:
+            try:
+                with Image.open(path) as check:
+                    check.load()
+            except Exception as error:
+                raise RenderRejected(
+                    "STOP CONDITION: rasterized page "
+                    f"{path.name} is undecodable: {error}"
+                ) from error
+
+        if len(rendered) != page_count:
+            raise RenderRejected(
+                "STOP CONDITION: rasterized "
+                f"{len(rendered)} pages but the PDF {pdf_path.name} has "
+                f"{page_count}"
             )
-            rendered_height = max(
-                1,
-                (
-                    round(height_emu * emu_to_preview_pixels)
-                    if height_emu is not None
-                    else round(rendered_width * height / width)
-                ),
-            )
-            return rendered_width, rendered_height
 
-        page = Image.new("RGB", self.page_size, "white")
-        draw = ImageDraw.Draw(page)
-        body_font = self._font(24)
-        heading_font = self._font(27)
-        note_font = self._font(18)
-        y = self.margin
-        rendered: list[Path] = []
-        media_pages: dict[str, int] = {}
-        text_pages: dict[str, int] = {}
-
-        def finish_page() -> None:
-            nonlocal page, draw, y
-            page_number = len(rendered) + 1
-            draw.line(
-                (
-                    self.margin,
-                    self.page_size[1] - self.footer_height,
-                    self.page_size[0] - self.margin,
-                    self.page_size[1] - self.footer_height,
-                ),
-                fill=(190, 190, 190),
-                width=1,
-            )
-            draw.text(
-                (
-                    self.margin,
-                    self.page_size[1] - self.footer_height + 14,
-                ),
-                (
-                    "QA PREVIEW aproximado — confirme paginação e "
-                    f"sumário no Word · {page_number}"
-                ),
-                fill=(90, 90, 90),
-                font=note_font,
-            )
-            path = output_folder / f"preview-{page_number:03d}.png"
-            page.save(path, format="PNG", optimize=True)
-            rendered.append(path.resolve())
-            page = Image.new("RGB", self.page_size, "white")
-            draw = ImageDraw.Draw(page)
-            y = self.margin
-
-        def ensure_space(height: int) -> None:
-            if (
-                y + height
-                > self.page_size[1] - self.footer_height - self.margin
-            ):
-                finish_page()
-
-        with ZipFile(document) as archive:
-            for position, paragraph in enumerate(body):
-                text = paragraph.text.strip()
-                if text:
-                    font = heading_font if paragraph.keep_next else body_font
-                    lines = textwrap.wrap(text, width=76) or [text]
-                    line_height = 39 if paragraph.keep_next else 34
-                    text_height = len(lines) * line_height + 18
-                    bound_image_height = 0
-                    if paragraph.keep_next and position + 1 < len(body):
-                        bound_image_height = sum(
-                            rendered_slot_size(slot)[1] + 24
-                            for slot in slots_by_paragraph.get(
-                                body[position + 1].index,
-                                (),
-                            )
-                            if slot.media_part in media_sizes
-                        )
-                    ensure_space(text_height + bound_image_height)
-                    page_number = len(rendered) + 1
-                    for marker in _TEXT_MARKER.findall(text):
-                        text_pages.setdefault(marker, page_number)
-                    for line in lines:
-                        draw.text(
-                            (self.margin, y),
-                            line,
-                            fill=(25, 25, 25),
-                            font=font,
-                        )
-                        y += line_height
-                    y += 18
-                for slot in slots_by_paragraph.get(paragraph.index, ()):
-                    if slot.media_part not in media_sizes:
-                        continue
-                    rendered_width, rendered_height = rendered_slot_size(
-                        slot
-                    )
-                    ensure_space(rendered_height + 24)
-                    digest = media_digests.get(slot.media_part)
-                    if digest is not None:
-                        media_pages.setdefault(digest, len(rendered) + 1)
-                    with archive.open(slot.media_part) as source:
-                        with Image.open(source) as embedded:
-                            visual = ImageOps.exif_transpose(
-                                embedded
-                            ).convert("RGB")
-                            visual = visual.resize(
-                                (rendered_width, rendered_height),
-                                Image.Resampling.LANCZOS,
-                            )
-                            x = (self.page_size[0] - visual.width) // 2
-                            page.paste(visual, (x, y))
-                            y += visual.height + 24
-        if y > self.margin or not rendered:
-            finish_page()
+        media_pages, text_pages = _evidence_page_map(document, page_texts)
         return PreviewRender(
             pages=tuple(rendered),
+            pdf=pdf_path,
             media_pages=media_pages,
             text_pages=text_pages,
         )
 
 
+def _evidence_page_map(
+    document: Path, page_texts: list[str]
+) -> tuple[dict[str, int], dict[str, int]]:
+    """Map Pendência evidence (a media digest or a bracketed marker) to a page."""
+    package = open_docx_package(document)
+    body = [
+        paragraph
+        for paragraph in package.paragraphs
+        if paragraph.source_part == "word/document.xml"
+    ]
+    slots_by_paragraph: dict[int, list] = defaultdict(list)
+    for slot in package.slots:
+        if slot.source_part == "word/document.xml" and slot.media_part is not None:
+            slots_by_paragraph[slot.paragraph_index].append(slot)
+    digest_by_part = {item.part_name: item.sha256.lower() for item in package.media}
+
+    media_headings: dict[str, str] = {}
+    for position, paragraph in enumerate(body):
+        if not paragraph.keep_next or position + 1 >= len(body):
+            continue
+        heading_text = _normalize_whitespace(paragraph.text)
+        if not heading_text:
+            continue
+        next_paragraph = body[position + 1]
+        for slot in slots_by_paragraph.get(next_paragraph.index, ()):
+            digest = digest_by_part.get(slot.media_part or "")
+            if digest is not None:
+                media_headings[digest] = heading_text
+
+    normalized_pages = [_normalize_whitespace(text) for text in page_texts]
+    media_pages: dict[str, int] = {}
+    for digest, heading in media_headings.items():
+        last_match: int | None = None
+        for page_index, page_text in enumerate(normalized_pages, start=1):
+            if heading in page_text:
+                last_match = page_index
+        if last_match is not None:
+            media_pages[digest] = last_match
+
+    markers: list[str] = []
+    for paragraph in body:
+        markers.extend(_TEXT_MARKER.findall(paragraph.text))
+    text_pages: dict[str, int] = {}
+    for marker in dict.fromkeys(markers):
+        normalized_marker = _normalize_whitespace(marker)
+        for page_index, page_text in enumerate(normalized_pages, start=1):
+            if normalized_marker in page_text:
+                text_pages[marker] = page_index
+                break
+
+    return media_pages, text_pages
+
+
 __all__ = [
-    "DocumentPreviewRenderer",
+    "OfficePreviewRenderer",
     "PreviewRender",
     "PreviewRenderer",
+    "RenderFailed",
+    "RenderRejected",
+    "discover_soffice",
 ]

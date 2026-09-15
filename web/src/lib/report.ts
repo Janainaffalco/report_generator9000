@@ -44,6 +44,8 @@ export interface FinishedReport {
   page_count: number
   filename: string
   download_url: string
+  pdf_filename: string | null
+  pdf_download_url: string | null
   pendencias: Pendencia[]
   checks: Check[]
 }
