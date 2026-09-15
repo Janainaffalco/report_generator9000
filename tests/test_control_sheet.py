@@ -6,7 +6,6 @@ from pathlib import Path
 from report_generator9000.control_sheet import (
     Engagement,
     StopCondition,
-    UnsupportedRow,
     read_control_sheet,
 )
 
@@ -93,15 +92,17 @@ def test_committed_workbook_exercises_every_control_sheet_outcome() -> None:
             kick_off_text="13/05/2026",
             link_text="https://missing-pasta.example/",
         ),
-        UnsupportedRow(
+        Engagement(
             row_number=10,
-            reason="Tema is unsupported",
-            tema="Implantacao de Loja Virtual",
             demanda="011547/2026",
+            pasta="72-2026",
             razao_social="CASA NOSSA",
+            cnpj="18.573.230/0001-05",
+            kick_off=datetime(2026, 4, 21),
             especialista="Christian Albuquerque Alonso",
-            kick_off_text="21/04/2026",
-            link_text="https://out-of-scope.example/",
+            capture_origin="https://out-of-scope.example/",
+            published_domain=None,
+            tema="Implantacao de Loja Virtual",
         ),
         StopCondition(
             11,

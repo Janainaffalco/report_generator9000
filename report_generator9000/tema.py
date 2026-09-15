@@ -1,8 +1,4 @@
-"""The single routing contract for contracted Temas.
-
-A Tema is selectable only when its complete report path has been approved.  The
-Loja Virtual entry deliberately has no Master or gates until that path exists.
-"""
+"""The single routing contract for contracted Temas."""
 
 from __future__ import annotations
 
@@ -31,6 +27,7 @@ class TemaContract:
     gated_value_slots: tuple[tuple[str, tuple[str, ...]], ...] = ()
     gated_image_slots: tuple[tuple[str, str, str], ...] = ()
     boilerplate_media: frozenset[str] = frozenset()
+    required_blocks: tuple[str, ...] = ()
     master_gate: Callable[..., object] | None = None
     gates: tuple[Callable[..., object], ...] = ()
 
@@ -45,16 +42,47 @@ class TemaContract:
 
 def contract_for(tema: str) -> TemaContract | None:
     """Resolve sheet spelling without replacing its original display value."""
-    if _key(tema) == _key(LOJA_VIRTUAL_TEMA):
-        return TemaContract(name=LOJA_VIRTUAL_TEMA, supported=False)
-    if _key(tema) != _key(WEBSITE_TEMA):
+    loja = _key(tema) == _key(LOJA_VIRTUAL_TEMA)
+    if not loja and _key(tema) != _key(WEBSITE_TEMA):
         return None
 
     # Import at resolution time so the contract can assemble the existing
     # WebSite grammar without creating cycles with its implementation modules.
     from .gated_inputs import GATED_IMAGE_PARTS, GATED_VALUE_SLOTS
     from .gates import GATES
-    from .gates.master import BOILERPLATE_MEDIA, check_master_build
+    from .gates.loja_blocks import check_loja_block_grammar
+    from .gates.loja_credentials import check_loja_credentials
+    from .gates.master import BOILERPLATE_MEDIA, LOJA_VIRTUAL_GRAMMAR, check_loja_master, check_master_build
+
+    if loja:
+        return TemaContract(
+            name=LOJA_VIRTUAL_TEMA,
+            supported=True,
+            master=Path(__file__).with_name("assets") / "MASTER-LOJA-VIRTUAL.docx",
+            spreadsheet_tokens=(
+                ("{{DEMANDA}}", "demanda"),
+                ("{{RAZAO_SOCIAL}}", "razao_social"),
+                ("{{CNPJ}}", "cnpj"),
+                ("{{ESPECIALISTA}}", "especialista"),
+                ("{{DATA_KICKOFF}}", "kick_off_br"),
+            ),
+            gated_value_slots=tuple(
+                (slot, tokens) for slot, tokens in GATED_VALUE_SLOTS
+                if slot != "link_usuarios_senhas"
+            ) + (("configuracao_woocommerce", ("{{CONFIGURACAO_WOOCOMMERCE}}",)),),
+            gated_image_slots=tuple(
+                {
+                    "yoast-a": ("produtos-admin", "produtos-admin.png", part),
+                    "yoast-b": ("pagamentos-admin", "pagamentos-admin.png", part),
+                    "yoast-c": ("entregas-admin", "entregas-admin.png", part),
+                }.get(slot, (slot, filename, part))
+                for slot, filename, part in GATED_IMAGE_PARTS
+            ),
+            boilerplate_media=BOILERPLATE_MEDIA,
+            required_blocks=LOJA_VIRTUAL_GRAMMAR.block_headings,
+            master_gate=check_loja_master,
+            gates=(*GATES, check_loja_block_grammar, check_loja_credentials),
+        )
 
     return TemaContract(
         name=WEBSITE_TEMA,

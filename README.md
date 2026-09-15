@@ -27,8 +27,11 @@ pipeline completo, o Chromium usado pelo Playwright e o LibreOffice headless
 usado para renderizar o PDF certificado e as páginas de prévia a partir dele.
 Nenhuma credencial é
 copiada durante o build; `.env.example` documenta o contrato de configuração.
-O Master aprovado faz parte da aplicação como um asset versionado e somente para
-leitura. Monte um volume persistente em `/app/data` para os Gated Drop Folders,
+Os Masters versionados de WebSite e Loja Virtual fazem parte da aplicação como
+assets versionados e somente para leitura. O Master de Loja Virtual gera um
+rascunho com Pendências classificadas quando faltam dados privados ou a
+verificação pública de carrinho e checkout ainda não está disponível. Monte
+um volume persistente em `/app/data` para os Gated Drop Folders,
 registros e artefatos de cada geração, que ficam nesse volume por sete dias.
 
 ## Desenvolvimento
@@ -43,8 +46,9 @@ docker compose -f compose.dev.yaml up --build
 A interface de desenvolvimento fica em `http://localhost:5173`; a API também
 pode ser acessada diretamente em `http://localhost:8000`. O Vite encaminha
 requisições `/api` ao backend. O código-fonte é montado nos contêineres e os
-dados persistentes ficam em `.data/`. O mesmo Master versionado usado em
-produção é servido diretamente de `report_generator9000/assets/MASTER.docx`.
+dados persistentes ficam em `.data/`. Os Masters versionados usados em
+produção são servidos diretamente de `report_generator9000/assets/MASTER.docx`
+e `report_generator9000/assets/MASTER-LOJA-VIRTUAL.docx`.
 Coloque os Gated Drop Folders em `.data/gated`.
 
 Para encerrar e remover os contêineres (mantendo `.data/`):

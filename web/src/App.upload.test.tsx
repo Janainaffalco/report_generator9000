@@ -81,7 +81,7 @@ const fixture: ControlSheetResponse = {
     rows: [
       {
         row: { pasta: "72-2026", row_number: 10 },
-        tema: "Implantação de Loja Virtual",
+        tema: "Serviço sem Master aprovado",
         demanda: "011547/2026",
         razao_social: "CASA NOSSA",
         especialista: "Christian Albuquerque Alonso",
@@ -403,6 +403,35 @@ describe("control sheet upload", () => {
     expect(screen.queryByText("Kick off")).not.toBeInTheDocument()
   })
 
+  it("lets a consultant select a valid Loja Virtual Engagement", async () => {
+    const lojaSheet: ControlSheetResponse = {
+      ...fixture,
+      engagements: [
+        {
+          ...fixture.engagements[0],
+          row: { pasta: "72-2026", row_number: 10 },
+          tema: "Implantação de Loja Virtual",
+          razao_social: "CASA NOSSA",
+          demanda: "011547/2026",
+        },
+      ],
+      unsupported_rows: { total: 0, rows: [] },
+    }
+    vi.mocked(fetch).mockResolvedValueOnce(jsonResponse(200, lojaSheet))
+
+    render(<App />)
+    fireEvent.change(await screen.findByLabelText("Arquivo de planilha"), {
+      target: { files: [makeFile()] },
+    })
+    const checkbox = await screen.findByRole("checkbox", {
+      name: /CASA NOSSA.*linha 10/,
+    })
+    fireEvent.click(checkbox)
+    await waitFor(() =>
+      expect(screen.getByRole("checkbox", { name: /CASA NOSSA.*linha 10/ })).toBeChecked()
+    )
+  })
+
   it("filters the table across row classes and can restore every Demanda", async () => {
     vi.mocked(fetch).mockResolvedValueOnce(jsonResponse(200, fixture))
 
@@ -413,12 +442,12 @@ describe("control sheet upload", () => {
     await screen.findByRole("heading", { name: "Demandas da planilha" })
 
     fireEvent.change(screen.getByLabelText("Filtrar Demandas"), {
-      target: { value: "implantacao" },
+      target: { value: "servico" },
     })
 
     expect(screen.getByText("CASA NOSSA")).toBeInTheDocument()
     expect(
-      screen.queryByText("Implantação de Loja Virtual")
+      screen.queryByText("Serviço sem Master aprovado")
     ).not.toBeInTheDocument()
     expect(
       screen.queryByText("DENISE BARROS DE ALMEIDA")
@@ -757,7 +786,7 @@ describe("control sheet upload", () => {
       within(unsupportedRow).getByText("https://out-of-scope.example/")
     ).toBeInTheDocument()
     expect(
-      within(unsupportedRow).queryByText("Implantação de Loja Virtual")
+      within(unsupportedRow).queryByText("Serviço sem Master aprovado")
     ).not.toBeInTheDocument()
     expect(
       within(unsupportedRow).getByText("Tema sem suporte")
@@ -767,7 +796,7 @@ describe("control sheet upload", () => {
     })
     fireEvent.focus(explanation)
     expect(
-      await screen.findByText("Implantação de Loja Virtual")
+      await screen.findByText("Serviço sem Master aprovado")
     ).toBeInTheDocument()
     expect(
       screen.getByText("Ainda não existe um Master aprovado para este Tema.")

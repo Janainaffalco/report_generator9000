@@ -38,6 +38,7 @@ from .gated_inputs import (
 )
 from .lista_paginas import Pagina, derive_lista_paginas
 from .logo import CLIENT_LOGO_PART, LogoCapture, capture_client_logo
+from .loja_block_draft import loja_draft_blocks
 from .palette import PaletteCollectionError, derive_palette_from_site
 from .prose import ProseConfig, ProseProvider
 from .placeholders import render_placeholder, slot_pixel_dimensions
@@ -205,6 +206,13 @@ def _assemble_staged_package(
         )
         capture_pendencias.append(replace(failure.pendencia, evidence=digest))
     block_images = tuple(block_images_list)
+    block_pages = pages
+    if contract.required_blocks:
+        block_pages, block_images, missing_blocks = loja_draft_blocks(
+            contract.required_blocks, pages, block_images,
+            captures.folder, engagement.capture_origin,
+        )
+        capture_pendencias.extend(missing_blocks)
     if no_llm:
         site_text = ()
     else:
@@ -219,7 +227,7 @@ def _assemble_staged_package(
             stamped = stamp_blocks(
                 master,
                 Path(temporary) / "stamped-master.docx",
-                pages,
+                block_pages,
                 block_images,
                 capture_folder=captures.folder,
                 drop_folder=gated.folder,

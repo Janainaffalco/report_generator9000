@@ -18,7 +18,7 @@ HEADERS = (
     "Relatorio pronto?",
 )
 IN_SCOPE = "Insercao digital - Desenvolvimento de WebSite"
-OUT_OF_SCOPE = "Implantacao de Loja Virtual"
+OUT_OF_SCOPE = "Servico sem Master aprovado"
 ROWS = (
     (
         "011616/2026", "40-2026", IN_SCOPE, "52052612000121",

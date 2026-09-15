@@ -7,6 +7,7 @@ import posixpath
 import re
 import struct
 import uuid
+from dataclasses import dataclass
 from xml.etree import ElementTree
 
 from ..docx_package import (
@@ -241,6 +242,51 @@ MASTER_BLOCK_HEADINGS = (
     "RODAPÉ",
 )
 
+
+@dataclass(frozen=True)
+class MasterGrammar:
+    headings: tuple[tuple[int, str], ...]
+    tokens: frozenset[str]
+    block_headings: tuple[str, ...]
+    page_section: str
+    following_section: str
+    development_section: str
+
+
+WEBSITE_GRAMMAR = MasterGrammar(
+    CANONICAL_HEADINGS, EXPECTED_TOKENS, MASTER_BLOCK_HEADINGS,
+    "PÁGINA HOME E SEÇÕES", "PAINEL DE CONFIGURAÇÃO WORDPRESS",
+    "DESENVOLVIMENTO DE WEBSITE",
+)
+
+LOJA_VIRTUAL_GRAMMAR = MasterGrammar(
+    headings=(
+        (1, "BRIEFING INICIAL PARA DEFINIÇÃO DO ESCOPO"),
+        (2, "SOBRE A EMPRESA"), (2, "BRIEFING"),
+        (1, "IMPLANTAÇÃO DE LOJA VIRTUAL"),
+        (2, "OBJETIVO"), (2, "ACESSOS E ENTREGAS"),
+        (2, "HOSPEDAGEM E DADOS TÉCNICOS"),
+        (2, "PLATAFORMA | WORDPRESS E WOOCOMMERCE"),
+        (2, "PLUGINS"), (2, "IDENTIDADE VISUAL"),
+        (2, "VITRINE E PÁGINAS"),
+        (2, "PAINEL DE CONFIGURAÇÃO WORDPRESS"),
+        (2, "FUNCIONALIDADES DA LOJA"),
+        (2, "ORIENTAÇÕES AO CLIENTE"),
+        (1, "DECLARAÇÃO DE RECEBIMENTO E FINALIZAÇÃO"),
+        (1, "TERMO DE CESSÃO DE DIREITOS"), (1, "REUNIÕES"),
+    ),
+    tokens=(EXPECTED_TOKENS - {"{{LINK_USUARIOS_SENHAS}}"})
+    | {"{{CONFIGURACAO_WOOCOMMERCE}}", "{{EVIDENCIA_CHECKOUT}}"},
+    block_headings=(
+        "PÁGINA HOME", "SEÇÃO PRODUTOS", "SEÇÃO CARRINHO",
+        "SEÇÃO CHECKOUT", "SEÇÃO SOBRE", "POLÍTICAS DE PRIVACIDADE",
+        "CABEÇALHO", "RODAPÉ",
+    ),
+    page_section="VITRINE E PÁGINAS",
+    following_section="PAINEL DE CONFIGURAÇÃO WORDPRESS",
+    development_section="IMPLANTAÇÃO DE LOJA VIRTUAL",
+)
+
 _TOKEN = re.compile(r"\{\{[^{}<>]{1,64}\}\}")
 _CLIENT_MARKERS = (
     "argel",
@@ -267,7 +313,8 @@ def _is_boilerplate_link(target: str) -> bool:
 
 
 def check_master_build(
-    package: DocxPackage, source: DocxPackage | None = None
+    package: DocxPackage, source: DocxPackage | None = None,
+    *, grammar: MasterGrammar = WEBSITE_GRAMMAR,
 ) -> GateResult:
     """Check token shape, residue, links, and media against an approved source."""
     violations = []
@@ -352,9 +399,9 @@ def check_master_build(
                         )
                     )
 
-    for token in sorted(EXPECTED_TOKENS - seen):
+    for token in sorted(grammar.tokens - seen):
         violations.append(violation(GATE, "missing-token", "MASTER.docx", token))
-    for token in sorted(seen - EXPECTED_TOKENS):
+    for token in sorted(seen - grammar.tokens):
         violations.append(violation(GATE, "unexpected-token", "MASTER.docx", token))
 
     for part in package.parts:
@@ -563,7 +610,7 @@ def check_master_build(
                         f"pPr children out of CT_PPrBase order: {_child_local_names(pPr)!r}",
                     )
                 )
-        if tuple(headings) != CANONICAL_HEADINGS:
+        if tuple(headings) != grammar.headings:
             violations.append(
                 violation(
                     GATE,
@@ -572,9 +619,9 @@ def check_master_build(
                     repr(headings),
                 )
             )
-        if tuple(headings) == CANONICAL_HEADINGS:
+        if tuple(headings) == grammar.headings:
             stage_two_start = headings.index(
-                (1, "DESENVOLVIMENTO DE WEBSITE")
+                (1, grammar.development_section)
             )
             stage_two_end = headings.index(
                 (1, "DECLARAÇÃO DE RECEBIMENTO E FINALIZAÇÃO")
@@ -602,7 +649,7 @@ def check_master_build(
                 if "".join(
                     node.text or "" for node in item.iter(f"{w}t")
                 ).strip()
-                == "PÁGINA HOME E SEÇÕES"
+                == grammar.page_section
             ),
             None,
         )
@@ -615,16 +662,16 @@ def check_master_build(
                 and "".join(
                     node.text or "" for node in item.iter(f"{w}t")
                 ).strip()
-                == "PAINEL DE CONFIGURAÇÃO WORDPRESS"
+                == grammar.following_section
             ),
             None,
         )
         block_error = page_area is None or panel is None
         if not block_error:
             block_region = body_children[page_area + 1 : panel]
-            block_error = len(block_region) != len(MASTER_BLOCK_HEADINGS) * 2
+            block_error = len(block_region) != len(grammar.block_headings) * 2
             if not block_error:
-                for offset, expected in enumerate(MASTER_BLOCK_HEADINGS):
+                for offset, expected in enumerate(grammar.block_headings):
                     heading = block_region[offset * 2]
                     image = block_region[offset * 2 + 1]
                     text = "".join(
@@ -927,4 +974,29 @@ def check_master_build(
                 )
             )
 
+    return result(GATE, violations)
+
+
+def check_loja_master(
+    package: DocxPackage, source: DocxPackage | None = None,
+) -> GateResult:
+    """Apply the curated Master contract and Loja-specific honesty rules."""
+    base = check_master_build(package, source, grammar=LOJA_VIRTUAL_GRAMMAR)
+    violations = list(base.violations)
+    document = "\n".join(
+        paragraph.text for paragraph in package.paragraphs
+        if paragraph.source_part == "word/document.xml"
+    ).casefold()
+    for part in package.parts:
+        text = (part.text or "").casefold()
+        for forbidden in ("cronograma", "senha", "plugins adicionados"):
+            if forbidden in text:
+                violations.append(violation(GATE, "loja-unsafe-boilerplate", part.name, forbidden))
+        if part.name.startswith("word/header") and "desenvolvimento de website" in text:
+            violations.append(violation(GATE, "loja-tema-residue", part.name, "WebSite header"))
+    for required in (
+        "wordpress é", "woocommerce é", "plugins citados nesta seção são referências",
+    ):
+        if required not in document:
+            violations.append(violation(GATE, "loja-boilerplate-missing", "word/document.xml", required))
     return result(GATE, violations)

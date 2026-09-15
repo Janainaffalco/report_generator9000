@@ -209,12 +209,12 @@ def test_control_sheet_upload_returns_three_groups_from_fixture(tmp_path: Path) 
     assert body["filename"] == "Planilha para controle de relatorios.xlsx"
     assert body["sheet_id"]
     assert [row["row"]["row_number"] for row in body["engagements"]] == [
-        2, 5, 6, 7, 14,
+        2, 5, 6, 7, 10, 14,
     ]
     assert [row["row"]["row_number"] for row in body["stop_conditions"]] == [
         3, 4, 8, 11, 13, 16,
     ]
-    assert body["unsupported_rows"]["total"] == 1
+    assert body["unsupported_rows"]["total"] == 0
 
 
 def test_report_ready_text_is_display_only_and_returned_verbatim(
@@ -479,33 +479,18 @@ def test_stop_conditions_are_translated_and_carry_the_original_cause(
     }
 
 
-def test_unsupported_rows_include_tema_and_report_ready_text(
+def test_valid_loja_row_is_selectable_from_committed_workbook(
     tmp_path: Path,
 ) -> None:
     client = _client(tmp_path)
 
     response = _upload(client, FIXTURE)
 
-    unsupported = response.json()["unsupported_rows"]
-    assert unsupported == {
-        "total": 1,
-        "rows": [
-            {
-                "row": {"pasta": "72-2026", "row_number": 10},
-                "tema": generate_control_sheet.OUT_OF_SCOPE,
-                "demanda": "011547/2026",
-                "razao_social": "CASA NOSSA",
-                "especialista": "Christian Albuquerque Alonso",
-                "kick_off": "21/04/2026",
-                "link": "https://out-of-scope.example/",
-                "report_ready_text": "",
-                "cause": "Tema is unsupported",
-                "explicacao": (
-                    "Ainda não existe um Master aprovado para este Tema."
-                ),
-            }
-        ],
-    }
+    body = response.json()
+    assert body["unsupported_rows"] == {"total": 0, "rows": []}
+    loja = next(item for item in body["engagements"] if item["row"]["row_number"] == 10)
+    assert loja["tema"] == "Implantacao de Loja Virtual"
+    assert loja["capture_origin"] == "https://out-of-scope.example/"
 
 
 def test_zero_engagement_workbook_returns_200_with_empty_list(tmp_path: Path) -> None:
@@ -705,7 +690,7 @@ def test_retained_sheet_listing_is_most_recent_first_with_ready_counts(
             "sheet_id": older["sheet_id"],
             "filename": "controle junho.xlsx",
             "uploaded_at": older_uploaded_at.isoformat(),
-            "ready_count": 5,
+            "ready_count": 6,
         },
     ]
 

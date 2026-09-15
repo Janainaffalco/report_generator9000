@@ -600,15 +600,24 @@ class RunService:
 
 def default_run_service() -> RunService:
     data_root = Path(os.environ.get("REPORT_DATA_ROOT", "/app/data"))
+    from .tema import LOJA_VIRTUAL_TEMA
+
     contract = supported_contract(WEBSITE_TEMA)
+    loja_contract = supported_contract(LOJA_VIRTUAL_TEMA)
+    if loja_contract.master is None or not loja_contract.master.is_file():
+        raise RuntimeError("versioned Loja Virtual Master does not exist")
+    from .docx_package import open_docx_package
+
+    assert loja_contract.master_gate is not None
+    loja_validation = loja_contract.master_gate(open_docx_package(loja_contract.master))
+    if not loja_validation.passed:
+        raise RuntimeError("versioned Loja Virtual Master failed its sign-off gate")
     master = Path(os.environ.get("REPORT_MASTER_PATH", str(contract.master)))
     if not master.is_file():
         raise RuntimeError(
             f"configured Master does not exist or is not a file: {master}"
         )
     if "REPORT_MASTER_PATH" in os.environ:
-        from .docx_package import open_docx_package
-
         try:
             assert contract.master_gate is not None
             validation = contract.master_gate(open_docx_package(master))

@@ -12,7 +12,7 @@ from urllib.parse import urlparse
 from .artifact_paths import engagement_artifact_key
 from .control_sheet import Engagement
 from .lista_paginas import DeclaredPage
-from .tema import supported_contract
+from .tema import LOJA_VIRTUAL_TEMA, supported_contract
 
 VALUES_FILE = "valores.json"
 GATED_VALUE_SLOTS = (
@@ -44,6 +44,10 @@ _IGNORED_FILES = frozenset({".gitkeep", "README.md"})
 _DOMAIN = re.compile(
     r"(?=.{1,253}\Z)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+"
     r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?",
+    re.IGNORECASE,
+)
+_SECRET_BEARING = re.compile(
+    r"\b(?:senhas?|passwords?|passwd|pwd|segredo|secret|api[_ -]?key)\b",
     re.IGNORECASE,
 )
 
@@ -117,13 +121,22 @@ def _domain(value: str) -> str:
 
 
 def _token_values(
-    document: dict[str, object], slots: tuple[tuple[str, tuple[str, ...]], ...]
+    document: dict[str, object], slots: tuple[tuple[str, tuple[str, ...]], ...],
+    *, reject_credentials: bool = False,
 ) -> tuple[tuple[str, str], ...]:
     values: list[tuple[str, str]] = []
     for slot, tokens in slots:
         if slot not in document:
             continue
+        if reject_credentials and slot == "configuracao_woocommerce":
+            raise GatedInputError(
+                f"{VALUES_FILE}.{slot} cannot be inserted automatically; review private configuration in Word"
+            )
         supplied = _required_text(document, slot)
+        if reject_credentials and _SECRET_BEARING.search(supplied):
+            raise GatedInputError(
+                f"{VALUES_FILE}.{slot} contains credential-bearing text"
+            )
         if slot in {"data_entrega", "data_backup"}:
             supplied = _date(supplied, slot)
         elif slot.startswith("link_"):
@@ -259,7 +272,10 @@ def load_gated_inputs(
             )
     return GatedInputs(
         folder=folder,
-        token_values=_token_values(document, contract.gated_value_slots),
+        token_values=_token_values(
+            document, contract.gated_value_slots,
+            reject_credentials=contract.name == LOJA_VIRTUAL_TEMA,
+        ),
         images=images,
         declared_pages=_declared_pages(document),
     )

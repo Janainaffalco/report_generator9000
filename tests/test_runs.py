@@ -90,7 +90,7 @@ def test_master_override_must_match_the_web_site_tema(
         default_run_service()
 
 
-def test_tema_contract_marks_loja_unsupported_and_collects_web_site_seams() -> None:
+def test_tema_contract_selects_both_approved_masters() -> None:
     website = contract_for(WEBSITE_TEMA)
     loja = contract_for("Implantacao de Loja Virtual")
 
@@ -100,7 +100,10 @@ def test_tema_contract_marks_loja_unsupported_and_collects_web_site_seams() -> N
     assert website.master_gate is not None
     assert website.gated_value_slots and website.gated_image_slots
     assert website.boilerplate_media and website.gates
-    assert loja is not None and not loja.supported and loja.master is None
+    assert loja is not None and loja.supported
+    assert loja.master is not None and loja.master.is_file()
+    assert loja.master != website.master
+    assert loja.master_gate is not None and loja.gates
 
 
 def test_run_store_retains_sheet_tema_without_reconstructing_it(tmp_path: Path) -> None:

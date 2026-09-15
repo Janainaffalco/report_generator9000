@@ -21,8 +21,9 @@ _Avoid_: linha, row id
 
 **Tema**:
 The contracted service type, taken verbatim from the control spreadsheet. Two exist:
-`Inserção digital - Desenvolvimento de WebSite` and `Implantação de Loja Virtual`. Only the
-former is in scope; each Tema needs its own Master and its own section grammar.
+`Inserção digital - Desenvolvimento de WebSite` and `Implantação de Loja Virtual`. Both
+have a versioned Master and their own section grammar. Loja Virtual currently yields a
+gated draft where storefront evidence has not yet been acquired.
 _Avoid_: report type, category
 
 **Unsupported Row**:
@@ -52,7 +53,7 @@ _Avoid_: step, phase, task
 ### The document
 
 **Master**:
-The single client-neutral base document every report is cloned from. Contains no client data
+The client-neutral base document for one Tema that every report of that Tema is cloned from. Contains no client data
 — only Tokens, boilerplate, and the styles/headers/footers/cover shape that carry the visual
 identity. Authored once by a human, signed off once, then never edited per client.
 _Avoid_: template, base document, modelo

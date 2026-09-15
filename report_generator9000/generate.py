@@ -43,7 +43,7 @@ from .run_context import (
     is_within,
     pendencia_marker,
 )
-from .tema import supported_contract
+from .tema import LOJA_VIRTUAL_TEMA, supported_contract
 
 
 # Only the bracketed markers this pipeline writes -- a Pendência marker or the
@@ -376,13 +376,36 @@ def generate_report(
             Pendencia(
                 slot=slot,
                 classification="GATED",
-                reason="valor nao fornecido no Gated Drop Folder",
+                reason=(
+                    "configuração privada não inserida automaticamente neste rascunho"
+                    if contract.name == LOJA_VIRTUAL_TEMA and slot == "configuracao_woocommerce"
+                    else "valor nao fornecido no Gated Drop Folder"
+                ),
                 evidence=evidence,
                 name=slot.replace("_", " "),
                 page="documento",
                 required_action=(
-                    f"Fornecer {slot.replace('_', ' ')} no valores.json"
+                    "Revisar a configuração privada no Word"
+                    if contract.name == LOJA_VIRTUAL_TEMA and slot == "configuracao_woocommerce"
+                    else f"Fornecer {slot.replace('_', ' ')} no valores.json"
                 ),
+            )
+        )
+    if contract.name == LOJA_VIRTUAL_TEMA:
+        evidence = pendencia_marker(
+            "TOOL_BLOCKED", "evidencia_checkout_nao_suportada"
+        )
+        replacement_text["{{EVIDENCIA_CHECKOUT}}"] = evidence
+        emphasized_tokens.add("{{EVIDENCIA_CHECKOUT}}")
+        pendencias.append(
+            Pendencia(
+                slot="evidencia_checkout",
+                classification="TOOL_BLOCKED",
+                reason="o pipeline ainda não verifica o fluxo público de carrinho e checkout",
+                evidence=evidence,
+                name="evidência de carrinho e checkout",
+                page="FUNCIONALIDADES DA LOJA",
+                required_action="Revisar o fluxo público de carrinho e checkout no Word",
             )
         )
     for token, value in drafted.token_values.items():
