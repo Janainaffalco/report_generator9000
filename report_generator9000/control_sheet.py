@@ -13,7 +13,9 @@ from xml.etree import ElementTree
 from zipfile import ZipFile
 
 
-IN_SCOPE_TEMA = "Inserção digital - Desenvolvimento de WebSite"
+from .tema import WEBSITE_TEMA, contract_for
+
+IN_SCOPE_TEMA = WEBSITE_TEMA
 CONTROL_SHEET_NAME = "LV e Site"
 _MAIN = "{http://schemas.openxmlformats.org/spreadsheetml/2006/main}"
 _RELATIONSHIPS = "{http://schemas.openxmlformats.org/package/2006/relationships}"
@@ -45,6 +47,7 @@ class Engagement:
     capture_origin: str
     published_domain: str | None
     report_ready_text: str = ""
+    tema: str = WEBSITE_TEMA
 
     @property
     def kick_off_br(self) -> str:
@@ -319,7 +322,8 @@ def read_control_sheet(path: str | Path) -> tuple[RowOutcome, ...]:
                 )
             )
             continue
-        if _normalise(tema) != _normalise(IN_SCOPE_TEMA):
+        contract = contract_for(tema)
+        if contract is None or not contract.supported:
             outcomes.append(
                 UnsupportedRow(
                     row_number=row_number,
@@ -377,6 +381,7 @@ def read_control_sheet(path: str | Path) -> tuple[RowOutcome, ...]:
                 capture_origin=link[0],
                 published_domain=link[1],
                 report_ready_text=report_ready_text,
+                tema=tema,
             )
         )
     return tuple(outcomes)

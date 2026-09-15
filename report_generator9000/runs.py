@@ -28,6 +28,7 @@ from .previews import PreviewRender
 from .prose import ProseConfig, ProseProvider
 from .retention import RETENTION
 from .run_context import Pendencia, load_run_context
+from .tema import WEBSITE_TEMA, supported_contract
 
 
 StageName = Literal[
@@ -74,6 +75,7 @@ class RunRecord:
 
     run_id: str
     sheet_id: str
+    tema: str
     engagement: dict[str, object]
     outcome: RunOutcome
     current_stage: StageName | None
@@ -92,6 +94,7 @@ class RunRecord:
     batch_id: str | None = None
     batch_position: int | None = None
     batch_size: int | None = None
+    schema_version: int = 2
 
 
 class RunStore:
@@ -115,8 +118,10 @@ class RunStore:
         record = RunRecord(
             run_id=uuid4().hex,
             sheet_id=sheet_id,
+            tema=engagement.tema,
             engagement={
                 "row_number": engagement.row_number,
+                "tema": engagement.tema,
                 "pasta": engagement.pasta,
                 "demanda": engagement.demanda,
                 "razao_social": engagement.razao_social,
@@ -180,6 +185,15 @@ class RunStore:
         payload["checks"] = tuple(payload.get("checks", ()))
         payload["pendencias"] = tuple(payload.get("pendencias", ()))
         payload["previews"] = tuple(payload.get("previews", ()))
+        if payload.get("schema_version", 1) == 1 and "tema" not in payload:
+            # The previous record schema could only run WebSite. Migrate by
+            # that known schema, never by Demanda, domain, or filename.
+            payload["tema"] = WEBSITE_TEMA
+            payload["engagement"]["tema"] = WEBSITE_TEMA
+            payload["schema_version"] = 2
+        if not isinstance(payload.get("tema"), str) or not payload["tema"]:
+            notice("run_record_missing_tema", severity="warning", path=str(path))
+            return None
         return RunRecord(**payload)
 
     def update(self, run_id: str, **changes: object) -> RunRecord:
@@ -301,6 +315,7 @@ class RunService:
         )
 
     def submit(self, engagement: Engagement, sheet_id: str) -> RunRecord:
+        supported_contract(engagement.tema)
         self._discard_expired_outputs()
         record = self.store.create(engagement, sheet_id)
         record = self.store.update(record.run_id, current_stage=STAGES[0])
@@ -474,13 +489,20 @@ class RunService:
         config = self.prose_config
         managed_provider: GeminiProseProvider | None = None
         try:
+            current = self.store.get(run_id)
+            if current is None or current.tema != engagement.tema:
+                raise StopCondition("STOP CONDITION: Run Tema differs from Engagement")
+            contract = supported_contract(current.tema)
+            selected_master = (
+                self.master if contract.name == WEBSITE_TEMA else contract.master
+            )
             if not self.no_llm and provider is None:
                 settings = GeminiSettings.from_environment()
                 managed_provider = GeminiProseProvider(settings)
                 provider = managed_provider
                 config = settings.prose_config()
             package = self.assembler(
-                self.master,
+                selected_master,
                 self.output_root,
                 engagement,
                 self.gated_drop_root,
@@ -559,13 +581,27 @@ class RunService:
 
 def default_run_service() -> RunService:
     data_root = Path(os.environ.get("REPORT_DATA_ROOT", "/app/data"))
-    master = Path(
-        os.environ.get("REPORT_MASTER_PATH", str(PACKAGED_MASTER_PATH))
-    )
+    contract = supported_contract(WEBSITE_TEMA)
+    master = Path(os.environ.get("REPORT_MASTER_PATH", str(contract.master)))
     if not master.is_file():
         raise RuntimeError(
             f"configured Master does not exist or is not a file: {master}"
         )
+    if "REPORT_MASTER_PATH" in os.environ:
+        from .docx_package import open_docx_package
+
+        try:
+            assert contract.master_gate is not None
+            validation = contract.master_gate(open_docx_package(master))
+        except (OSError, ValueError) as error:
+            raise RuntimeError(
+                f"configured Master is not a valid WebSite Master: {error}"
+            ) from error
+        if not validation.passed:
+            raise RuntimeError(
+                "configured Master does not match the WebSite Tema: "
+                + ", ".join(item.rule for item in validation.violations)
+            )
     configure_logging(run_log_directory=data_root / "runs")
     return RunService(
         store=RunStore(data_root / "runs"),

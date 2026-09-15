@@ -43,6 +43,7 @@ from .gated_inputs import (
     load_gated_inputs,
 )
 from .runs import RunRecord, STAGES, default_run_service
+from .tema import supported_contract
 from .sheet_store import SheetStore, default_sheet_store
 
 
@@ -168,6 +169,7 @@ class RowRef(BaseModel):
 
 class EngagementOut(BaseModel):
     row: RowRef
+    tema: str
     demanda: str
     razao_social: str
     especialista: str
@@ -242,6 +244,7 @@ class StageOut(BaseModel):
 class RunResponse(BaseModel):
     run_id: str
     sheet_id: str
+    tema: str
     engagement: dict[str, object]
     outcome: str
     current_stage: str | None
@@ -308,6 +311,7 @@ def _run_response(record: RunRecord) -> RunResponse:
     return RunResponse(
         run_id=record.run_id,
         sheet_id=record.sheet_id,
+        tema=record.tema,
         engagement=record.engagement,
         outcome=record.outcome,
         current_stage=record.current_stage,
@@ -338,8 +342,9 @@ def _run_response(record: RunRecord) -> RunResponse:
 
 
 def _report_response(record: RunRecord) -> FinishedReportResponse:
-    image_filenames = {slot: filename for slot, filename, _part in GATED_IMAGE_PARTS}
-    value_slots = {slot for slot, _tokens in GATED_VALUE_SLOTS}
+    contract = supported_contract(record.tema)
+    image_filenames = contract.image_filenames
+    value_slots = contract.value_slot_names
     return FinishedReportResponse(
         run_id=record.run_id,
         status=record.report_status or "draft",
@@ -415,6 +420,7 @@ def _build_response(
     engagements = [
         EngagementOut(
             row=row_ref(outcome.row_number, outcome.pasta),
+            tema=outcome.tema,
             demanda=outcome.demanda,
             razao_social=outcome.razao_social,
             especialista=outcome.especialista,
@@ -737,15 +743,15 @@ def create_app(
                 item for item in outcomes
                 if isinstance(item, Engagement)
                 and item.row_number == record.engagement["row_number"]
+                and item.tema == record.tema
             ),
             None,
         )
         if engagement is None:
             raise HTTPException(422, "A Demanda deste relatório não pode ser refeita.")
-        image_filenames = {
-            slot: filename for slot, filename, _part in GATED_IMAGE_PARTS
-        }
-        value_slots = {slot for slot, _tokens in GATED_VALUE_SLOTS}
+        contract = supported_contract(record.tema)
+        image_filenames = contract.image_filenames
+        value_slots = contract.value_slot_names
         expected = {
             image_filenames.get(str(item.get("slot")))
             or (VALUES_FILE if item.get("slot") in value_slots else None)

@@ -44,6 +44,11 @@ __all__ = [
 ]
 
 
-def run_gates(package: DocxPackage, context: RunContext) -> GateReport:
+def run_gates(
+    package: DocxPackage, context: RunContext, *, tema: str
+) -> GateReport:
     """Run every gate against *package* in a fixed order."""
-    return GateReport(results=tuple(gate(package, context) for gate in GATES))
+    from ..tema import supported_contract
+
+    selected = supported_contract(tema).gates
+    return GateReport(results=tuple(gate(package, context) for gate in selected))

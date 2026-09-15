@@ -5,6 +5,7 @@ export interface RowRef {
 
 export interface Engagement {
   row: RowRef
+  tema: string
   demanda: string
   razao_social: string
   especialista: string

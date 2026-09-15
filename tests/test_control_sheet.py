@@ -28,6 +28,7 @@ def test_committed_workbook_exercises_every_control_sheet_outcome() -> None:
             especialista="Bruno Henrique Santana Leal",
             capture_origin="https://denise.example/",
             published_domain=None,
+            tema="Insercao digital - Desenvolvimento de WebSite",
         ),
         StopCondition(
             3,
@@ -56,6 +57,7 @@ def test_committed_workbook_exercises_every_control_sheet_outcome() -> None:
             especialista="Bruno Henrique Santana Leal",
             capture_origin="https://midnightblue-jellyfish-121804.hostingersite.com/",
             published_domain="sanfrio.com.br",
+            tema="Insercao digital - Desenvolvimento de WebSite",
         ),
         Engagement(
             row_number=6,
@@ -67,6 +69,7 @@ def test_committed_workbook_exercises_every_control_sheet_outcome() -> None:
             especialista="Bruno Henrique Santana Leal",
             capture_origin="https://lari.example/",
             published_domain=None,
+            tema="Insercao digital - Desenvolvimento de WebSite",
         ),
         Engagement(
             row_number=7,
@@ -79,6 +82,7 @@ def test_committed_workbook_exercises_every_control_sheet_outcome() -> None:
             capture_origin="https://complete.example/",
             published_domain=None,
             report_ready_text="ok",
+            tema="Insercao digital - Desenvolvimento de WebSite",
         ),
         StopCondition(
             8,
@@ -127,6 +131,7 @@ def test_committed_workbook_exercises_every_control_sheet_outcome() -> None:
             especialista="Christian Albuquerque Alonso",
             capture_origin="https://gemea.example/",
             published_domain=None,
+            tema="Insercao digital - Desenvolvimento de WebSite",
         ),
         StopCondition(
             16,

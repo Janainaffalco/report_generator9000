@@ -96,7 +96,9 @@ def main(argv: Sequence[str] | None = None) -> int:
             )
         except (OSError, ValueError) as error:
             parser.error(str(error))
-        report = run_gates(package, context)
+        from .tema import WEBSITE_TEMA
+
+        report = run_gates(package, context, tema=WEBSITE_TEMA)
         print(report.format())
         return 0 if report.passed else 1
     if arguments.command in {"master-build", "build-master"}:

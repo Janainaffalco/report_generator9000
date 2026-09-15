@@ -1,0 +1,82 @@
+"""The single routing contract for contracted Temas.
+
+A Tema is selectable only when its complete report path has been approved.  The
+Loja Virtual entry deliberately has no Master or gates until that path exists.
+"""
+
+from __future__ import annotations
+
+import unicodedata
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Callable
+
+
+WEBSITE_TEMA = "Inserção digital - Desenvolvimento de WebSite"
+LOJA_VIRTUAL_TEMA = "Implantação de Loja Virtual"
+
+
+def _key(value: str) -> str:
+    decomposed = unicodedata.normalize("NFKD", value)
+    plain = "".join(c for c in decomposed if not unicodedata.combining(c))
+    return " ".join(plain.casefold().split())
+
+
+@dataclass(frozen=True)
+class TemaContract:
+    name: str
+    supported: bool
+    master: Path | None = None
+    spreadsheet_tokens: tuple[tuple[str, str], ...] = ()
+    gated_value_slots: tuple[tuple[str, tuple[str, ...]], ...] = ()
+    gated_image_slots: tuple[tuple[str, str, str], ...] = ()
+    boilerplate_media: frozenset[str] = frozenset()
+    master_gate: Callable[..., object] | None = None
+    gates: tuple[Callable[..., object], ...] = ()
+
+    @property
+    def image_filenames(self) -> dict[str, str]:
+        return {slot: filename for slot, filename, _part in self.gated_image_slots}
+
+    @property
+    def value_slot_names(self) -> set[str]:
+        return {slot for slot, _tokens in self.gated_value_slots}
+
+
+def contract_for(tema: str) -> TemaContract | None:
+    """Resolve sheet spelling without replacing its original display value."""
+    if _key(tema) == _key(LOJA_VIRTUAL_TEMA):
+        return TemaContract(name=LOJA_VIRTUAL_TEMA, supported=False)
+    if _key(tema) != _key(WEBSITE_TEMA):
+        return None
+
+    # Import at resolution time so the contract can assemble the existing
+    # WebSite grammar without creating cycles with its implementation modules.
+    from .gated_inputs import GATED_IMAGE_PARTS, GATED_VALUE_SLOTS
+    from .gates import GATES
+    from .gates.master import BOILERPLATE_MEDIA, check_master_build
+
+    return TemaContract(
+        name=WEBSITE_TEMA,
+        supported=True,
+        master=Path(__file__).with_name("assets") / "MASTER.docx",
+        spreadsheet_tokens=(
+            ("{{DEMANDA}}", "demanda"),
+            ("{{RAZAO_SOCIAL}}", "razao_social"),
+            ("{{CNPJ}}", "cnpj"),
+            ("{{ESPECIALISTA}}", "especialista"),
+            ("{{DATA_KICKOFF}}", "kick_off_br"),
+        ),
+        gated_value_slots=GATED_VALUE_SLOTS,
+        gated_image_slots=GATED_IMAGE_PARTS,
+        boilerplate_media=BOILERPLATE_MEDIA,
+        master_gate=check_master_build,
+        gates=GATES,
+    )
+
+
+def supported_contract(tema: str) -> TemaContract:
+    contract = contract_for(tema)
+    if contract is None or not contract.supported or contract.master is None:
+        raise ValueError(f"Tema {tema!r} has no approved Run path")
+    return contract

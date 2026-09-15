@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 from dataclasses import replace
+import json
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
+from zipfile import ZipFile
 
 import pytest
 
@@ -16,6 +18,7 @@ from report_generator9000.runs import (
     STAGES,
     default_run_service,
 )
+from report_generator9000.tema import WEBSITE_TEMA, contract_for
 
 
 def _engagement() -> Engagement:
@@ -65,6 +68,70 @@ def test_default_run_service_fails_at_startup_for_a_missing_master_override(
 
     with pytest.raises(RuntimeError, match="configured Master does not exist"):
         default_run_service()
+
+
+def test_master_override_must_match_the_web_site_tema(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    other_master = tmp_path / "loja-master.docx"
+    with ZipFile(PACKAGED_MASTER_PATH) as source, ZipFile(other_master, "w") as target:
+        for item in source.infolist():
+            content = source.read(item.filename)
+            if item.filename == "word/document.xml":
+                content = content.replace(
+                    b"DESENVOLVIMENTO DE WEBSITE",
+                    b"IMPLANTACAO DE LOJA VIRTUAL",
+                )
+            target.writestr(item, content)
+    monkeypatch.setenv("REPORT_MASTER_PATH", str(other_master))
+
+    with pytest.raises(RuntimeError, match="does not match the WebSite Tema"):
+        default_run_service()
+
+
+def test_tema_contract_marks_loja_unsupported_and_collects_web_site_seams() -> None:
+    website = contract_for(WEBSITE_TEMA)
+    loja = contract_for("Implantacao de Loja Virtual")
+
+    assert website is not None and website.supported
+    assert website.master == PACKAGED_MASTER_PATH
+    assert website.spreadsheet_tokens
+    assert website.master_gate is not None
+    assert website.gated_value_slots and website.gated_image_slots
+    assert website.boilerplate_media and website.gates
+    assert loja is not None and not loja.supported and loja.master is None
+
+
+def test_run_store_retains_sheet_tema_without_reconstructing_it(tmp_path: Path) -> None:
+    store = RunStore(tmp_path / "runs")
+    engagement = replace(
+        _engagement(), tema="Insercao digital - Desenvolvimento de WebSite"
+    )
+    record = store.create(engagement, "sheet-1", batch_id="batch-1")
+    restored = store.get(record.run_id)
+
+    assert restored is not None
+    assert restored.tema == engagement.tema
+    assert restored.engagement["tema"] == engagement.tema
+    assert restored.batch_id == "batch-1"
+
+
+def test_legacy_web_site_run_is_migrated_by_schema_not_filename(tmp_path: Path) -> None:
+    store = RunStore(tmp_path / "runs")
+    record = store.create(_engagement(), "sheet-1")
+    path = store.directory / f"{record.run_id}.json"
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    del payload["tema"]
+    del payload["engagement"]["tema"]
+    del payload["schema_version"]
+    payload["filename"] = "Implantacao de Loja Virtual.docx"
+    path.write_text(json.dumps(payload), encoding="utf-8")
+
+    restored = store.get(record.run_id)
+
+    assert restored is not None
+    assert restored.tema == WEBSITE_TEMA
+    assert restored.engagement["tema"] == WEBSITE_TEMA
 
 
 def test_unexpected_exception_puts_traceback_in_run_log_and_keeps_reason(

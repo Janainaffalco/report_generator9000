@@ -43,6 +43,7 @@ from .prose import ProseConfig, ProseProvider
 from .placeholders import render_placeholder, slot_pixel_dimensions
 from .previews import DocumentPreviewRenderer, PreviewRender, PreviewRenderer
 from .run_context import Pendencia
+from .tema import supported_contract
 
 ProgressCallback = Callable[[str, int | None], None]
 
@@ -86,9 +87,10 @@ def _assemble_staged_package(
     except GatedInputError as error:
         raise StopCondition(f"STOP CONDITION: {error}") from error
     report_progress("read_row")
+    contract = supported_contract(engagement.tema)
     palette_part = next(
         part_name
-        for slot, _filename, part_name in GATED_IMAGE_PARTS
+        for slot, _filename, part_name in contract.gated_image_slots
         if slot == "paleta"
     )
     pages = derive_lista_paginas(
@@ -387,7 +389,7 @@ def assemble_output_package(
         )
         package = open_docx_package(staged.report.document)
         with operation("gate_run") as result:
-            gate_report = run_gates(package, final_context)
+            gate_report = run_gates(package, final_context, tema=engagement.tema)
             result["passed"] = gate_report.passed
         if not gate_report.passed:
             raise GateRejected(

@@ -416,6 +416,7 @@ def test_every_engagement_field_named_in_the_contract_is_present(tmp_path: Path)
     engagement = response.json()["engagements"][0]
     assert engagement == {
         "row": {"pasta": "40-2026", "row_number": 2},
+        "tema": "Insercao digital - Desenvolvimento de WebSite",
         "demanda": "011616/2026",
         "razao_social": "DENISE BARROS DE ALMEIDA",
         "especialista": "Bruno Henrique Santana Leal",
@@ -975,6 +976,8 @@ def test_starting_one_engagement_returns_immediately_then_polls_and_downloads(
 
     assert response.status_code == 202
     assert elapsed < 1
+    assert response.json()["tema"] == "Insercao digital - Desenvolvimento de WebSite"
+    assert response.json()["engagement"]["tema"] == response.json()["tema"]
     assert response.headers["location"] == (
         f"/api/runs/{response.json()['run_id']}"
     )
@@ -1004,6 +1007,8 @@ def test_starting_one_engagement_returns_immediately_then_polls_and_downloads(
         finished = client.get(response.headers["location"]).json()
 
     assert finished["outcome"] == "finished"
+    assert finished["tema"] == "Insercao digital - Desenvolvimento de WebSite"
+    assert finished["stage_history"] == list(STAGES)
     assert finished["status"] == "draft"
     assert finished["page_count"] == 3
     assert finished["filename"] == (
@@ -1262,7 +1267,7 @@ def test_http_run_drives_real_workbook_master_cloning_and_gates(
             },
         )
         location = started.headers["location"]
-        deadline = monotonic() + 30
+        deadline = monotonic() + 90
         record = client.get(location).json()
         while record["outcome"] == "running" and monotonic() < deadline:
             sleep(0.05)

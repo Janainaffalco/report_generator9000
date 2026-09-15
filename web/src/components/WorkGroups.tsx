@@ -96,7 +96,7 @@ function toRows(data: ControlSheetResponse): WorkRow[] {
     pasta: engagement.row.pasta ?? "—",
     demanda: engagement.demanda,
     title: engagement.razao_social,
-    detail: "",
+    detail: engagement.tema,
     especialista: engagement.especialista,
     kickOff: engagement.kick_off,
     captureOrigin: engagement.capture_origin,

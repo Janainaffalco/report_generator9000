@@ -12,6 +12,7 @@ from urllib.parse import urlparse
 from .artifact_paths import engagement_artifact_key
 from .control_sheet import Engagement
 from .lista_paginas import DeclaredPage
+from .tema import supported_contract
 
 VALUES_FILE = "valores.json"
 GATED_VALUE_SLOTS = (
@@ -38,11 +39,6 @@ GATED_IMAGE_PARTS = (
     ("drive", "drive.png", "word/media/image18.png"),
     ("kickoff", "kickoff.jpg", "word/media/image19.jpeg"),
     ("entrega", "entrega.png", "word/media/image20.png"),
-)
-_VALUE_KEYS = frozenset(
-    {"pasta", "razao_social"}
-    | {slot for slot, _tokens in GATED_VALUE_SLOTS}
-    | {"lista_paginas"}
 )
 _IGNORED_FILES = frozenset({".gitkeep", "README.md"})
 _DOMAIN = re.compile(
@@ -120,9 +116,11 @@ def _domain(value: str) -> str:
     return domain
 
 
-def _token_values(document: dict[str, object]) -> tuple[tuple[str, str], ...]:
+def _token_values(
+    document: dict[str, object], slots: tuple[tuple[str, tuple[str, ...]], ...]
+) -> tuple[tuple[str, str], ...]:
     values: list[tuple[str, str]] = []
-    for slot, tokens in GATED_VALUE_SLOTS:
+    for slot, tokens in slots:
         if slot not in document:
             continue
         supplied = _required_text(document, slot)
@@ -182,6 +180,7 @@ def load_gated_inputs(
     gated_drop_root: str | Path, engagement: Engagement
 ) -> GatedInputs:
     """Load only this Engagement's folder; an absent folder is normal."""
+    contract = supported_contract(engagement.tema)
     folder = gated_drop_folder(gated_drop_root, engagement)
     if not folder.exists():
         return GatedInputs(folder=None)
@@ -196,7 +195,7 @@ def load_gated_inputs(
 
     known_images = {
         filename: (slot, part_name)
-        for slot, filename, part_name in GATED_IMAGE_PARTS
+        for slot, filename, part_name in contract.gated_image_slots
     }
     unknown = sorted(
         item.name
@@ -226,7 +225,11 @@ def load_gated_inputs(
         raise GatedInputError(f"{values_path}: invalid JSON: {error}") from error
     if not isinstance(document, dict):
         raise GatedInputError(f"{VALUES_FILE} must contain a JSON object")
-    unknown_keys = sorted(set(document) - _VALUE_KEYS)
+    value_keys = frozenset(
+        {"pasta", "razao_social", "lista_paginas"}
+        | {slot for slot, _tokens in contract.gated_value_slots}
+    )
+    unknown_keys = sorted(set(document) - value_keys)
     if unknown_keys:
         raise GatedInputError(
             f"{VALUES_FILE} has unknown field(s): {', '.join(unknown_keys)}"
@@ -256,7 +259,7 @@ def load_gated_inputs(
             )
     return GatedInputs(
         folder=folder,
-        token_values=_token_values(document),
+        token_values=_token_values(document, contract.gated_value_slots),
         images=images,
         declared_pages=_declared_pages(document),
     )

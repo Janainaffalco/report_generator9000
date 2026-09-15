@@ -43,6 +43,7 @@ from .run_context import (
     is_within,
     pendencia_marker,
 )
+from .tema import supported_contract
 
 
 # Only the bracketed markers this pipeline writes -- a Pendência marker or the
@@ -288,6 +289,7 @@ def generate_report(
     client_logo: LogoCapture | LogoFailure | None = None,
 ) -> GeneratedReport:
     """Clone *master* and fill spreadsheet and available Gated Inputs."""
+    contract = supported_contract(engagement.tema)
     master_path = Path(master)
     output = report_output_path(output_root, engagement)
     try:
@@ -324,7 +326,7 @@ def generate_report(
 
     replacement_text = {
         token: str(getattr(engagement, field))
-        for token, field in SPREADSHEET_TOKENS.items()
+        for token, field in contract.spreadsheet_tokens
     }
     supplied_gated_values = gated.values_by_token()
     replacement_text.update(supplied_gated_values)
@@ -337,7 +339,7 @@ def generate_report(
     published_domain = derive_published_domain(
         engagement.capture_origin, engagement.published_domain
     )
-    for slot, tokens in GATED_VALUE_SLOTS:
+    for slot, tokens in contract.gated_value_slots:
         if all(token in supplied_gated_values for token in tokens):
             continue
         if slot == "dominio_publicado" and published_domain is not None:
@@ -476,7 +478,7 @@ def generate_report(
                 replace(failure.pendencia, evidence=digest)
             )
     supplied_images = gated.images_by_part()
-    for slot, _filename, part_name in GATED_IMAGE_PARTS:
+    for slot, _filename, part_name in contract.gated_image_slots:
         supplied = supplied_images.get(part_name)
         if part_name not in parts:
             if supplied is not None:
@@ -588,7 +590,7 @@ def generate_report(
                     artifacts.append(artifact)
                     used_run_artifacts.add(artifact)
             continue
-        if media.part_name in BOILERPLATE_MEDIA:
+        if media.part_name in contract.boilerplate_media:
             artifacts.append(
                 Artifact(
                     digest=media.sha256,
@@ -694,7 +696,7 @@ def generate_report(
             pendencias=tuple(pendencias),
             prose_grounding=(*drafted.grounding, *palette_grounding),
         )
-        gate_report = run_gates(package, context)
+        gate_report = run_gates(package, context, tema=engagement.tema)
         if not gate_report.passed:
             raise StopCondition(
                 "STOP CONDITION: correctness gates rejected the staged "

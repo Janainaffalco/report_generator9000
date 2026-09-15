@@ -40,6 +40,7 @@ const fixture: ControlSheetResponse = {
   engagements: [
     {
       row: { pasta: "40-2026", row_number: 2 },
+      tema: "Inserção digital - Desenvolvimento de WebSite",
       demanda: "011616/2026",
       razao_social: "DENISE BARROS DE ALMEIDA",
       especialista: "Bruno Henrique Santana Leal",
@@ -50,6 +51,7 @@ const fixture: ControlSheetResponse = {
     },
     {
       row: { pasta: "40-2026", row_number: 5 },
+      tema: "Inserção digital - Desenvolvimento de WebSite",
       demanda: "011700/2026",
       razao_social: "OUTRA EMPRESA LTDA",
       especialista: "Ana Paula Ferreira",
@@ -558,6 +560,13 @@ describe("control sheet upload", () => {
     const rowTwo = screen.getByRole("checkbox", {
       name: /OUTRA EMPRESA LTDA.*pasta 40-2026.*linha 5/,
     })
+    const firstEngagementRow = screen.getByText("DENISE BARROS DE ALMEIDA")
+      .closest("tr") as HTMLElement
+    expect(
+      within(firstEngagementRow).getByText(
+        "Inserção digital - Desenvolvimento de WebSite"
+      )
+    ).toBeInTheDocument()
 
     fireEvent.click(rowOne)
 
