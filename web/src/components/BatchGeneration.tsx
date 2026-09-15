@@ -10,6 +10,7 @@ import {
   TriangleAlertIcon,
 } from "lucide-react"
 
+import { InlineNotice } from "@/components/InlineNotice"
 import { Button, buttonVariants } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import type { BatchResponse, RunResponse } from "@/lib/runs"
@@ -111,14 +112,14 @@ export function BatchGeneration({
       </div>
 
       {errorDetail && (
-        <div className="mt-4 flex items-center gap-3">
-          <p role="alert" className="text-sm text-destructive">
-            {errorDetail}
-          </p>
-          <Button variant="secondary" size="sm" onClick={onRefresh}>
-            Atualizar agora
-          </Button>
-        </div>
+        <InlineNotice
+          tone="error"
+          title="Não foi possível atualizar o lote"
+          action={{ label: "Atualizar agora", onClick: onRefresh }}
+          className="mt-4"
+        >
+          {errorDetail}
+        </InlineNotice>
       )}
 
       <ol

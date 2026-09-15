@@ -212,6 +212,53 @@ describe("control sheet upload", () => {
     ).not.toBeInTheDocument()
   })
 
+  it("keeps the chosen work when the sidebar switches steps and back", async () => {
+    window.history.replaceState({}, "", "/")
+    vi.mocked(fetch)
+      .mockResolvedValueOnce(
+        jsonResponse(200, [
+          {
+            sheet_id: fixture.sheet_id,
+            filename: fixture.filename,
+            uploaded_at: "2026-07-30T18:00:00+00:00",
+            ready_count: 2,
+          },
+        ])
+      )
+      .mockResolvedValueOnce(jsonResponse(200, fixture))
+
+    render(<App />)
+
+    const denise = /DENISE BARROS DE ALMEIDA.*linha 2/
+    fireEvent.click(await screen.findByRole("checkbox", { name: denise }))
+    expect(screen.getByRole("checkbox", { name: denise })).toBeChecked()
+
+    expect(
+      screen.getByRole("link", { name: "Trabalhos" })
+    ).toHaveAccessibleDescription("2 trabalhos prontos para gerar")
+
+    fireEvent.click(screen.getByRole("link", { name: "Em conferência" }))
+    expect(
+      screen.getByRole("heading", { name: "Nenhum relatório em conferência" })
+    ).toBeInTheDocument()
+    expect(window.location.pathname).toBe("/conferir")
+
+    fireEvent.click(screen.getByRole("link", { name: "Planilha" }))
+    expect(
+      await screen.findByTestId("control-sheet-dropzone")
+    ).toBeInTheDocument()
+    expect(window.location.pathname).toBe("/")
+
+    fireEvent.click(screen.getByRole("link", { name: "Trabalhos" }))
+    expect(
+      screen.getByRole("checkbox", {
+        name: /DENISE BARROS DE ALMEIDA.*linha 2/,
+      })
+    ).toBeChecked()
+    expect(window.location.pathname).toBe("/escolher")
+    expect(fetch).toHaveBeenCalledTimes(2)
+  })
+
   it("falls through to the drop area at step 1 when there is no retained sheet", async () => {
     window.history.replaceState({}, "", "/")
     vi.mocked(fetch).mockResolvedValueOnce(jsonResponse(200, []))
@@ -591,7 +638,11 @@ describe("control sheet upload", () => {
     await screen.findByRole("heading", { name: "Lote em andamento" })
     expect(screen.getByText("Gerando agora")).toBeInTheDocument()
     expect(screen.getByText("Na fila")).toBeInTheDocument()
-    expect(screen.getByText("OUTRA EMPRESA LTDA")).toBeInTheDocument()
+    // The work table stays mounted (hidden) to keep its selection, so it
+    // also lists this company; only the visible batch view counts here.
+    expect(
+      screen.getByText("OUTRA EMPRESA LTDA", { ignore: "[hidden] *" })
+    ).toBeInTheDocument()
     expect(window.location.pathname).toBe("/lotes/batch-29")
     expect(fetch).toHaveBeenLastCalledWith(
       "/api/batches",

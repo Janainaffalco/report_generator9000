@@ -77,62 +77,9 @@
     color: transparent;
   }
 
-  .stage-stepper {
-    position: relative;
-  }
-
-  .stage-stepper::before,
-  .stage-stepper::after {
-    content: "";
-    position: absolute;
-    right: 0;
-    bottom: 0;
-    left: 0;
-    height: 4px;
-    border-radius: 999px;
-  }
-
-  .stage-stepper::before {
-    background: var(--hairline-soft);
-  }
-
-  .stage-stepper::after {
-    width: var(--stage-progress);
-    background: linear-gradient(90deg, #e60023, #ff5367 58%, #a5071d);
-    animation: stage-progress 720ms cubic-bezier(0.22, 1, 0.36, 1) both;
-  }
-
-  .stage-step {
-    display: flex;
-    align-items: center;
-    gap: 0.4rem;
-    min-width: 0;
-    transition: color 180ms ease;
-  }
-
-  .stage-number {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    width: 1.4rem;
-    height: 1.4rem;
-    border: 1px solid currentColor;
-    border-radius: 999px;
-    font-size: 0.7rem;
-    line-height: 1;
-  }
-
-  .stage-step[aria-current="step"] .stage-number {
-    border-color: transparent;
+  .sidebar-mark {
     background: linear-gradient(135deg, #e60023, #aa071d);
-    color: white;
     box-shadow: 0 4px 12px rgba(230, 0, 35, 0.22);
-  }
-
-  .stage-label {
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
   }
 
   .beta-tag {
@@ -196,29 +143,20 @@
   .preview-frame {
     box-shadow: var(--shadow-modal);
   }
+}
 
-  @keyframes stage-progress {
-    from {
-      width: 0;
-    }
-    to {
-      width: var(--stage-progress);
-    }
-  }
-
-  @media (prefers-reduced-motion: reduce) {
-    .stage-stepper::after {
-      animation: none;
-    }
-  }
-
-  @media (max-width: 639px) {
-    .stage-step {
-      justify-content: center;
-    }
-
-    .stage-label {
-      display: none;
-    }
-  }
+/* React Bits App UI tokens, pinned to the design system so installed
+   blocks inherit its accent and radius instead of the registry defaults. */
+:root {
+  --rb-accent: var(--primary);
+  --rb-accent-fg: var(--on-primary);
+  --rb-radius: var(--ds-radius-sm);
+  --rb-r-xs: max(0px, calc(var(--rb-radius) - 6px));
+  --rb-r-sm: max(0px, calc(var(--rb-radius) - 4px));
+  --rb-r-md: max(0px, calc(var(--rb-radius) - 2px));
+  --rb-r-lg: var(--rb-radius);
+  --rb-r-xl: calc(var(--rb-radius) + min(2px, var(--rb-radius)));
+  --rb-r-2xl: calc(var(--rb-radius) + min(4px, var(--rb-radius)));
+  --rb-r-3xl: calc(var(--rb-radius) + min(6px, var(--rb-radius)));
+  --rb-r-4xl: calc(var(--rb-radius) + min(8px, var(--rb-radius)));
 }

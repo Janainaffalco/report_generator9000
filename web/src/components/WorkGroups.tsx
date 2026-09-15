@@ -17,6 +17,7 @@ import {
   XIcon,
 } from "lucide-react"
 
+import { InlineNotice } from "@/components/InlineNotice"
 import { SheetFileInput } from "@/components/SheetFileInput"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -497,9 +498,9 @@ export function WorkGroups({
             : ""}
         </p>
         {errorDetail && (
-          <p role="alert" className="text-sm font-medium text-destructive">
+          <InlineNotice tone="error" title="Não foi possível continuar">
             {errorDetail}
-          </p>
+          </InlineNotice>
         )}
 
         <section

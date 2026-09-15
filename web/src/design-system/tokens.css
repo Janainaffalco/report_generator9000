@@ -27,6 +27,11 @@
   --success-pale: #c7f0da;
   --error: #9e0a0a;
   --error-deep: #cc001f;
+  --error-pale: #fde3e6;
+  --warning-deep: #7a4b00;
+  --warning-pale: #fcefcf;
+  --info-deep: #2a3f9e;
+  --info-pale: #e3e8fc;
 
   --text-heading: var(--ink);
   --text-body: var(--body);

@@ -1,5 +1,6 @@
 import { UploadIcon } from "lucide-react"
 
+import { InlineNotice } from "@/components/InlineNotice"
 import { SheetFileInput } from "@/components/SheetFileInput"
 import { Badge } from "@/components/ui/badge"
 
@@ -71,12 +72,13 @@ export function UploadPanel({ status, errorDetail, onFile }: UploadPanelProps) {
       </div>
 
       {errorDetail && (
-        <p
-          role="alert"
-          className="mt-4 max-w-2xl text-sm font-medium text-destructive"
+        <InlineNotice
+          tone="error"
+          title="Não foi possível usar esta planilha"
+          className="mt-4 max-w-3xl"
         >
           {errorDetail}
-        </p>
+        </InlineNotice>
       )}
     </section>
   )

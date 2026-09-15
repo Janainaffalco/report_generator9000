@@ -1,9 +1,9 @@
 import "@testing-library/jest-dom/vitest"
 
-import { cleanup, render, screen } from "@testing-library/react"
+import { cleanup, render, screen, within } from "@testing-library/react"
 import { afterEach, describe, expect, it, vi } from "vitest"
 
-import { App, currentStage } from "@/App"
+import { App } from "@/App"
 
 vi.mock("@/lib/session", () => ({
   getSession: vi.fn(async () => true),
@@ -26,16 +26,23 @@ describe("upload shell", () => {
     expect(
       screen.queryByText("sem cadastro · sem senha")
     ).not.toBeInTheDocument()
+    const nav = within(
+      screen.getByRole("navigation", { name: "Navegação principal" })
+    )
+    expect(nav.getByText("Gerar")).toBeInTheDocument()
+    expect(nav.getByText("Arquivo")).toBeInTheDocument()
+    expect(nav.getByRole("link", { name: "Planilha" })).toHaveAttribute(
+      "aria-current",
+      "page"
+    )
+    expect(nav.getByRole("link", { name: "Trabalhos" })).toBeInTheDocument()
     expect(
-      screen.getByRole("link", { name: "1·Enviar planilha" })
-    ).toHaveAttribute("aria-current", "step")
-    expect(
-      screen.getByRole("link", { name: "2·Escolher o trabalho" })
+      nav.getByRole("link", { name: "Em conferência" })
     ).toBeInTheDocument()
-    expect(
-      screen.getByRole("link", { name: "3·Conferir o relatório" })
-    ).toBeInTheDocument()
-    expect(screen.getByRole("link", { name: "4·Baixar" })).toBeInTheDocument()
+    expect(nav.getByRole("link", { name: "Relatórios" })).toHaveAttribute(
+      "href",
+      "/relatorios"
+    )
     expect(screen.getByText(".xlsx")).toBeInTheDocument()
     expect(screen.getByText(/aba “LV e Site”/)).toBeInTheDocument()
     expect(
@@ -66,35 +73,12 @@ describe("upload shell", () => {
     ).toBeInTheDocument()
   })
 
-  it("points the first stepper step at the root path, not the drop-area route", async () => {
+  it("points the sheet menu item at the root path, not the drop-area route", async () => {
     window.history.replaceState({}, "", "/enviar")
     render(<App />)
 
     expect(
-      await screen.findByRole("link", { name: "1·Enviar planilha" })
+      await screen.findByRole("link", { name: "Planilha" })
     ).toHaveAttribute("href", "/")
-  })
-})
-
-describe("currentStage", () => {
-  it("resolves both the root path and the drop-area route to stage 1", () => {
-    expect(currentStage("/")).toBe(1)
-    expect(currentStage("/enviar")).toBe(1)
-  })
-
-  it("resolves every other stage's own path to its own number", () => {
-    const cases: Array<[string, number]> = [
-      ["/escolher", 2],
-      ["/conferir", 3],
-      ["/baixar", 4],
-    ]
-
-    for (const [path, expected] of cases) {
-      expect(currentStage(path)).toBe(expected)
-    }
-  })
-
-  it("falls back to stage 1 for an unrecognized path", () => {
-    expect(currentStage("/algo-desconhecido")).toBe(1)
   })
 })

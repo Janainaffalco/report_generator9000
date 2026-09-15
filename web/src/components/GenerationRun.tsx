@@ -1,5 +1,6 @@
 import { CheckIcon, CircleIcon, LoaderCircleIcon } from "lucide-react"
 
+import { InlineNotice } from "@/components/InlineNotice"
 import { ReviewScreen } from "@/components/ReviewScreen"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
@@ -107,14 +108,14 @@ export function GenerationRun({
         </p>
       )}
       {errorDetail && (
-        <div className="mt-4 flex items-center gap-3">
-          <p role="alert" className="text-sm text-destructive">
-            {errorDetail}
-          </p>
-          <Button variant="secondary" size="sm" onClick={onRefresh}>
-            Atualizar agora
-          </Button>
-        </div>
+        <InlineNotice
+          tone="error"
+          title="Não foi possível atualizar a geração"
+          action={{ label: "Atualizar agora", onClick: onRefresh }}
+          className="mt-4"
+        >
+          {errorDetail}
+        </InlineNotice>
       )}
       <ol className="mt-8 flex flex-col gap-3">
         {run.stages.map((stage) => (

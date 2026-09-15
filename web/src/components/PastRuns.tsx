@@ -1,5 +1,7 @@
-import { DownloadIcon, FileClockIcon, SearchIcon } from "lucide-react"
+import { DownloadIcon, FileClockIcon } from "lucide-react"
 
+import { EmptyStep, type EmptyStepPath } from "@/components/EmptyStep"
+import { InlineNotice } from "@/components/InlineNotice"
 import { Badge } from "@/components/ui/badge"
 import { Button, buttonVariants } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
@@ -9,6 +11,7 @@ import { cn } from "@/lib/utils"
 type PastRunsProps = {
   runs: PastRun[]
   errorDetail: string | null
+  emptyPaths: EmptyStepPath[]
   onOpen: (run: PastRun) => void
 }
 
@@ -19,7 +22,12 @@ function formatGeneratedAt(timestamp: string) {
   }).format(new Date(timestamp))
 }
 
-export function PastRuns({ runs, errorDetail, onOpen }: PastRunsProps) {
+export function PastRuns({
+  runs,
+  errorDetail,
+  emptyPaths,
+  onOpen,
+}: PastRunsProps) {
   return (
     <section className="w-full max-w-6xl" aria-labelledby="past-runs-title">
       <div className="mb-8 flex items-start gap-4">
@@ -43,27 +51,24 @@ export function PastRuns({ runs, errorDetail, onOpen }: PastRunsProps) {
       </div>
 
       {errorDetail && (
-        <p role="alert" className="mb-6 text-sm text-destructive">
+        <InlineNotice
+          tone="error"
+          title="Não foi possível abrir o relatório"
+          className="mb-6"
+        >
           {errorDetail}
-        </p>
+        </InlineNotice>
       )}
 
       {runs.length === 0 ? (
-        <Card>
-          <CardContent className="flex flex-col items-center py-14 text-center">
-            <SearchIcon
-              aria-hidden="true"
-              className="mb-4 size-8 text-muted-foreground"
-            />
-            <p className="font-display text-lg font-semibold text-heading">
-              Nenhum relatório anterior
-            </p>
-            <p className="mt-2 max-w-md text-sm text-muted-foreground">
-              Quando um relatório ficar pronto, ele aparecerá aqui durante sete
-              dias.
-            </p>
-          </CardContent>
-        </Card>
+        <div className="flex justify-center">
+          <EmptyStep
+            headingLevel={2}
+            title="Nenhum relatório anterior"
+            description="Quando um relatório ficar pronto, ele aparecerá aqui durante sete dias."
+            paths={emptyPaths}
+          />
+        </div>
       ) : (
         <ul className="grid gap-4" aria-label="Relatórios mantidos no servidor">
           {runs.map((run) => (
