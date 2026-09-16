@@ -212,9 +212,11 @@ def test_control_sheet_upload_returns_three_groups_from_fixture(tmp_path: Path) 
         2, 5, 6, 7, 10, 14,
     ]
     assert [row["row"]["row_number"] for row in body["stop_conditions"]] == [
-        3, 4, 8, 11, 13, 16,
+        3, 4, 8, 11, 13, 16, 17,
     ]
-    assert body["unsupported_rows"]["total"] == 0
+    assert [
+        row["row"]["row_number"] for row in body["unsupported_rows"]["rows"]
+    ] == [19]
 
 
 def test_report_ready_text_is_display_only_and_returned_verbatim(
@@ -487,10 +489,12 @@ def test_valid_loja_row_is_selectable_from_committed_workbook(
     response = _upload(client, FIXTURE)
 
     body = response.json()
-    assert body["unsupported_rows"] == {"total": 0, "rows": []}
     loja = next(item for item in body["engagements"] if item["row"]["row_number"] == 10)
     assert loja["tema"] == "Implantacao de Loja Virtual"
-    assert loja["capture_origin"] == "https://out-of-scope.example/"
+    assert loja["capture_origin"] == "https://casanossa.example/"
+    assert 17 in [
+        item["row"]["row_number"] for item in body["stop_conditions"]
+    ]
 
 
 def test_zero_engagement_workbook_returns_200_with_empty_list(tmp_path: Path) -> None:

@@ -1,4 +1,4 @@
-"""Public Tema seams exercised with the real control spreadsheet."""
+"""Public Tema seams exercised with the committed control-sheet fixture."""
 
 from __future__ import annotations
 
@@ -18,17 +18,48 @@ from report_generator9000.gates import run_gates
 from report_generator9000.gates.loja_blocks import check_loja_block_grammar
 from report_generator9000.lista_paginas import ELEMENTO_TRANSVERSAL, PAGINA_PRINCIPAL, Pagina
 from report_generator9000.loja_block_draft import loja_draft_blocks
-from report_generator9000.tema import LOJA_VIRTUAL_TEMA, WEBSITE_TEMA, supported_contract
+from report_generator9000.tema import (
+    LOJA_VIRTUAL_TEMA,
+    WEBSITE_TEMA,
+    contract_for,
+    supported_contract,
+)
 
 
-SHEET = Path(__file__).resolve().parents[1] / "referencias/Planilha para controle de relatórios.xlsx"
+SHEET = Path(__file__).parent / "fixtures" / "control-sheet-cases.xlsx"
 
 
-def test_real_sheet_selects_valid_loja_rows_and_stops_on_malformed_rows() -> None:
+def _is_loja(row: object) -> bool:
+    """A Loja row whether it was selectable or stopped before its Tema was kept.
+
+    A row keeps the sheet's own spelling, so the Tema is matched through the
+    routing contract rather than by comparing strings.
+    """
+    if isinstance(row, Engagement):
+        contract = contract_for(row.tema)
+        return contract is not None and contract.name == LOJA_VIRTUAL_TEMA
+    return isinstance(row, StopCondition) and row.razao_social.startswith("LOJA CNPJ")
+
+
+def _loja_engagement() -> Engagement:
+    return next(
+        row for row in read_control_sheet(SHEET)
+        if isinstance(row, Engagement) and _is_loja(row)
+    )
+
+
+def test_sheet_selects_valid_loja_rows_and_stops_on_malformed_rows() -> None:
     rows = read_control_sheet(SHEET)
-    assert any(isinstance(row, Engagement) and row.tema == LOJA_VIRTUAL_TEMA for row in rows)
-    assert any(isinstance(row, StopCondition) and row.row_number == 16 for row in rows)
-    assert any(isinstance(row, Engagement) and row.tema == WEBSITE_TEMA for row in rows)
+    loja = [row for row in rows if _is_loja(row)]
+    assert [type(row).__name__ for row in loja] == ["Engagement", "StopCondition"]
+    assert loja[1].cause == "CNPJ must contain 13 or 14 digits"
+    website = [
+        row for row in rows
+        if isinstance(row, Engagement)
+        and (contract := contract_for(row.tema)) is not None
+        and contract.name == WEBSITE_TEMA
+    ]
+    assert website
 
 
 def test_loja_master_is_client_neutral_and_passes_its_signoff_gate() -> None:
@@ -44,11 +75,8 @@ def test_loja_master_is_client_neutral_and_passes_its_signoff_gate() -> None:
     )
 
 
-def test_real_loja_engagement_yields_gated_draft_without_credentials(tmp_path: Path) -> None:
-    engagement = next(
-        row for row in read_control_sheet(SHEET)
-        if isinstance(row, Engagement) and row.tema == LOJA_VIRTUAL_TEMA
-    )
+def test_loja_engagement_yields_gated_draft_without_credentials(tmp_path: Path) -> None:
+    engagement = _loja_engagement()
     contract = supported_contract(engagement.tema)
     assert contract.master is not None
     report = generate_report(
@@ -67,10 +95,7 @@ def test_real_loja_engagement_yields_gated_draft_without_credentials(tmp_path: P
 
 
 def test_loja_rejects_credential_bearing_gated_text_before_generation(tmp_path: Path) -> None:
-    engagement = next(
-        row for row in read_control_sheet(SHEET)
-        if isinstance(row, Engagement) and row.tema == LOJA_VIRTUAL_TEMA
-    )
+    engagement = _loja_engagement()
     folder = gated_drop_folder(tmp_path, engagement)
     folder.mkdir(parents=True)
     (folder / "valores.json").write_text(
@@ -86,10 +111,7 @@ def test_loja_rejects_credential_bearing_gated_text_before_generation(tmp_path: 
 
 
 def test_loja_stamping_keeps_storefront_blocks_and_classifies_missing_public_evidence(tmp_path: Path) -> None:
-    engagement = next(
-        row for row in read_control_sheet(SHEET)
-        if isinstance(row, Engagement) and row.tema == LOJA_VIRTUAL_TEMA
-    )
+    engagement = _loja_engagement()
     contract = supported_contract(engagement.tema)
     assert contract.master is not None
     capture_folder = tmp_path / "capturas"

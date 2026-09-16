@@ -6,6 +6,7 @@ from pathlib import Path
 from report_generator9000.control_sheet import (
     Engagement,
     StopCondition,
+    UnsupportedRow,
     read_control_sheet,
 )
 
@@ -100,7 +101,7 @@ def test_committed_workbook_exercises_every_control_sheet_outcome() -> None:
             cnpj="18.573.230/0001-05",
             kick_off=datetime(2026, 4, 21),
             especialista="Christian Albuquerque Alonso",
-            capture_origin="https://out-of-scope.example/",
+            capture_origin="https://casanossa.example/",
             published_domain=None,
             tema="Implantacao de Loja Virtual",
         ),
@@ -142,6 +143,25 @@ def test_committed_workbook_exercises_every_control_sheet_outcome() -> None:
             especialista="Bruno Henrique Santana Leal",
             kick_off_text="20/05/2026",
             link_text="www.exemplo.com.br",
+        ),
+        StopCondition(
+            17,
+            "CNPJ must contain 13 or 14 digits",
+            demanda="012140/2026",
+            razao_social="LOJA CNPJ INVALIDO",
+            especialista="Christian Albuquerque Alonso",
+            kick_off_text="22/05/2026",
+            link_text="https://loja-invalida.example/",
+        ),
+        UnsupportedRow(
+            row_number=19,
+            reason="Tema is unsupported",
+            tema="Servico sem Master aprovado",
+            demanda="012160/2026",
+            razao_social="SERVICO NAO CONTRATADO",
+            especialista="Bruno Henrique Santana Leal",
+            kick_off_text="26/05/2026",
+            link_text="https://out-of-scope.example/",
         ),
     )
 

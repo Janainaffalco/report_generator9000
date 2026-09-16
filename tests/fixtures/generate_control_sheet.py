@@ -18,6 +18,7 @@ HEADERS = (
     "Relatorio pronto?",
 )
 IN_SCOPE = "Insercao digital - Desenvolvimento de WebSite"
+LOJA_VIRTUAL = "Implantacao de Loja Virtual"
 OUT_OF_SCOPE = "Servico sem Master aprovado"
 ROWS = (
     (
@@ -58,9 +59,9 @@ ROWS = (
         datetime(2026, 5, 13), "https://missing-pasta.example/", "",
     ),
     (
-        "011547/2026", "72-2026", OUT_OF_SCOPE, "18573230000105",
+        "011547/2026", "72-2026", LOJA_VIRTUAL, "18573230000105",
         "CASA NOSSA", "Christian Albuquerque Alonso",
-        datetime(2026, 4, 21), "https://out-of-scope.example/", "",
+        datetime(2026, 4, 21), "https://casanossa.example/", "",
     ),
     (
         "012000/2026", "80-2026", IN_SCOPE, "1234",
@@ -82,8 +83,18 @@ ROWS = (
         "LOJA SEM PROTOCOLO", "Bruno Henrique Santana Leal",
         datetime(2026, 5, 20), "www.exemplo.com.br", "",
     ),
+    (
+        "012140/2026", "46-2026", LOJA_VIRTUAL, "99",
+        "LOJA CNPJ INVALIDO", "Christian Albuquerque Alonso",
+        datetime(2026, 5, 22), "https://loja-invalida.example/", "",
+    ),
+    (
+        "012160/2026", "47-2026", OUT_OF_SCOPE, "30129441000160",
+        "SERVICO NAO CONTRATADO", "Bruno Henrique Santana Leal",
+        datetime(2026, 5, 26), "https://out-of-scope.example/", "",
+    ),
 )
-ROW_NUMBERS = (2, 3, 4, 5, 6, 7, 8, 10, 11, 13, 14, 16)
+ROW_NUMBERS = (2, 3, 4, 5, 6, 7, 8, 10, 11, 13, 14, 16, 17, 19)
 
 
 def _xml_cell(column: str, row: int, value: object) -> str:
