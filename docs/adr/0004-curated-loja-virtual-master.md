@@ -1,5 +1,5 @@
 ---
-status: proposed
+status: accepted
 ---
 
 # Loja Virtual uses its own curated, versioned Master
