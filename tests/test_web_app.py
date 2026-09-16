@@ -12,7 +12,7 @@ from fastapi.testclient import TestClient
 
 from report_generator9000.gates.results import GateReport, GateResult, Violation
 from report_generator9000.generate import StopCondition
-from report_generator9000.gated_inputs import load_gated_inputs
+from report_generator9000.gated_inputs import VALUES_FILE, load_gated_inputs
 from report_generator9000.master import build_master
 from report_generator9000.prose import (
     GroundedField,
@@ -1478,6 +1478,7 @@ def _finished_run_client(
     pendencias: tuple[Pendencia, ...],
     media_pages: dict[str, int] | None = None,
     text_pages: dict[str, int] | None = None,
+    row_number: int = 2,
 ) -> tuple[TestClient, str]:
     sheet_store = SheetStore(tmp_path / "sheets")
     app = _create_app(static_dir=tmp_path / "missing-web", sheet_store=sheet_store)
@@ -1546,7 +1547,10 @@ def _finished_run_client(
     uploaded = _upload(client, FIXTURE)
     started = client.post(
         "/api/runs",
-        json={"sheet_id": uploaded.json()["sheet_id"], "row_number": 2},
+        json={
+            "sheet_id": uploaded.json()["sheet_id"],
+            "row_number": row_number,
+        },
     )
     location = started.headers["location"]
     deadline = monotonic() + 2
@@ -1741,6 +1745,81 @@ def test_gated_attachment_is_validated_written_and_starts_a_full_rerun(
     )
     assert (gated_folder / "paleta.png").read_bytes() == palette
     assert (gated_folder / "valores.json").is_file()
+
+
+LOJA_ROW_NUMBER = 10
+LOJA_ENGAGEMENT_FOLDER = "72-2026_CASA NOSSA"
+
+
+def _loja_gated_pendencia(slot: str, name: str) -> Pendencia:
+    return Pendencia(
+        slot=slot,
+        classification="GATED",
+        reason="nao fornecida no Gated Drop Folder",
+        evidence=f"evidence-{slot}",
+        name=name,
+        page=name,
+        required_action=f"Fornecer {name} no Gated Drop Folder",
+    )
+
+
+def test_loja_refuses_a_credential_attachment_and_reruns_on_a_product_list(
+    tmp_path: Path,
+) -> None:
+    """A Loja consultant may attach the admin product list, never credentials."""
+    client, run_id = _finished_run_client(
+        tmp_path,
+        gate_report=GateReport(results=()),
+        pendencias=(
+            _loja_gated_pendencia("produtos-admin", "LISTA DE PRODUTOS"),
+            _loja_gated_pendencia("data_entrega", "data entrega"),
+        ),
+        row_number=LOJA_ROW_NUMBER,
+    )
+
+    credentials = client.post(
+        f"/api/runs/{run_id}/attachments",
+        files=[
+            (
+                "files",
+                (
+                    VALUES_FILE,
+                    json.dumps(
+                        {
+                            "data_entrega": "30/06/2026",
+                            "link_usuarios_senhas": (
+                                "https://drive.google.com/drive/folders/acessos"
+                            ),
+                        }
+                    ).encode("utf-8"),
+                    "application/json",
+                ),
+            )
+        ],
+    )
+    assert credentials.status_code == 422
+    assert "credential" in credentials.json()["detail"]
+    gated_folder = (
+        client.app.state.run_service.gated_drop_root / LOJA_ENGAGEMENT_FOLDER
+    )
+    assert not gated_folder.exists()
+
+    attached = client.post(
+        f"/api/runs/{run_id}/attachments",
+        files=[("files", ("produtos-admin.png", _TINY_PNG, "image/png"))],
+    )
+    assert attached.status_code == 202
+    rerun = attached.json()
+    assert rerun["run_id"] != run_id
+    deadline = monotonic() + 2
+    while rerun["outcome"] == "running" and monotonic() < deadline:
+        sleep(0.01)
+        rerun = client.get(f"/api/runs/{rerun['run_id']}").json()
+    assert rerun["outcome"] == "finished"
+    assert rerun["stage_history"] == list(STAGES)
+    remaining = client.get(f"/api/runs/{rerun['run_id']}/report").json()
+    assert [item["name"] for item in remaining["pendencias"]] == ["data entrega"]
+    assert (gated_folder / "produtos-admin.png").read_bytes() == _TINY_PNG
 
 
 def test_report_endpoint_404s_before_the_run_finishes(tmp_path: Path) -> None:

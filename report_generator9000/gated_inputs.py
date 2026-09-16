@@ -12,7 +12,7 @@ from urllib.parse import urlparse
 from .artifact_paths import engagement_artifact_key
 from .control_sheet import Engagement
 from .lista_paginas import DeclaredPage
-from .tema import LOJA_VIRTUAL_TEMA, supported_contract
+from .tema import LOJA_VIRTUAL_TEMA, TemaContract, supported_contract
 
 VALUES_FILE = "valores.json"
 GATED_VALUE_SLOTS = (
@@ -50,6 +50,41 @@ _SECRET_BEARING = re.compile(
     r"\b(?:senhas?|passwords?|passwd|pwd|segredo|secret|api[_ -]?key)\b",
     re.IGNORECASE,
 )
+_CREDENTIAL_REFUSAL = (
+    "this app never handles WordPress or Drive credentials; an exceptional "
+    "disclosure stays a Word edit during review"
+)
+
+
+def _normalized_separators(name: str) -> str:
+    """Fold hyphen/underscore separators to spaces so `\\b` finds words."""
+    return name.replace("_", " ").replace("-", " ")
+
+
+def _reject_credential_bearing_keys(
+    document: dict[str, object], contract: TemaContract
+) -> None:
+    accepted = contract.value_slot_names
+    for key in document:
+        if key in accepted:
+            continue
+        if _SECRET_BEARING.search(_normalized_separators(key)):
+            raise GatedInputError(
+                f"{VALUES_FILE}.{key} is credential-bearing: {_CREDENTIAL_REFUSAL}"
+            )
+
+
+def _reject_credential_bearing_filenames(
+    names: list[str], known_images: dict[str, tuple[str, str]]
+) -> None:
+    for name in names:
+        if name in known_images:
+            continue
+        stem = Path(name).stem
+        if _SECRET_BEARING.search(_normalized_separators(stem)):
+            raise GatedInputError(
+                f"{name} is a credential-bearing filename: {_CREDENTIAL_REFUSAL}"
+            )
 
 
 @dataclass(frozen=True)
@@ -130,7 +165,8 @@ def _token_values(
             continue
         if reject_credentials and slot == "configuracao_woocommerce":
             raise GatedInputError(
-                f"{VALUES_FILE}.{slot} cannot be inserted automatically; review private configuration in Word"
+                f"{VALUES_FILE}.{slot} is credential-bearing and cannot be inserted "
+                "automatically; review private configuration in Word"
             )
         supplied = _required_text(document, slot)
         if reject_credentials and _SECRET_BEARING.search(supplied):
@@ -210,6 +246,14 @@ def load_gated_inputs(
         filename: (slot, part_name)
         for slot, filename, part_name in contract.gated_image_slots
     }
+    _reject_credential_bearing_filenames(
+        [
+            item.name
+            for item in folder.iterdir()
+            if item.name != VALUES_FILE and item.name not in _IGNORED_FILES
+        ],
+        known_images,
+    )
     unknown = sorted(
         item.name
         for item in folder.iterdir()
@@ -238,6 +282,7 @@ def load_gated_inputs(
         raise GatedInputError(f"{values_path}: invalid JSON: {error}") from error
     if not isinstance(document, dict):
         raise GatedInputError(f"{VALUES_FILE} must contain a JSON object")
+    _reject_credential_bearing_keys(document, contract)
     value_keys = frozenset(
         {"pasta", "razao_social", "lista_paginas"}
         | {slot for slot, _tokens in contract.gated_value_slots}

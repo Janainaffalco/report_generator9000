@@ -11,6 +11,20 @@ from typing import Callable
 WEBSITE_TEMA = "Inserção digital - Desenvolvimento de WebSite"
 LOJA_VIRTUAL_TEMA = "Implantação de Loja Virtual"
 
+# The label the curated Loja Master binds each administrative Gated image Slot
+# to. A Pendência names the label rather than the Slot, so a consultant reading
+# PENDENCIAS.md knows which screenshot is missing without opening the document.
+LOJA_GATED_SLOT_LABELS = (
+    ("login", "PÁGINA DE LOGIN"),
+    ("painel", "PAINEL DE CONFIGURAÇÃO WORDPRESS"),
+    ("produtos-admin", "LISTA DE PRODUTOS"),
+    ("pagamentos-admin", "CONFIGURAÇÃO DE PAGAMENTOS"),
+    ("entregas-admin", "CONFIGURAÇÃO DE ENTREGAS"),
+    ("drive", "COMPARTILHAMENTO DECLARADO PELO CONSULTOR"),
+    ("kickoff", "PRINT DO KICKOFF"),
+    ("entrega", "PRINT DA ENTREGA"),
+)
+
 
 def _key(value: str) -> str:
     decomposed = unicodedata.normalize("NFKD", value)
@@ -26,6 +40,7 @@ class TemaContract:
     spreadsheet_tokens: tuple[tuple[str, str], ...] = ()
     gated_value_slots: tuple[tuple[str, tuple[str, ...]], ...] = ()
     gated_image_slots: tuple[tuple[str, str, str], ...] = ()
+    gated_slot_labels: tuple[tuple[str, str], ...] = ()
     boilerplate_media: frozenset[str] = frozenset()
     required_blocks: tuple[str, ...] = ()
     master_gate: Callable[..., object] | None = None
@@ -38,6 +53,14 @@ class TemaContract:
     @property
     def value_slot_names(self) -> set[str]:
         return {slot for slot, _tokens in self.gated_value_slots}
+
+    def slot_label(self, slot: str) -> str:
+        """Return the label the Master binds *slot* to, or the slot itself.
+
+        A Tema that declares no labels keeps naming its Pendências after the
+        Slot, which is how the WebSite grammar has always read.
+        """
+        return dict(self.gated_slot_labels).get(slot, slot)
 
 
 def contract_for(tema: str) -> TemaContract | None:
@@ -52,6 +75,7 @@ def contract_for(tema: str) -> TemaContract | None:
     from .gates import GATES
     from .gates.loja_blocks import check_loja_block_grammar
     from .gates.loja_credentials import check_loja_credentials
+    from .gates.loja_handover import check_loja_handover_claims
     from .gates.master import BOILERPLATE_MEDIA, LOJA_VIRTUAL_GRAMMAR, check_loja_master, check_master_build
 
     if loja:
@@ -78,10 +102,16 @@ def contract_for(tema: str) -> TemaContract | None:
                 }.get(slot, (slot, filename, part))
                 for slot, filename, part in GATED_IMAGE_PARTS
             ),
+            gated_slot_labels=LOJA_GATED_SLOT_LABELS,
             boilerplate_media=BOILERPLATE_MEDIA,
             required_blocks=LOJA_VIRTUAL_GRAMMAR.block_headings,
             master_gate=check_loja_master,
-            gates=(*GATES, check_loja_block_grammar, check_loja_credentials),
+            gates=(
+                *GATES,
+                check_loja_block_grammar,
+                check_loja_credentials,
+                check_loja_handover_claims,
+            ),
         )
 
     return TemaContract(

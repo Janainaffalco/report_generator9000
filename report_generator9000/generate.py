@@ -13,7 +13,7 @@ from zipfile import BadZipFile, ZipFile
 
 from .artifact_paths import engagement_artifact_key
 from .control_sheet import Engagement
-from .docx_package import DocxPackage, open_docx_package
+from .docx_package import DocxPackage, media_location, open_docx_package
 from .domains import derive_published_domain
 from .gates import GateReport, run_gates
 from .gates.master import BOILERPLATE_MEDIA
@@ -99,32 +99,6 @@ class StopCondition(ReportGenerationError):
 
 class GateRejected(StopCondition):
     """The correctness gates rejected a staged document as defective."""
-
-
-def _media_location(
-    package: DocxPackage, part_name: str
-) -> tuple[str, str]:
-    """Return the structural Slot and nearest human-readable page heading."""
-    media_slots = [
-        slot for slot in package.slots if slot.media_part == part_name
-    ]
-    if not media_slots:
-        return f"capture:{part_name}", part_name
-    media_slot = media_slots[0]
-    preceding = [
-        paragraph
-        for paragraph in package.paragraphs
-        if paragraph.source_part == media_slot.source_part
-        and paragraph.index < media_slot.paragraph_index
-        and paragraph.keep_next
-        and paragraph.text.strip()
-    ]
-    page = preceding[-1].text.strip() if preceding else part_name
-    slot = (
-        f"{media_slot.source_part}:p={media_slot.paragraph_index}:"
-        f"r={media_slot.run_index}"
-    )
-    return slot, page
 
 
 def _placeholder_pixel_dimensions(
@@ -556,12 +530,16 @@ def generate_report(
             classification = (
                 "UNDECLARED" if is_undeclared_palette else "GATED"
             )
+            # The label the Master binds this Slot to is what the consultant
+            # sees above the gap, so it -- not the internal Slot name -- is
+            # what the Pendência asks them to attach.
+            label = contract.slot_label(slot)
             required_action = (
                 "Revisar a paleta no Word e substituir a imagem se necessario"
                 if is_undeclared_palette
-                else f"Fornecer {slot} no Gated Drop Folder"
+                else f"Fornecer {label} no Gated Drop Folder"
             )
-            _document_slot, page = _media_location(
+            _document_slot, page = media_location(
                 master_package, part_name
             )
             width, height = _placeholder_pixel_dimensions(
@@ -594,7 +572,7 @@ def generate_report(
                         else "imagem nao fornecida no Gated Drop Folder"
                     ),
                     evidence=digest,
-                    name=slot,
+                    name=label,
                     page=page,
                     required_action=required_action,
                 )
@@ -622,7 +600,7 @@ def generate_report(
                 )
             )
             continue
-        slot, page = _media_location(master_package, media.part_name)
+        slot, page = media_location(master_package, media.part_name)
         required_action = f"Investigar a falha e refazer a Capture de {page}"
         width, height = _placeholder_pixel_dimensions(
             master_package, media.part_name

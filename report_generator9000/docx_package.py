@@ -760,6 +760,35 @@ def _read_structure(
     return tuple(paragraphs), tuple(slots)
 
 
+def media_location(package: DocxPackage, part_name: str) -> tuple[str, str]:
+    """Return the structural Slot and the label bound to *part_name*.
+
+    The label is the nearest preceding `keepNext` paragraph carrying text --
+    the same binding a Block uses, so a Slot is named in the document by the
+    heading a reader sees above it rather than by its media part.
+    """
+    media_slots = [
+        slot for slot in package.slots if slot.media_part == part_name
+    ]
+    if not media_slots:
+        return f"capture:{part_name}", part_name
+    media_slot = media_slots[0]
+    preceding = [
+        paragraph
+        for paragraph in package.paragraphs
+        if paragraph.source_part == media_slot.source_part
+        and paragraph.index < media_slot.paragraph_index
+        and paragraph.keep_next
+        and paragraph.text.strip()
+    ]
+    label = preceding[-1].text.strip() if preceding else part_name
+    slot = (
+        f"{media_slot.source_part}:p={media_slot.paragraph_index}:"
+        f"r={media_slot.run_index}"
+    )
+    return slot, label
+
+
 def open_docx_package(path: str | Path) -> DocxPackage:
     """Open *path* and return its package-level inventory."""
     document = Path(path)

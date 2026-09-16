@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from ..docx_package import DocxPackage
+from ..gated_inputs import GATED_IMAGE_PARTS
 from ..run_context import RunContext
 from .results import GateResult, Violation, result, violation
 
@@ -10,6 +11,15 @@ from .results import GateResult, Violation, result, violation
 GATE = "block-integrity"
 
 _LINKED_RELATIONSHIP_TYPES = ("image", "hyperlink")
+
+# A Gated image Slot's own keepNext label (e.g. "PÁGINA DE LOGIN") is a
+# distinct domain concept from a Block: it identifies one administrative
+# screenshot for docx_package.media_location, it is never inserted or
+# deleted as a Página/Site-content unit, and the Run's declared `blocks`
+# (from Lista de Páginas) never lists it. Exempt these from the
+# declared-Block bookkeeping below, without loosening the adjacency
+# requirement that still keeps every such label bound to its image.
+_GATED_MEDIA_PARTS = frozenset(part for _slot, _file, part in GATED_IMAGE_PARTS)
 
 
 def check_block_integrity(
@@ -27,6 +37,19 @@ def check_block_integrity(
             (paragraph.source_part, paragraph.index + 1)
         )
         return following is not None and following.has_image
+
+    def _gated_admin_label(paragraph) -> bool:
+        following = by_position.get(
+            (paragraph.source_part, paragraph.index + 1)
+        )
+        if following is None:
+            return False
+        return any(
+            slot.source_part == following.source_part
+            and slot.paragraph_index == following.index
+            and slot.media_part in _GATED_MEDIA_PARTS
+            for slot in package.slots
+        )
 
     stranded: set[tuple[str, int]] = set()
     for paragraph in package.paragraphs:
@@ -97,6 +120,8 @@ def check_block_integrity(
         for paragraph in package.paragraphs:
             text = paragraph.text.strip()
             if not paragraph.keep_next or not text or text in occurrences:
+                continue
+            if _gated_admin_label(paragraph):
                 continue
             if _image_follows(paragraph):
                 violations.append(

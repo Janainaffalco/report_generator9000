@@ -33,6 +33,11 @@ REWRITES = {
     33: "Descrição geral da plataforma; a configuração desta loja requer evidência própria.",
     36: "Os materiais de entrega são identificados pelos links fornecidos abaixo. A ausência de um link permanece sinalizada:",
     37: "Materiais de implantação disponíveis quando comprovados pelos links abaixo",
+    38: "Backup do código fonte na versão mais recente, quando disponibilizado pelo link abaixo (data {{DATA_BACKUP}})",
+    39: "Banco de imagens, quando disponibilizado pelo link abaixo",
+    40: "Identidade visual, quando disponibilizada pelo link abaixo",
+    41: "Paleta de cores, quando disponibilizada pelo link abaixo",
+    42: "Guia Rápido, quando disponibilizado pelo link abaixo",
     45: "Os dados de hospedagem e domínio abaixo são preenchidos a partir dos insumos declarados ou identificados durante a geração. A configuração da conta de hospedagem não é inferida do endereço público.",
     46: "A aprovação de tema, DNS, SSL e demais ajustes privados exige comprovação específica e não é afirmada por este relatório básico.",
     47: "Fornecedor da hospedagem: conforme contrato informado pelo cliente",
@@ -73,6 +78,32 @@ REWRITES = {
 }
 
 
+# Administrative Gated image Slots (word/media/imageNN) each need their own
+# keepNext-bound label paragraph immediately before them, so
+# docx_package.media_location resolves a Pendencia to the right screenshot
+# instead of walking back to the "RODAPÉ" Block heading. Paragraph indices
+# refer to the neutral WebSite Master, same as REWRITES above.
+ADMIN_LABEL_PARAGRAPHS = {
+    129: "PÁGINA DE LOGIN",
+    136: "PAINEL DE CONFIGURAÇÃO WORDPRESS",
+    190: "PRINT DO KICKOFF",
+    193: "PRINT DA ENTREGA",
+}
+
+# The three administrative screenshots crammed into paragraph 153 with no
+# labels at all. Paragraphs 154-160 are empty and available to hold the
+# split-out label/image pairs without growing the body's paragraph count.
+ADMIN_YOAST_BLOCK = (
+    (153, 154, "LISTA DE PRODUTOS"),
+    (156, 157, "CONFIGURAÇÃO DE PAGAMENTOS"),
+    (159, 160, "CONFIGURAÇÃO DE ENTREGAS"),
+)
+
+# Paragraph 178 is empty and immediately precedes the drive image at 179.
+ADMIN_DRIVE_LABEL_PARAGRAPH = 178
+ADMIN_DRIVE_LABEL_TEXT = "COMPARTILHAMENTO DECLARADO PELO CONSULTOR"
+
+
 def _text(paragraph: ElementTree.Element) -> str:
     return "".join(node.text or "" for node in paragraph.iter(f"{W}t"))
 
@@ -95,6 +126,67 @@ def _rewrite(paragraph: ElementTree.Element, value: str) -> None:
         paragraph.append(run)
 
 
+def _set_keep_next(paragraph: ElementTree.Element) -> None:
+    """Bind ``paragraph`` to the one that follows it (CT_PPrBase schema order)."""
+    paragraph_properties = paragraph.find(f"{W}pPr")
+    if paragraph_properties is None:
+        paragraph_properties = ElementTree.Element(f"{W}pPr")
+        paragraph.insert(0, paragraph_properties)
+    if paragraph_properties.find(f"{W}keepNext") is not None:
+        return
+    keep_next = ElementTree.Element(f"{W}keepNext", {f"{W}val": "true"})
+    prior = ("pStyle",)
+    for position, child in enumerate(paragraph_properties):
+        if child.tag.rsplit("}", 1)[-1] not in prior:
+            paragraph_properties.insert(position, keep_next)
+            break
+    else:
+        paragraph_properties.append(keep_next)
+
+
+def _label_paragraph(
+    template: ElementTree.Element, text: str
+) -> ElementTree.Element:
+    """A keepNext label paragraph in the font/alignment of ``template``.
+
+    ``template`` supplies the paragraph mark's run properties (``w:pPr/w:rPr``)
+    so the label's font stays inside the approved identity, per ``_rewrite``'s
+    existing contract of reusing a run's properties rather than inventing new
+    ones.
+    """
+    paragraph = deepcopy(template)
+    for run in list(paragraph.findall(f"{W}r")):
+        paragraph.remove(run)
+    paragraph_properties = paragraph.find(f"{W}pPr")
+    mark_properties = (
+        paragraph_properties.find(f"{W}rPr")
+        if paragraph_properties is not None
+        else None
+    )
+    placeholder_run = ElementTree.SubElement(paragraph, f"{W}r")
+    if mark_properties is not None:
+        placeholder_run.append(deepcopy(mark_properties))
+    _rewrite(paragraph, text)
+    _set_keep_next(paragraph)
+    return paragraph
+
+
+def _image_paragraph(
+    template: ElementTree.Element,
+    run_properties: ElementTree.Element | None,
+    drawing: ElementTree.Element,
+) -> ElementTree.Element:
+    """An image-only paragraph in the geometry of ``template`` carrying ``drawing``."""
+    paragraph = deepcopy(template)
+    for run in list(paragraph.findall(f"{W}r")):
+        paragraph.remove(run)
+    run = ElementTree.SubElement(paragraph, f"{W}r")
+    if run_properties is not None:
+        run.append(deepcopy(run_properties))
+    run.append(deepcopy(drawing))
+    return paragraph
+
+
 def build() -> Path:
     if sha256(SOURCE.read_bytes()).hexdigest() != SOURCE_SHA256:
         raise RuntimeError("source WebSite Master changed; review Loja paragraph rewrites before rebuilding")
@@ -109,6 +201,52 @@ def build() -> Path:
     assert _text(paragraphs[185]).strip().startswith("Usuários e Senhas")
     for index, value in REWRITES.items():
         _rewrite(paragraphs[index], value)
+
+    body = document.find(f"{W}body")
+    assert body is not None
+
+    # Bind each administrative Gated image Slot to its own label, so
+    # docx_package.media_location's walk-back-to-nearest-keepNext-paragraph
+    # never lands on the "RODAPÉ" Block heading for one of these Slots.
+    for index, expected_text in ADMIN_LABEL_PARAGRAPHS.items():
+        assert _text(paragraphs[index]).strip() == expected_text
+        _rewrite(paragraphs[index], expected_text)
+        _set_keep_next(paragraphs[index])
+
+    # The Block grammar (and the block-integrity gate it shares with these
+    # Gated labels) requires a keepNext heading to be immediately followed by
+    # its image paragraph. p129/p136 have an empty spacer paragraph sitting
+    # between the label and the image (p130/p137); swap it out of the way so
+    # the label sits directly above its image, with no growth in paragraph
+    # count.
+    body[130], body[131] = body[131], body[130]
+    body[137], body[138] = body[138], body[137]
+
+    # Paragraph 153 crams three administrative screenshots (image15, image16,
+    # image17) into one unlabelled paragraph. Split them into three separate
+    # label+image pairs, consuming the empty paragraphs 154-160 so the body's
+    # paragraph count does not grow.
+    admin_yoast_source = paragraphs[153]
+    admin_yoast_run = next(admin_yoast_source.iter(f"{W}r"))
+    admin_yoast_drawings = list(admin_yoast_run.findall(f"{W}drawing"))
+    assert len(admin_yoast_drawings) == 3
+    admin_yoast_run_properties = admin_yoast_run.find(f"{W}rPr")
+    admin_yoast_template = deepcopy(admin_yoast_source)
+    for run in list(admin_yoast_template.findall(f"{W}r")):
+        admin_yoast_template.remove(run)
+    for (label_index, image_index, label_text), drawing in zip(
+        ADMIN_YOAST_BLOCK, admin_yoast_drawings
+    ):
+        body[label_index] = _label_paragraph(admin_yoast_template, label_text)
+        body[image_index] = _image_paragraph(
+            admin_yoast_template, admin_yoast_run_properties, drawing
+        )
+
+    # Paragraph 178 is empty and immediately precedes the drive image at 179.
+    assert _text(paragraphs[ADMIN_DRIVE_LABEL_PARAGRAPH]).strip() == ""
+    _rewrite(paragraphs[ADMIN_DRIVE_LABEL_PARAGRAPH], ADMIN_DRIVE_LABEL_TEXT)
+    _set_keep_next(paragraphs[ADMIN_DRIVE_LABEL_PARAGRAPH])
+
     # The platform logo is anchored to this heading. A stable page break keeps
     # the heading and floated image together as preceding Loja prose grows.
     platform_properties = paragraphs[61].find(f"{W}pPr")
