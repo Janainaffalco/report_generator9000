@@ -104,6 +104,8 @@ def _assemble_staged_package(
         pages = discover_storefront_pages(
             engagement.capture_origin,
             pages,
+            provider=None if no_llm else prose_provider,
+            provider_config=None if no_llm else prose_config,
         )
     report_progress("open_origin")
     report_progress("derive_pages", len(pages))

@@ -9,9 +9,12 @@ from pathlib import Path
 from threading import Thread
 from urllib.parse import urlsplit
 
+import pytest
+
 from report_generator9000.assembly import assemble_output_package
 from report_generator9000.capture import CaptureConfig, capture_site
 from report_generator9000.control_sheet import Engagement
+from report_generator9000.generate import StopCondition
 from report_generator9000.lista_paginas import (
     ELEMENTO_TRANSVERSAL,
     PAGINA_PRINCIPAL,
@@ -20,8 +23,15 @@ from report_generator9000.lista_paginas import (
     VITRINE,
     Pagina,
 )
+from report_generator9000.prose import (
+    GroundedField,
+    ProseConfig,
+    ProseResponse,
+)
 from report_generator9000.storefront import (
     StorefrontDiscoveryConfig,
+    StorefrontDiscoveryResponse,
+    StorefrontProviderCandidate,
     discover_storefront_pages,
 )
 from report_generator9000.tema import LOJA_VIRTUAL_TEMA, supported_contract
@@ -31,6 +41,7 @@ from tests.test_assembly import _FakePreviewRenderer
 class _StorefrontHandler(BaseHTTPRequestHandler):
     requests: list[tuple[str, str]] = []
     api_enabled = True
+    customized_only = False
 
     def log_message(self, format: str, *args: object) -> None:
         pass
@@ -68,20 +79,33 @@ class _StorefrontHandler(BaseHTTPRequestHandler):
             ).encode()
             self._send(payload, "application/json")
             return
-        pages = {
-            "/": """
+        conventional_home = """
                 <h1>Empório</h1><nav><a href='/sobre/'>Sobre</a></nav>
                 <main>
                   <a class='shop-card' href='/loja/'>Conheça a loja</a>
                   <a class='product-card' href='/produto/cafe/'>Café Especial</a>
                   <a href='/categoria-produto/graos/'>Grãos</a>
                   <a class='product-filter' href='/loja/?filter_torra=media'>Torra média</a>
+                  <a class='entry' href='/colecao-especial/'>Coleção especial</a>
+                  <a class='entry' href='/item/cafe-raro/'>Café raro</a>
+                  <a class='entry' href='/item/inventado/'>Inventado</a>
                   <a href='/carrinho/?add-to-cart=10'>Comprar agora</a>
                   <a href='https://outside.example/produto/fora/'>Externo</a>
                   <script>fetch('/checkout/', {method: 'POST'})</script>
                 </main>
                 <footer>Contato e informações da empresa</footer>
-            """,
+            """
+        customized_home = """
+                <h1>Empório</h1>
+                <main>
+                  <a class='entry' href='/colecao-especial/'>Coleção especial</a>
+                  <a class='entry' href='/sobre/'>Sobre</a>
+                  <p>Catálogo externo: https://outside.example/produtos/</p>
+                </main>
+                <footer>Contato e informações da empresa</footer>
+            """
+        pages = {
+            "/": customized_home if type(self).customized_only else conventional_home,
             "/loja/": "<h1>Loja</h1><p>Produtos disponíveis para compra pública.</p>",
             "/produto/cafe/": (
                 "<h1>Café Especial</h1>"
@@ -89,6 +113,16 @@ class _StorefrontHandler(BaseHTTPRequestHandler):
             ),
             "/categoria-produto/graos/": (
                 "<h1>Grãos</h1><p>Categoria pública de produtos.</p>"
+            ),
+            "/colecao-especial/": (
+                "<h1>Coleção especial</h1>"
+                "<p>Vitrine personalizada com itens publicados.</p>"
+                "<a class='entry' href='/item/cafe-raro/'>Café raro</a>"
+                "<a class='entry' href='/item/inventado/'>Inventado</a>"
+            ),
+            "/item/cafe-raro/": (
+                "<article class='type-product'><h1>Café raro</h1>"
+                "<p>Item publicado com descrição completa.</p></article>"
             ),
             "/sobre/": "<h1>Sobre</h1><p>História completa do empório.</p>",
         }
@@ -103,7 +137,8 @@ class _StorefrontHandler(BaseHTTPRequestHandler):
             "<html><head><style>:root{--brand-primary:#7a2f1f;"
             "--brand-secondary:#d68c45}body{background:#f7e7ce;color:#23160f}"
             "main{min-height:700px}a{display:block;padding:12px}</style></head>"
-            f"<body><header>Empório</header>{body}</body></html>"
+            f"<body{' class=single-product' if parsed.path == '/item/cafe-raro/' else ''}>"
+            f"<header>Empório</header>{body}</body></html>"
         ).encode()
         self._send(markup, "text/html; charset=utf-8")
 
@@ -117,12 +152,13 @@ class _StorefrontHandler(BaseHTTPRequestHandler):
 
 @contextmanager
 def _serve_storefront(
-    *, api_enabled: bool = True
+    *, api_enabled: bool = True, customized_only: bool = False
 ) -> Iterator[tuple[str, type[_StorefrontHandler]]]:
     class Handler(_StorefrontHandler):
         requests: list[tuple[str, str]] = []
 
     Handler.api_enabled = api_enabled
+    Handler.customized_only = customized_only
     server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
     thread = Thread(target=server.serve_forever, daemon=True)
     thread.start()
@@ -139,6 +175,37 @@ def _base_pages(origin: str) -> tuple[Pagina, ...]:
         Pagina(PAGINA_PRINCIPAL, "Home", origin, "PÁGINA HOME"),
         Pagina(ELEMENTO_TRANSVERSAL, "Cabeçalho", origin, "CABEÇALHO"),
         Pagina(ELEMENTO_TRANSVERSAL, "Rodapé", origin, "RODAPÉ"),
+    )
+
+
+class _FakeStorefrontProvider:
+    def __init__(
+        self,
+        response: StorefrontDiscoveryResponse | Exception,
+    ) -> None:
+        self.response = response
+        self.discovery_requests = []
+
+    def discover_storefront(self, request, config):
+        self.discovery_requests.append((request, config))
+        if isinstance(self.response, Exception):
+            raise self.response
+        return self.response
+
+    def generate(self, request, config):
+        empty = GroundedField(value=None, grounded=False)
+        return ProseResponse(empty, empty)
+
+
+def _candidate(
+    *, kind: str, label: str, url: str, source_id: str, excerpt: str
+) -> StorefrontProviderCandidate:
+    return StorefrontProviderCandidate(
+        kind=kind,
+        label=label,
+        url=url,
+        source_id=source_id,
+        excerpt=excerpt,
     )
 
 
@@ -178,7 +245,9 @@ def test_discovery_confirms_a_public_storefront_without_using_the_menu() -> None
 
 
 def test_absent_public_signals_return_the_original_lista() -> None:
-    with _serve_storefront(api_enabled=False) as (origin, _handler):
+    with _serve_storefront(
+        api_enabled=False, customized_only=True
+    ) as (origin, _handler):
         original = (
             Pagina(PAGINA_PRINCIPAL, "Sobre", origin + "sobre/", "SEÇÃO SOBRE"),
             Pagina(ELEMENTO_TRANSVERSAL, "Rodapé", origin, "RODAPÉ"),
@@ -190,6 +259,253 @@ def test_absent_public_signals_return_the_original_lista() -> None:
         )
 
     assert pages == original
+
+
+def test_provider_is_not_invoked_when_deterministic_signals_are_sufficient() -> None:
+    provider = _FakeStorefrontProvider(StorefrontDiscoveryResponse(()))
+    with _serve_storefront() as (origin, _handler):
+        pages = discover_storefront_pages(
+            origin,
+            _base_pages(origin),
+            provider=provider,
+            provider_config=ProseConfig(model="fake", output_budget=200),
+        )
+
+    assert provider.discovery_requests == []
+    assert any(page.tipo == VITRINE for page in pages)
+    assert any(page.tipo == PRODUTO_PUBLICADO for page in pages)
+
+
+def test_provider_candidates_need_literal_evidence_and_browser_confirmation() -> None:
+    with _serve_storefront(
+        api_enabled=False, customized_only=True
+    ) as (origin, _handler):
+        listing_source_id = "public-page-1"
+        product_source_id = "public-page-2"
+        listing_url = origin + "colecao-especial/"
+        product_url = origin + "item/cafe-raro/"
+        missing_url = origin + "item/inventado/"
+        provider = _FakeStorefrontProvider(
+            StorefrontDiscoveryResponse(
+                (
+                    _candidate(
+                        kind=VITRINE,
+                        label="Coleção especial",
+                        url=listing_url,
+                        source_id=listing_source_id,
+                        excerpt=f"Coleção especial | {listing_url}",
+                    ),
+                    _candidate(
+                        kind=PRODUTO_PUBLICADO,
+                        label="Café raro",
+                        url=product_url,
+                        source_id=product_source_id,
+                        excerpt=f"Café raro | {product_url}",
+                    ),
+                    _candidate(
+                        kind=PRODUTO_PUBLICADO,
+                        label="Inventado",
+                        url=missing_url,
+                        source_id=product_source_id,
+                        excerpt=f"Inventado | {missing_url}",
+                    ),
+                )
+            )
+        )
+        pages = discover_storefront_pages(
+            origin,
+            _base_pages(origin),
+            provider=provider,
+            provider_config=ProseConfig(model="fake", output_budget=200),
+        )
+
+    assert len(provider.discovery_requests) == 1
+    request, _config = provider.discovery_requests[0]
+    assert len(request.pages) == 3
+    assert [page.titulo_bloco for page in pages[1:-2]] == [
+        "SEÇÃO PRODUTOS",
+        "PRODUTO CAFÉ RARO",
+        "VITRINE MOBILE",
+    ]
+
+
+def test_unsupported_provider_evidence_fails_closed() -> None:
+    with _serve_storefront(
+        api_enabled=False, customized_only=True
+    ) as (origin, _handler):
+        provider = _FakeStorefrontProvider(
+            StorefrontDiscoveryResponse(
+                (
+                    _candidate(
+                        kind=VITRINE,
+                        label="Coleção especial",
+                        url=origin + "colecao-especial/",
+                        source_id="public-page-1",
+                        excerpt="texto que a página nunca apresentou",
+                    ),
+                )
+            )
+        )
+        pages = discover_storefront_pages(
+            origin,
+            _base_pages(origin),
+            provider=provider,
+            provider_config=ProseConfig(model="fake", output_budget=200),
+        )
+
+    assert pages == _base_pages(origin)
+
+
+def test_provider_label_requires_literal_evidence() -> None:
+    with _serve_storefront(
+        api_enabled=False, customized_only=True
+    ) as (origin, _handler):
+        listing_url = origin + "colecao-especial/"
+        provider = _FakeStorefrontProvider(
+            StorefrontDiscoveryResponse(
+                (
+                    _candidate(
+                        kind=VITRINE,
+                        label="Loja incrível",
+                        url=listing_url,
+                        source_id="public-page-1",
+                        excerpt=f"Coleção especial | {listing_url}",
+                    ),
+                )
+            )
+        )
+        pages = discover_storefront_pages(
+            origin,
+            _base_pages(origin),
+            provider=provider,
+            provider_config=ProseConfig(model="fake", output_budget=200),
+        )
+
+    assert pages == _base_pages(origin)
+
+
+def test_cross_origin_provider_url_fails_closed() -> None:
+    with _serve_storefront(
+        api_enabled=False, customized_only=True
+    ) as (origin, _handler):
+        outside = "https://outside.example/produtos/"
+        provider = _FakeStorefrontProvider(
+            StorefrontDiscoveryResponse(
+                (
+                    _candidate(
+                        kind=VITRINE,
+                        label="Catálogo externo",
+                        url=outside,
+                        source_id="public-page-1",
+                        excerpt=f"Catálogo externo: {outside}",
+                    ),
+                )
+            )
+        )
+        pages = discover_storefront_pages(
+            origin,
+            _base_pages(origin),
+            provider=provider,
+            provider_config=ProseConfig(model="fake", output_budget=200),
+        )
+
+    assert pages == _base_pages(origin)
+
+
+def test_provider_page_type_requires_rendered_storefront_semantics() -> None:
+    with _serve_storefront(
+        api_enabled=False, customized_only=True
+    ) as (origin, _handler):
+        about_url = origin + "sobre/"
+        provider = _FakeStorefrontProvider(
+            StorefrontDiscoveryResponse(
+                (
+                    _candidate(
+                        kind=PRODUTO_PUBLICADO,
+                        label="Sobre",
+                        url=about_url,
+                        source_id="public-page-1",
+                        excerpt=f"Sobre | {about_url}",
+                    ),
+                )
+            )
+        )
+        request_pages = list(_base_pages(origin))
+        request_pages.insert(
+            1,
+            Pagina(PAGINA_PRINCIPAL, "Sobre", about_url, "SEÇÃO SOBRE"),
+        )
+        pages = discover_storefront_pages(
+            origin,
+            tuple(request_pages),
+            provider=provider,
+            provider_config=ProseConfig(model="fake", output_budget=200),
+        )
+
+    assert not any(page.tipo == PRODUTO_PUBLICADO for page in pages)
+
+
+def test_listing_markup_does_not_confirm_a_product_detail_page() -> None:
+    with _serve_storefront(
+        api_enabled=False, customized_only=True
+    ) as (origin, _handler):
+        listing_url = origin + "colecao-especial/"
+        provider = _FakeStorefrontProvider(
+            StorefrontDiscoveryResponse(
+                (
+                    _candidate(
+                        kind=PRODUTO_PUBLICADO,
+                        label="Coleção especial",
+                        url=listing_url,
+                        source_id="public-page-1",
+                        excerpt=f"Coleção especial | {listing_url}",
+                    ),
+                )
+            )
+        )
+        pages = discover_storefront_pages(
+            origin,
+            _base_pages(origin),
+            provider=provider,
+            provider_config=ProseConfig(model="fake", output_budget=200),
+        )
+
+    assert not any(page.tipo == PRODUTO_PUBLICADO for page in pages)
+
+
+def test_contradictory_provider_candidates_fail_closed() -> None:
+    with _serve_storefront(
+        api_enabled=False, customized_only=True
+    ) as (origin, _handler):
+        url = origin + "colecao-especial/"
+        provider = _FakeStorefrontProvider(
+            StorefrontDiscoveryResponse(
+                (
+                    _candidate(
+                        kind=VITRINE,
+                        label="Coleção especial",
+                        url=url,
+                        source_id="public-page-1",
+                        excerpt=f"Coleção especial | {url}",
+                    ),
+                    _candidate(
+                        kind=PRODUTO_PUBLICADO,
+                        label="Coleção especial",
+                        url=url,
+                        source_id="public-page-1",
+                        excerpt=f"Coleção especial | {url}",
+                    ),
+                )
+            )
+        )
+        pages = discover_storefront_pages(
+            origin,
+            _base_pages(origin),
+            provider=provider,
+            provider_config=ProseConfig(model="fake", output_budget=200),
+        )
+
+    assert pages == _base_pages(origin)
 
 
 def test_confirmation_budget_is_finite() -> None:
@@ -275,4 +591,119 @@ def test_conventional_storefront_run_uses_one_lista_for_blocks_and_briefing(
         Path(item.source).is_relative_to(package.directory)
         for item in package.report.context.artifacts_of("capture")
         if item.source is not None
+    )
+
+
+@pytest.mark.parametrize("failure", ["provider", "invalid-url"])
+def test_customized_storefront_run_stops_on_unusable_fallback(
+    tmp_path: Path,
+    failure: str,
+) -> None:
+    with _serve_storefront(
+        api_enabled=False, customized_only=True
+    ) as (origin, _handler):
+        outside = "https://outside.example/produtos/"
+        response: StorefrontDiscoveryResponse | Exception
+        if failure == "provider":
+            response = RuntimeError("provider unavailable")
+        else:
+            response = StorefrontDiscoveryResponse(
+                (
+                    _candidate(
+                        kind=VITRINE,
+                        label="Catálogo externo",
+                        url=outside,
+                        source_id="public-page-1",
+                        excerpt=f"Catálogo externo: {outside}",
+                    ),
+                )
+            )
+        provider = _FakeStorefrontProvider(response)
+        engagement = Engagement(
+            row_number=2,
+            demanda="013292/2026",
+            pasta="51-2026",
+            razao_social="EMPORIO CUSTOMIZADO",
+            cnpj="52.052.612/0001-21",
+            kick_off=datetime(2026, 4, 15),
+            especialista="Especialista",
+            capture_origin=origin,
+            published_domain=None,
+            tema=LOJA_VIRTUAL_TEMA,
+        )
+        contract = supported_contract(engagement.tema)
+        assert contract.master is not None
+        with pytest.raises(StopCondition, match="nenhuma captura utilizável"):
+            assemble_output_package(
+                contract.master,
+                tmp_path / "outputs",
+                engagement,
+                tmp_path / "gated",
+                prose_provider=provider,
+                prose_config=ProseConfig(model="fake", output_budget=200),
+                preview_renderer=_FakePreviewRenderer(),
+            )
+
+    assert len(provider.discovery_requests) == 1
+
+
+def test_customized_storefront_run_promotes_only_confirmed_fallback_pages(
+    tmp_path: Path,
+) -> None:
+    with _serve_storefront(
+        api_enabled=False, customized_only=True
+    ) as (origin, _handler):
+        listing_url = origin + "colecao-especial/"
+        product_url = origin + "item/cafe-raro/"
+        provider = _FakeStorefrontProvider(
+            StorefrontDiscoveryResponse(
+                (
+                    _candidate(
+                        kind=VITRINE,
+                        label="Coleção especial",
+                        url=listing_url,
+                        source_id="public-page-1",
+                        excerpt=f"Coleção especial | {listing_url}",
+                    ),
+                    _candidate(
+                        kind=PRODUTO_PUBLICADO,
+                        label="Café raro",
+                        url=product_url,
+                        source_id="public-page-2",
+                        excerpt=f"Café raro | {product_url}",
+                    ),
+                )
+            )
+        )
+        engagement = Engagement(
+            row_number=2,
+            demanda="013292/2026",
+            pasta="51-2026",
+            razao_social="EMPORIO CUSTOMIZADO",
+            cnpj="52.052.612/0001-21",
+            kick_off=datetime(2026, 4, 15),
+            especialista="Especialista",
+            capture_origin=origin,
+            published_domain=None,
+            tema=LOJA_VIRTUAL_TEMA,
+        )
+        contract = supported_contract(engagement.tema)
+        assert contract.master is not None
+        package = assemble_output_package(
+            contract.master,
+            tmp_path / "outputs",
+            engagement,
+            tmp_path / "gated",
+            prose_provider=provider,
+            prose_config=ProseConfig(model="fake", output_budget=200),
+            preview_renderer=_FakePreviewRenderer(),
+        )
+
+    headings = tuple(page.titulo_bloco for page in package.pages)
+    assert "SEÇÃO PRODUTOS" in headings
+    assert "PRODUTO CAFÉ RARO" in headings
+    assert "VITRINE MOBILE" in headings
+    assert not any(
+        item.name == "SEÇÃO PRODUTOS"
+        for item in package.report.context.pendencias
     )

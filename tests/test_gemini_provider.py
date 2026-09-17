@@ -18,6 +18,10 @@ from report_generator9000.prose import (
     ProseRequest,
     ProviderPageText,
 )
+from report_generator9000.storefront import (
+    StorefrontDiscoveryRequest,
+    StorefrontEvidencePage,
+)
 
 
 class _RaisingModels:
@@ -150,6 +154,58 @@ def test_provider_uses_structured_output_and_preserves_exact_citations() -> None
     assert config.response_mime_type == "application/json"
     assert config.response_json_schema["additionalProperties"] is False
     assert config.thinking_config.thinking_level.value == "LOW"
+    assert config.tools is None
+
+
+def test_storefront_discovery_uses_bounded_structured_output() -> None:
+    response = SimpleNamespace(
+        candidates=[SimpleNamespace(finish_reason=SimpleNamespace(value="STOP"))],
+        parsed=None,
+        text=json.dumps(
+            {
+                "candidates": [
+                    {
+                        "kind": "vitrine",
+                        "label": "Coleção especial",
+                        "url": "https://loja.example/colecao/",
+                        "source_id": "public-page-1",
+                        "excerpt": (
+                            "Coleção especial | "
+                            "https://loja.example/colecao/"
+                        ),
+                    }
+                ]
+            },
+            ensure_ascii=False,
+        ),
+    )
+    client = _Client(response)
+    provider = GeminiProseProvider(_settings(), client=client)
+    request = StorefrontDiscoveryRequest(
+        (
+            StorefrontEvidencePage(
+                "public-page-1",
+                "https://loja.example/",
+                "Coleção especial | https://loja.example/colecao/",
+            ),
+        )
+    )
+
+    result = provider.discover_storefront(
+        request,
+        ProseConfig(model=DEFAULT_GEMINI_MODEL, output_budget=240),
+    )
+
+    assert result.candidates[0].url == "https://loja.example/colecao/"
+    call = client.models.calls[0]
+    assert call["model"] == DEFAULT_GEMINI_MODEL
+    assert "public-page-1" in str(call["contents"])
+    assert "https://loja.example/colecao/" in str(call["contents"])
+    config = call["config"]
+    assert config.max_output_tokens == 240
+    assert config.response_mime_type == "application/json"
+    assert config.response_json_schema["additionalProperties"] is False
+    assert config.response_json_schema["properties"]["candidates"]["maxItems"] == 6
     assert config.tools is None
 
 

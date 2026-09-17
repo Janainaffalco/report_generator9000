@@ -5,8 +5,11 @@ produção é executado sem interação durante a geração: enviar a planilha d
 controle, escolher um atendimento, revisar as páginas renderizadas do PDF
 certificado e baixar os arquivos `.docx` e `.pdf`.
 
-O Gemini é usado somente para os dois campos de prosa permitidos. Capturas,
-substituições, proveniência e gates continuam determinísticos.
+O Gemini redige somente os dois campos de prosa permitidos e, em Loja Virtual,
+pode sugerir URLs públicas quando a descoberta determinística é insuficiente.
+Toda sugestão precisa citar evidência literal e só entra no relatório depois de
+uma Capture determinística; substituições, proveniência e gates também continuam
+determinísticos.
 
 ## Executar a aplicação em contêiner
 

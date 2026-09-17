@@ -17,6 +17,14 @@ confirmation navigations, Store API results, and selected taxonomies all have ex
 budgets. The module performs GET and page-navigation work only; cart, checkout, order,
 payment, account, login, admin, and mutation-shaped URLs are refused before navigation.
 
+When that deterministic ladder cannot confirm both a Vitrine Pública and a published
+product, the existing Gemini provider may inspect a bounded set of rendered public pages.
+It returns only structured same-origin candidates with literal source excerpts; invalid,
+unsupported, contradictory, over-budget, or failed responses are discarded. This is a
+discovery fallback rather than a source of report truth: every surviving candidate still
+has to pass the same read-only rendered confirmation before it can enter the Lista de
+Páginas, a Block, or Briefing prose.
+
 A candidate enters the Lista de Páginas only after a browser renders a non-empty page
 without leaving the Capture Origin host. The selected listing becomes `SEÇÃO PRODUTOS`,
 at most one representative published product is selected, and applicable categories or

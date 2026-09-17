@@ -5,10 +5,12 @@ from __future__ import annotations
 import re
 import unicodedata
 from dataclasses import dataclass
+from typing import Protocol
 from urllib.parse import parse_qsl, urljoin, urlsplit, urlunsplit
 
 from playwright.sync_api import Error as PlaywrightError, Page, Route
 
+from . import events
 from .browser_session import browser_context
 from .capture import NO_CACHE_HEADERS
 from .lista_paginas import (
@@ -20,6 +22,7 @@ from .lista_paginas import (
     VITRINE,
     Pagina,
 )
+from .prose import ProseConfig
 
 
 @dataclass(frozen=True)
@@ -31,6 +34,10 @@ class StorefrontDiscoveryConfig:
     max_candidates: int = 24
     max_confirmations: int = 10
     max_taxonomies: int = 2
+    max_provider_candidates: int = 6
+    max_provider_confirmations: int = 4
+    max_evidence_pages: int = 4
+    max_evidence_chars: int = 8_000
     navigation_timeout_ms: int = 20_000
     settle_ms: int = 250
 
@@ -40,10 +47,55 @@ class StorefrontDiscoveryConfig:
             self.max_store_api_products,
             self.max_candidates,
             self.max_confirmations,
+            self.max_provider_candidates,
+            self.max_provider_confirmations,
+            self.max_evidence_pages,
+            self.max_evidence_chars,
             self.navigation_timeout_ms,
         )
         if any(value <= 0 for value in values) or self.max_taxonomies < 0:
             raise ValueError("storefront discovery budgets must be positive")
+
+
+@dataclass(frozen=True)
+class StorefrontEvidencePage:
+    """One bounded rendered public page shown to the discovery provider."""
+
+    source_id: str
+    url: str
+    text: str
+
+
+@dataclass(frozen=True)
+class StorefrontDiscoveryRequest:
+    """The complete public-evidence surface available to the provider."""
+
+    pages: tuple[StorefrontEvidencePage, ...]
+
+
+@dataclass(frozen=True)
+class StorefrontProviderCandidate:
+    """A provider suggestion that still requires deterministic validation."""
+
+    kind: str
+    label: str
+    url: str
+    source_id: str
+    excerpt: str
+
+
+@dataclass(frozen=True)
+class StorefrontDiscoveryResponse:
+    candidates: tuple[StorefrontProviderCandidate, ...]
+    output_budget_exhausted: bool = False
+
+
+class StorefrontDiscoveryProvider(Protocol):
+    def discover_storefront(
+        self,
+        request: StorefrontDiscoveryRequest,
+        config: ProseConfig,
+    ) -> StorefrontDiscoveryResponse: ...
 
 
 @dataclass(frozen=True)
@@ -174,6 +226,133 @@ def _rendered_links(page: Page, limit: int) -> list[dict[str, str]]:
     )
 
 
+def _provider_evidence(
+    page: Page,
+    page_url: str,
+    links: list[dict[str, str]],
+    expected_host: str,
+    max_chars: int,
+    source_id: str = "public-page-1",
+) -> StorefrontEvidencePage:
+    body = page.locator("body")
+    visible_text = body.inner_text().strip() if body.count() else ""
+    link_lines: list[str] = []
+    for item in links:
+        url = _canonical(page_url, item.get("href", ""), expected_host)
+        label = _clean_label(item.get("label", ""), "Link")
+        if url is not None and not _is_forbidden(url):
+            link_lines.append(f"{label} | {url}")
+    evidence = "\n".join((visible_text, *link_lines))[:max_chars]
+    return StorefrontEvidencePage(source_id, page_url, evidence)
+
+
+def _provider_evidence_pages(
+    page: Page,
+    home: str,
+    expected_host: str,
+    settings: StorefrontDiscoveryConfig,
+) -> tuple[StorefrontEvidencePage, ...]:
+    try:
+        response = page.goto(
+            home,
+            wait_until="domcontentloaded",
+            timeout=settings.navigation_timeout_ms,
+        )
+        if response is not None and response.status >= 400:
+            return ()
+        page.wait_for_timeout(settings.settle_ms)
+        home_links = _rendered_links(page, settings.max_rendered_links)
+    except PlaywrightError:
+        return ()
+    pages = [
+        _provider_evidence(
+            page,
+            home,
+            home_links,
+            expected_host,
+            settings.max_evidence_chars,
+        )
+    ]
+    seen = {home}
+    for item in home_links:
+        if len(pages) >= settings.max_evidence_pages:
+            break
+        candidate = _canonical(home, item.get("href", ""), expected_host)
+        if candidate is None or candidate in seen or _is_forbidden(candidate):
+            continue
+        seen.add(candidate)
+        try:
+            response = page.goto(
+                candidate,
+                wait_until="domcontentloaded",
+                timeout=settings.navigation_timeout_ms,
+            )
+            if response is not None and response.status >= 400:
+                continue
+            page.wait_for_timeout(settings.settle_ms)
+            final = _canonical(candidate, page.url, expected_host)
+            body = page.locator("body")
+            if (
+                final is None
+                or not body.count()
+                or not body.is_visible()
+                or len(body.inner_text().strip()) < 20
+            ):
+                continue
+            links = _rendered_links(page, settings.max_rendered_links)
+            pages.append(
+                _provider_evidence(
+                    page,
+                    final,
+                    links,
+                    expected_host,
+                    settings.max_evidence_chars,
+                    source_id=f"public-page-{len(pages) + 1}",
+                )
+            )
+        except PlaywrightError:
+            continue
+    return tuple(pages)
+
+
+def _validated_provider_candidates(
+    response: StorefrontDiscoveryResponse,
+    request: StorefrontDiscoveryRequest,
+    origin: str,
+    expected_host: str,
+    limit: int,
+) -> list[_Candidate] | None:
+    if response.output_budget_exhausted or len(response.candidates) > limit:
+        return None
+    sources = {page.source_id: page.text for page in request.pages}
+    seen_urls: dict[str, str] = {}
+    validated: list[_Candidate] = []
+    allowed = {VITRINE, PRODUTO_PUBLICADO, CATEGORIA_PRODUTO, FILTRO_PRODUTO}
+    for candidate in response.candidates:
+        url = _canonical(origin, candidate.url, expected_host)
+        source = sources.get(candidate.source_id)
+        if (
+            candidate.kind not in allowed
+            or not candidate.label.strip()
+            or candidate.label.strip() not in candidate.excerpt
+            or url is None
+            or _is_forbidden(url)
+            or source is None
+            or not candidate.excerpt.strip()
+            or candidate.excerpt not in source
+            or url not in candidate.excerpt
+        ):
+            return None
+        previous_kind = seen_urls.get(url)
+        if previous_kind is not None and previous_kind != candidate.kind:
+            return None
+        seen_urls[url] = candidate.kind
+        validated.append(
+            _Candidate(candidate.kind, candidate.label, url, "gemini")
+        )
+    return validated
+
+
 def _store_api_candidates(
     page: Page,
     origin: str,
@@ -258,6 +437,30 @@ def _rendered_candidate(
         return None
 
 
+def _provider_semantics_confirmed(
+    page: Page,
+    candidate: _Candidate,
+    final_url: str,
+    confirmed_product_urls: set[str],
+) -> bool:
+    """Confirm Gemini's page type from rendered public facts."""
+    if candidate.kind == PRODUTO_PUBLICADO:
+        return page.locator(
+            "body.single-product, "
+            "meta[property='og:type'][content='product']"
+        ).count() > 0
+    if candidate.kind in {VITRINE, CATEGORIA_PRODUTO, FILTRO_PRODUTO}:
+        if not confirmed_product_urls:
+            return False
+        expected_host = urlsplit(final_url).netloc.casefold()
+        for item in _rendered_links(page, 120):
+            url = _canonical(final_url, item.get("href", ""), expected_host)
+            if url in confirmed_product_urls:
+                return True
+        return False
+    return False
+
+
 def _dedupe(candidates: list[_Candidate], limit: int) -> list[_Candidate]:
     seen: set[tuple[str, str]] = set()
     result: list[_Candidate] = []
@@ -288,6 +491,8 @@ def discover_storefront_pages(
     existing_pages: tuple[Pagina, ...],
     *,
     config: StorefrontDiscoveryConfig | None = None,
+    provider: StorefrontDiscoveryProvider | None = None,
+    provider_config: ProseConfig | None = None,
 ) -> tuple[Pagina, ...]:
     """Return one ordered Lista enriched with confirmed public storefront views.
 
@@ -301,6 +506,7 @@ def discover_storefront_pages(
     expected_host = parsed_origin.netloc.casefold()
     candidates: list[_Candidate] = []
     confirmed: list[Pagina] = []
+    provider_request: StorefrontDiscoveryRequest | None = None
 
     try:
         with browser_context(
@@ -410,6 +616,124 @@ def discover_storefront_pages(
                 chosen_titles.add(title)
                 if candidate.kind in {CATEGORIA_PRODUTO, FILTRO_PRODUTO}:
                     taxonomy_count += 1
+
+            deterministic_sufficient = {VITRINE, PRODUTO_PUBLICADO}.issubset(
+                chosen_kinds
+            )
+            discover = getattr(provider, "discover_storefront", None)
+            if (
+                not deterministic_sufficient
+                and callable(discover)
+                and provider_config is not None
+            ):
+                provider_request = StorefrontDiscoveryRequest(
+                    _provider_evidence_pages(
+                        page,
+                        home,
+                        expected_host,
+                        settings,
+                    )
+                )
+                if not provider_request.pages:
+                    provider_candidates = None
+                else:
+                    try:
+                        response = discover(provider_request, provider_config)
+                        provider_candidates = _validated_provider_candidates(
+                            response,
+                            provider_request,
+                            home,
+                            expected_host,
+                            settings.max_provider_candidates,
+                        )
+                    except Exception as error:
+                        events.notice(
+                            "storefront_provider_failed",
+                            severity="warning",
+                            error=type(error).__name__,
+                        )
+                        provider_candidates = None
+                if provider_candidates is None:
+                    events.notice(
+                        "storefront_provider_rejected",
+                        severity="warning",
+                    )
+                else:
+                    provider_confirmations = 0
+                    provider_confirmed: list[Pagina] = []
+                    confirmed_product_urls = {
+                        item.url
+                        for item in confirmed
+                        if item.tipo == PRODUTO_PUBLICADO
+                    }
+                    provider_candidates = sorted(
+                        _dedupe(
+                            provider_candidates,
+                            settings.max_provider_candidates,
+                        ),
+                        key=lambda item: (
+                            item.kind != PRODUTO_PUBLICADO,
+                            item.kind != VITRINE,
+                        ),
+                    )
+                    for candidate in provider_candidates:
+                        if (
+                            provider_confirmations
+                            >= settings.max_provider_confirmations
+                        ):
+                            break
+                        if (
+                            candidate.kind in {VITRINE, PRODUTO_PUBLICADO}
+                            and candidate.kind in chosen_kinds
+                        ):
+                            continue
+                        if (
+                            candidate.kind
+                            in {CATEGORIA_PRODUTO, FILTRO_PRODUTO}
+                            and taxonomy_count >= settings.max_taxonomies
+                        ):
+                            continue
+                        provider_confirmations += 1
+                        final = _rendered_candidate(page, candidate, settings)
+                        if final is None or not _provider_semantics_confirmed(
+                            page,
+                            candidate,
+                            final,
+                            confirmed_product_urls,
+                        ):
+                            continue
+                        title = _title(candidate)
+                        if title in chosen_titles:
+                            continue
+                        provider_confirmed.append(
+                            Pagina(
+                                candidate.kind,
+                                _clean_label(candidate.label, "Produto"),
+                                final,
+                                title,
+                            )
+                        )
+                        chosen_kinds.add(candidate.kind)
+                        chosen_titles.add(title)
+                        if candidate.kind == PRODUTO_PUBLICADO:
+                            confirmed_product_urls.add(final)
+                        if candidate.kind in {
+                            CATEGORIA_PRODUTO,
+                            FILTRO_PRODUTO,
+                        }:
+                            taxonomy_count += 1
+                    provider_order = {
+                        VITRINE: 0,
+                        PRODUTO_PUBLICADO: 1,
+                        CATEGORIA_PRODUTO: 2,
+                        FILTRO_PRODUTO: 3,
+                    }
+                    confirmed.extend(
+                        sorted(
+                            provider_confirmed,
+                            key=lambda item: provider_order[item.tipo],
+                        )
+                    )
     except PlaywrightError:
         return existing_pages
 
@@ -444,4 +768,11 @@ def discover_storefront_pages(
     return tuple([*home_pages, *confirmed, *other_pages, *transversals])
 
 
-__all__ = ["StorefrontDiscoveryConfig", "discover_storefront_pages"]
+__all__ = [
+    "StorefrontDiscoveryConfig",
+    "StorefrontDiscoveryRequest",
+    "StorefrontDiscoveryResponse",
+    "StorefrontEvidencePage",
+    "StorefrontProviderCandidate",
+    "discover_storefront_pages",
+]
