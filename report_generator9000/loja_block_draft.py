@@ -10,7 +10,14 @@ from pathlib import Path
 from PIL import Image
 
 from .block_stamping import BlockImage
-from .lista_paginas import PAGINA_PRINCIPAL, Pagina
+from .lista_paginas import (
+    CATEGORIA_PRODUTO,
+    EVIDENCIA_AUSENTE,
+    FILTRO_PRODUTO,
+    PRODUTO_PUBLICADO,
+    VISAO_MOBILE,
+    Pagina,
+)
 from .placeholders import render_placeholder
 from .run_context import Pendencia
 
@@ -47,7 +54,7 @@ def loja_draft_blocks(
         if heading in by_heading:
             selected.append(by_heading[heading])
             continue
-        page = Pagina(PAGINA_PRINCIPAL, heading, capture_origin, heading)
+        page = Pagina(EVIDENCIA_AUSENTE, heading, capture_origin, heading)
         content = render_placeholder(
             original, "TOOL_BLOCKED", heading, 1200, 675
         )
@@ -73,11 +80,28 @@ def loja_draft_blocks(
         if page.titulo_bloco not in required
         and page.titulo_bloco != _PRIVACY_ALIAS
     ]
-    # Institutional/legal pages outside the curated Loja grammar still retain
-    # their source-grounded Captures, ahead of transversal Cabeçalho/Rodapé.
-    transversal = required[-2:]
-    first = selected[:-2] + extras + selected[-2:]
-    assert tuple(item[0].titulo_bloco for item in first[-2:]) == transversal
+    storefront_types = {
+        CATEGORIA_PRODUTO,
+        FILTRO_PRODUTO,
+        PRODUTO_PUBLICADO,
+        VISAO_MOBILE,
+    }
+    storefront_extras = [
+        item for item in extras if item[0].tipo in storefront_types
+    ]
+    other_extras = [
+        item for item in extras if item[0].tipo not in storefront_types
+    ]
+    first: list[tuple[Pagina, BlockImage]] = []
+    for item in selected[:-2]:
+        first.append(item)
+        if item[0].titulo_bloco == "SEÇÃO PRODUTOS":
+            first.extend(storefront_extras)
+    # Institutional/legal pages outside the curated Loja grammar retain their
+    # source-grounded Captures immediately before Cabeçalho and Rodapé.
+    first.extend(other_extras)
+    first.extend(selected[-2:])
+    assert tuple(item[0].titulo_bloco for item in first[-2:]) == required[-2:]
     return (
         tuple(page for page, _image in first),
         tuple(image for _page, image in first),

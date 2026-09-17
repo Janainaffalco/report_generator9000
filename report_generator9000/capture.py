@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import re
 import unicodedata
+from contextlib import ExitStack
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -90,6 +91,8 @@ class CaptureConfig:
 
     viewport_width: int = 1600
     viewport_height: int = 900
+    mobile_viewport_width: int = 390
+    mobile_viewport_height: int = 844
     device_scale_factor: float = 2
     navigation_timeout_ms: int = 30_000
     network_idle_timeout_ms: int = 10_000
@@ -103,6 +106,8 @@ class CaptureConfig:
         positive = (
             self.viewport_width,
             self.viewport_height,
+            self.mobile_viewport_width,
+            self.mobile_viewport_height,
             self.device_scale_factor,
             self.navigation_timeout_ms,
             self.network_idle_timeout_ms,
@@ -552,16 +557,35 @@ def capture_site(
     processed_count = 0
 
     try:
-        with browser_context(
-            viewport={
-                "width": settings.viewport_width,
-                "height": settings.viewport_height,
-            },
-            device_scale_factor=settings.device_scale_factor,
-            extra_http_headers=NO_CACHE_HEADERS,
-        ) as context:
-            page = context.new_page()
+        with ExitStack() as stack:
+            desktop_context = stack.enter_context(
+                browser_context(
+                    viewport={
+                        "width": settings.viewport_width,
+                        "height": settings.viewport_height,
+                    },
+                    device_scale_factor=settings.device_scale_factor,
+                    extra_http_headers=NO_CACHE_HEADERS,
+                )
+            )
+            mobile_context = stack.enter_context(
+                browser_context(
+                    viewport={
+                        "width": settings.mobile_viewport_width,
+                        "height": settings.mobile_viewport_height,
+                    },
+                    device_scale_factor=settings.device_scale_factor,
+                    extra_http_headers=NO_CACHE_HEADERS,
+                )
+            )
+            desktop_page = desktop_context.new_page()
+            mobile_page = mobile_context.new_page()
             for index, pagina in enumerate(pages, start=1):
+                page = (
+                    mobile_page
+                    if pagina.visualizacao == "mobile"
+                    else desktop_page
+                )
                 stem = f"{index:02d}-{_safe_stem(pagina.titulo_bloco)}"
                 raw_path = folder / f"{stem}.png"
                 embedding_path = embedding_folder / f"{stem}.png"

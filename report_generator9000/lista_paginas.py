@@ -12,6 +12,12 @@ from urllib.request import Request, urlopen
 PAGINA_PRINCIPAL = "pagina_principal"
 AREA_LEGAL = "area_legal"
 ELEMENTO_TRANSVERSAL = "elemento_transversal"
+VITRINE = "vitrine"
+PRODUTO_PUBLICADO = "produto_publicado"
+CATEGORIA_PRODUTO = "categoria_produto"
+FILTRO_PRODUTO = "filtro_produto"
+VISAO_MOBILE = "visao_mobile"
+EVIDENCIA_AUSENTE = "evidencia_ausente"
 _DECLARABLE_TYPES = frozenset({PAGINA_PRINCIPAL, AREA_LEGAL})
 _SOCIAL_HOSTS = (
     "facebook.com",
@@ -77,10 +83,19 @@ class Pagina:
     rotulo: str
     url: str
     titulo_bloco: str
+    visualizacao: str = "desktop"
+
+    def __post_init__(self) -> None:
+        if self.visualizacao not in {"desktop", "mobile"}:
+            raise ValueError("visualizacao must be desktop or mobile")
 
     @property
     def entra_no_briefing(self) -> bool:
-        return self.tipo != ELEMENTO_TRANSVERSAL
+        return self.tipo not in {
+            ELEMENTO_TRANSVERSAL,
+            EVIDENCIA_AUSENTE,
+            VISAO_MOBILE,
+        }
 
 
 @dataclass(frozen=True)
@@ -360,8 +375,14 @@ def derive_lista_paginas(
 
 __all__ = [
     "AREA_LEGAL",
+    "CATEGORIA_PRODUTO",
+    "EVIDENCIA_AUSENTE",
     "ELEMENTO_TRANSVERSAL",
+    "FILTRO_PRODUTO",
     "PAGINA_PRINCIPAL",
+    "PRODUTO_PUBLICADO",
+    "VISAO_MOBILE",
+    "VITRINE",
     "DeclaredPage",
     "ListaPaginasError",
     "Pagina",

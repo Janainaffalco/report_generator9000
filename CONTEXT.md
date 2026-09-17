@@ -22,8 +22,8 @@ _Avoid_: linha, row id
 **Tema**:
 The contracted service type, taken verbatim from the control spreadsheet. Two exist:
 `Inserção digital - Desenvolvimento de WebSite` and `Implantação de Loja Virtual`. Both
-have a versioned Master and their own section grammar. Loja Virtual currently yields a
-gated draft where storefront evidence has not yet been acquired.
+have a versioned Master and their own section grammar. Loja Virtual discovers and Captures
+bounded public storefront evidence while private administrative evidence remains GATED.
 _Avoid_: report type, category
 
 **Unsupported Row**:
@@ -95,6 +95,14 @@ _Avoid_: footer page, policy page
 Site chrome that appears on every page and belongs to no single one — Cabeçalho and Rodapé.
 Always captured, never discovered, never named in the Briefing prose.
 _Avoid_: header/footer block
+
+**Vitrine Pública**:
+The same-origin storefront listing a public visitor can render without authentication. For
+Loja Virtual it may be discovered outside the main menu, and it yields the `SEÇÃO PRODUTOS`
+Block plus a narrow-viewport `VITRINE MOBILE` Block. A representative published product and
+applicable public category or filter pages may follow it in the same Lista de Páginas. The
+private administrative `LISTA DE PRODUTOS` is a different Gated Input.
+_Avoid_: admin catalogue, product inventory
 
 **Boilerplate**:
 Content identical in every report — the SEBRAE header logo, the WordPress explanation, the

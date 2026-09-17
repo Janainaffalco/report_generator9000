@@ -44,7 +44,8 @@ from .prose import ProseConfig, ProseProvider
 from .placeholders import render_placeholder, slot_pixel_dimensions
 from .previews import OfficePreviewRenderer, PreviewRender, PreviewRenderer
 from .run_context import Pendencia
-from .tema import supported_contract
+from .storefront import discover_storefront_pages
+from .tema import LOJA_VIRTUAL_TEMA, supported_contract
 
 ProgressCallback = Callable[[str, int | None], None]
 
@@ -99,6 +100,11 @@ def _assemble_staged_package(
         engagement.capture_origin,
         gated.declared_pages,
     )
+    if contract.name == LOJA_VIRTUAL_TEMA:
+        pages = discover_storefront_pages(
+            engagement.capture_origin,
+            pages,
+        )
     report_progress("open_origin")
     report_progress("derive_pages", len(pages))
     capture_config = capture_config_from_master(master)
@@ -213,6 +219,10 @@ def _assemble_staged_package(
             captures.folder, engagement.capture_origin,
         )
         capture_pendencias.extend(missing_blocks)
+        # Loja's final ordered Lista includes its classified evidence gaps.
+        # The gap type is excluded from Briefing prose, while every confirmed
+        # storefront page drives both the prose and the stamped Blocks.
+        pages = block_pages
     if no_llm:
         site_text = ()
     else:
