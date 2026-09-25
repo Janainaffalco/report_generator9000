@@ -478,6 +478,11 @@ def _capture_page(
         timeout=config.navigation_timeout_ms,
     )
     _record_freshness(pagina, response)
+    # An error page renders plenty of colour, so the blank-Capture check cannot
+    # catch it: a 404 or 503 photographed under a Block heading would present
+    # the site's failure as evidence of the page. It is a failed Capture.
+    if response is not None and response.status >= 400:
+        raise CaptureError(f"Capture page answered HTTP {response.status}")
     final_url = urlsplit(page.url)
     if (
         final_url.netloc.casefold() != parsed.netloc.casefold()

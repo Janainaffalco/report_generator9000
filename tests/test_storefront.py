@@ -48,6 +48,9 @@ class _StorefrontHandler(BaseHTTPRequestHandler):
     # A menu page gives the customized store one capturable Página, so a Run
     # has usable evidence even when storefront discovery finds nothing.
     customized_nav = False
+    # Serve the representative product this many times, then fail: discovery
+    # confirms it, and the later Capture of the same page is refused.
+    product_serves: int | None = None
 
     def log_message(self, format: str, *args: object) -> None:
         pass
@@ -144,6 +147,11 @@ class _StorefrontHandler(BaseHTTPRequestHandler):
         if body is None or parsed.path == "/produto/rascunho/":
             self.send_error(404)
             return
+        if parsed.path == "/produto/cafe/" and type(self).product_serves is not None:
+            if type(self).product_serves <= 0:
+                self.send_error(503)
+                return
+            type(self).product_serves -= 1
         markup = (
             "<html><head><style>:root{--brand-primary:#7a2f1f;"
             "--brand-secondary:#d68c45}body{background:#f7e7ce;color:#23160f}"
@@ -167,6 +175,7 @@ def _serve_storefront(
     api_enabled: bool = True,
     customized_only: bool = False,
     customized_nav: bool = False,
+    product_serves: int | None = None,
 ) -> Iterator[tuple[str, type[_StorefrontHandler]]]:
     class Handler(_StorefrontHandler):
         requests: list[tuple[str, str]] = []
@@ -174,6 +183,7 @@ def _serve_storefront(
     Handler.api_enabled = api_enabled
     Handler.customized_only = customized_only
     Handler.customized_nav = customized_nav
+    Handler.product_serves = product_serves
     server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
     thread = Thread(target=server.serve_forever, daemon=True)
     thread.start()
@@ -819,6 +829,32 @@ def test_conventional_storefront_briefing_reads_the_same_lista_as_the_blocks(
     assert paragraph in document_text
     for page in briefing_pages:
         assert page.rotulo in paragraph
+
+
+def test_a_confirmed_storefront_page_that_fails_capture_is_tool_blocked(
+    tmp_path: Path,
+) -> None:
+    with _serve_storefront(product_serves=1) as (origin, _handler):
+        package = _assemble_loja(
+            _loja_engagement(origin, "50-2026", "EMPORIO TESTE"),
+            tmp_path,
+            no_llm=True,
+        )
+
+    headings = tuple(page.titulo_bloco for page in package.pages)
+    assert "PRODUTO CAFÉ ESPECIAL" in headings
+    blocked = [
+        item
+        for item in package.report.context.pendencias
+        if item.slot == "capture:PRODUTO CAFÉ ESPECIAL"
+    ]
+    assert [item.classification for item in blocked] == ["TOOL_BLOCKED"]
+    assert package.report.status == "draft"
+    media = {
+        item.sha256.lower()
+        for item in open_docx_package(package.report.document).media
+    }
+    assert blocked[0].evidence.lower() in media
 
 
 def test_two_pastas_of_one_storefront_never_share_captures(
