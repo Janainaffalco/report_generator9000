@@ -43,6 +43,7 @@ from .palette import PaletteCollectionError, derive_palette_from_site
 from .prose import ProseConfig, ProseProvider
 from .placeholders import render_placeholder, slot_pixel_dimensions
 from .previews import OfficePreviewRenderer, PreviewRender, PreviewRenderer
+from .purchase_path import PurchasePath, classify_purchase_path, with_purchase_pages
 from .run_context import Pendencia
 from .storefront import discover_storefront_pages
 from .tema import LOJA_VIRTUAL_TEMA, supported_contract
@@ -100,6 +101,7 @@ def _assemble_staged_package(
         engagement.capture_origin,
         gated.declared_pages,
     )
+    purchase_path: PurchasePath | None = None
     if contract.name == LOJA_VIRTUAL_TEMA:
         pages = discover_storefront_pages(
             engagement.capture_origin,
@@ -107,6 +109,10 @@ def _assemble_staged_package(
             provider=None if no_llm else prose_provider,
             provider_config=None if no_llm else prose_config,
         )
+        # The empty cart and checkout join the same Lista, so their Captures
+        # are the only evidence the cart and checkout Blocks can carry.
+        purchase_path = classify_purchase_path(engagement.capture_origin, pages)
+        pages = with_purchase_pages(pages, purchase_path)
     report_progress("open_origin")
     report_progress("derive_pages", len(pages))
     capture_config = capture_config_from_master(master)
@@ -219,6 +225,7 @@ def _assemble_staged_package(
         block_pages, block_images, missing_blocks = loja_draft_blocks(
             contract.required_blocks, pages, block_images,
             captures.folder, engagement.capture_origin,
+            gaps=() if purchase_path is None else purchase_path.gaps,
         )
         capture_pendencias.extend(missing_blocks)
         # Loja's final ordered Lista includes its classified evidence gaps.
@@ -260,6 +267,7 @@ def _assemble_staged_package(
                 run_pendencias=tuple(capture_pendencias),
                 derived_palette=derived_palette,
                 client_logo=client_logo,
+                purchase_path=purchase_path,
             )
             result["status"] = generated.status
         report_progress("draft_prose")

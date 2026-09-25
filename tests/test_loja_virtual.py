@@ -85,9 +85,11 @@ def test_loja_engagement_yields_gated_draft_without_credentials(tmp_path: Path) 
     )
     assert report.status == "draft"
     assert report.document.is_file()
-    assert {"configuracao_woocommerce", "evidencia_checkout"} <= {
-        item.slot for item in report.context.pendencias
-    }
+    by_slot = {item.slot: item for item in report.context.pendencias}
+    assert "configuracao_woocommerce" in by_slot
+    # No storefront was observed, so the purchase path is not a defect but
+    # public evidence that settles nothing.
+    assert by_slot["caminho_de_compra"].classification == "INCONCLUSIVO"
     assert run_gates(open_docx_package(report.document), report.context, tema=engagement.tema).passed
     text = "\n".join(paragraph.text for paragraph in open_docx_package(report.document).paragraphs)
     assert "{{" not in text

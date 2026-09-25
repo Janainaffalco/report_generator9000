@@ -6,6 +6,7 @@ import {
   HelpCircleIcon,
   InboxIcon,
   PaletteIcon,
+  SearchIcon,
   XCircleIcon,
 } from "lucide-react"
 
@@ -31,6 +32,7 @@ const CLASS_STYLE: Record<
   TOOL_BLOCKED: { badge: "destructive", icon: AlertTriangleIcon },
   UNDECLARED: { badge: "outline", icon: PaletteIcon },
   REVIEW: { badge: "outline", icon: EyeIcon },
+  INCONCLUSIVO: { badge: "outline", icon: SearchIcon },
 }
 
 // A class the frontend does not know must not borrow another one's meaning:

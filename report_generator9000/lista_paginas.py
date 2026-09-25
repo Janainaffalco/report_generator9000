@@ -17,6 +17,8 @@ PRODUTO_PUBLICADO = "produto_publicado"
 CATEGORIA_PRODUTO = "categoria_produto"
 FILTRO_PRODUTO = "filtro_produto"
 VISAO_MOBILE = "visao_mobile"
+CARRINHO_PUBLICO = "carrinho_publico"
+CHECKOUT_PUBLICO = "checkout_publico"
 EVIDENCIA_AUSENTE = "evidencia_ausente"
 _DECLARABLE_TYPES = frozenset({PAGINA_PRINCIPAL, AREA_LEGAL})
 _SOCIAL_HOSTS = (
@@ -91,10 +93,14 @@ class Pagina:
 
     @property
     def entra_no_briefing(self) -> bool:
+        # The empty cart and checkout prove only that the page exists; naming
+        # them in the Briefing would read as a claim that the store sells there.
         return self.tipo not in {
             ELEMENTO_TRANSVERSAL,
             EVIDENCIA_AUSENTE,
             VISAO_MOBILE,
+            CARRINHO_PUBLICO,
+            CHECKOUT_PUBLICO,
         }
 
 

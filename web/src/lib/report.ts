@@ -1,4 +1,9 @@
-export type PendenciaClass = "GATED" | "TOOL_BLOCKED" | "UNDECLARED" | "REVIEW"
+export type PendenciaClass =
+  | "GATED"
+  | "TOOL_BLOCKED"
+  | "UNDECLARED"
+  | "REVIEW"
+  | "INCONCLUSIVO"
 
 export interface Pendencia {
   classification: PendenciaClass

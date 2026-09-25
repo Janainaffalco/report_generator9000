@@ -12,6 +12,7 @@ from ..run_context import RunContext
 from .blocks import check_block_integrity
 from .links import check_link_provenance
 from .loja_handover import check_loja_handover_claims
+from .loja_purchase import check_loja_purchase_claims
 from .master import check_master_build
 from .pendencias import check_pendencias_agreement
 from .provenance import check_media_provenance
@@ -38,6 +39,7 @@ __all__ = [
     "check_engagement_scope",
     "check_link_provenance",
     "check_loja_handover_claims",
+    "check_loja_purchase_claims",
     "check_master_build",
     "check_media_provenance",
     "check_pendencias_agreement",

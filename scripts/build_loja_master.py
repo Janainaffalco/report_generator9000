@@ -64,7 +64,7 @@ REWRITES = {
     140: "As imagens administrativas abaixo precisam ser fornecidas separadamente. Sem elas, as lacunas permanecem identificadas e este relatório não afirma ajustes de catálogo, pagamento ou entrega.",
     148: "O registro de orientações ou reuniões deve ser comprovado pelos materiais de entrega, sem presunção de treinamento realizado.",
     151: "FUNCIONALIDADES DA LOJA",
-    152: "Evidência do fluxo público de carrinho e checkout: {{EVIDENCIA_CHECKOUT}}",
+    152: "Caminho de compra observado na loja pública: {{EVIDENCIA_CHECKOUT}}",
     162: "Para manter a loja disponível, o cliente deve acompanhar suas contas de hospedagem e domínio e as obrigações de renovação junto aos fornecedores contratados.",
     163: "Os materiais de entrega, quando fornecidos, devem ser baixados do link compartilhado no e-mail {{EMAIL_CLIENTE}}.",
     164: "Para a operação futura da loja, recomenda-se:",

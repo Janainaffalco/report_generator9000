@@ -9,7 +9,7 @@ from contextlib import ExitStack
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import TYPE_CHECKING
-from urllib.parse import urlsplit
+from urllib.parse import parse_qsl, urlsplit
 from zipfile import BadZipFile, ZipFile
 from xml.etree import ElementTree
 
@@ -18,12 +18,18 @@ from playwright.sync_api import (
     Error as PlaywrightError,
     Page,
     Response,
+    Route,
 )
 
 from .browser_session import browser_context
 from .docx_package import block_embedding_box_emu
 from .events import notice
-from .lista_paginas import ELEMENTO_TRANSVERSAL, Pagina
+from .lista_paginas import (
+    CARRINHO_PUBLICO,
+    CHECKOUT_PUBLICO,
+    ELEMENTO_TRANSVERSAL,
+    Pagina,
+)
 from .run_context import Artifact, Pendencia
 
 if TYPE_CHECKING:
@@ -460,6 +466,63 @@ def _record_freshness(pagina: Pagina, response: Response | None) -> None:
     )
 
 
+_PURCHASE_PAGE_TYPES = frozenset({CARRINHO_PUBLICO, CHECKOUT_PUBLICO})
+_MUTATING_QUERY_KEYS = frozenset(
+    {
+        "add-to-cart",
+        "add_to_cart",
+        "apply_coupon",
+        "order",
+        "order-pay",
+        "pay_for_order",
+        "payment",
+        "remove_item",
+        "undo_item",
+        "update_cart",
+        "wc-ajax",
+    }
+)
+_PRIVATE_SEGMENTS = frozenset(
+    {
+        "minha-conta",
+        "my-account",
+        "order",
+        "order-pay",
+        "order-received",
+        "pagamento",
+        "payment",
+        "pedido",
+        "pedido-recebido",
+        "wp-admin",
+        "wp-login.php",
+    }
+)
+
+
+def read_only_purchase_route(route: Route) -> None:
+    """Let a public cart or checkout render without changing anything.
+
+    Only reads leave the browser: a cart update, coupon, order, payment or
+    account request is aborted, so viewing the empty cart or checkout can
+    never add an item, submit an order or pay. See docs/adr/0007.
+    """
+    request = route.request
+    parsed = urlsplit(request.url)
+    keys = {
+        key.casefold()
+        for key, _value in parse_qsl(parsed.query, keep_blank_values=True)
+    }
+    segments = {segment.casefold() for segment in parsed.path.split("/") if segment}
+    if (
+        request.method not in {"GET", "HEAD", "OPTIONS"}
+        or keys & _MUTATING_QUERY_KEYS
+        or segments & _PRIVATE_SEGMENTS
+    ):
+        route.abort()
+        return
+    route.continue_()
+
+
 def _capture_page(
     page: Page,
     pagina: Pagina,
@@ -596,8 +659,15 @@ def capture_site(
                 embedding_path = embedding_folder / f"{stem}.png"
                 raw_path.unlink(missing_ok=True)
                 embedding_path.unlink(missing_ok=True)
+                guarded = pagina.tipo in _PURCHASE_PAGE_TYPES
                 try:
-                    warning = _capture_page(page, pagina, raw_path, settings)
+                    if guarded:
+                        page.route("**/*", read_only_purchase_route)
+                    try:
+                        warning = _capture_page(page, pagina, raw_path, settings)
+                    finally:
+                        if guarded:
+                            page.unroute("**/*", read_only_purchase_route)
                     colors = image_color_count(raw_path)
                     raw_digest = _digest(raw_path)
                     if colors < settings.minimum_color_count:

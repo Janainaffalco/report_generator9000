@@ -19,6 +19,7 @@ from .lista_paginas import (
     Pagina,
 )
 from .placeholders import render_placeholder
+from .purchase_path import PurchaseGap
 from .run_context import Pendencia
 
 
@@ -31,8 +32,15 @@ def loja_draft_blocks(
     images: tuple[BlockImage, ...],
     capture_folder: Path,
     capture_origin: str,
+    gaps: tuple[PurchaseGap, ...] = (),
 ) -> tuple[tuple[Pagina, ...], tuple[BlockImage, ...], tuple[Pendencia, ...]]:
-    """Use confirmed Captures where possible and classify missing Loja Blocks."""
+    """Use confirmed Captures where possible and classify missing Loja Blocks.
+
+    *gaps* carries the classification the purchase-path observation gave a
+    cart or checkout view it could not confirm; any other missing Block is a
+    discovery the automation should have made, so it stays TOOL_BLOCKED.
+    """
+    gap_by_heading = {gap.heading: gap for gap in gaps}
     by_heading: dict[str, tuple[Pagina, BlockImage]] = {}
     for page, image in zip(pages, images):
         heading = (
@@ -54,9 +62,21 @@ def loja_draft_blocks(
         if heading in by_heading:
             selected.append(by_heading[heading])
             continue
+        gap = gap_by_heading.get(heading)
+        classification = "TOOL_BLOCKED" if gap is None else gap.classification
+        reason = (
+            f"nenhuma página pública confirmada para {heading}"
+            if gap is None
+            else gap.reason
+        )
+        required_action = (
+            f"Confirmar {heading} na loja pública e revisar no Word"
+            if classification == "INCONCLUSIVO"
+            else f"Revisar {heading} no Word"
+        )
         page = Pagina(EVIDENCIA_AUSENTE, heading, capture_origin, heading)
         content = render_placeholder(
-            original, "TOOL_BLOCKED", heading, 1200, 675
+            original, classification, heading, 1200, 675
         )
         path = capture_folder / "embutir" / f"loja-missing-{index:02d}.png"
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -66,12 +86,12 @@ def loja_draft_blocks(
         pendencias.append(
             Pendencia(
                 slot=f"loja_block_{index:02d}",
-                classification="TOOL_BLOCKED",
-                reason=f"nenhuma página pública confirmada para {heading}",
+                classification=classification,
+                reason=reason,
                 evidence=digest,
                 name=heading,
                 page="VITRINE E PÁGINAS",
-                required_action=f"Revisar {heading} no Word",
+                required_action=required_action,
             )
         )
 

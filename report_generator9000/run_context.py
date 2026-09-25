@@ -9,7 +9,7 @@ from typing import Any, Mapping
 
 
 ORIGINS = ("boilerplate", "capture", "derived", "gated", "placeholder")
-CLASSIFICATIONS = ("GATED", "TOOL_BLOCKED", "UNDECLARED", "REVIEW")
+CLASSIFICATIONS = ("GATED", "TOOL_BLOCKED", "UNDECLARED", "REVIEW", "INCONCLUSIVO")
 
 # The classification is this pipeline's stable identifier and stays in
 # `run.json`, the gates and the CLI. The consultant reading the delivered DOCX
@@ -20,6 +20,7 @@ CLASSIFICATION_LABELS = {
     "TOOL_BLOCKED": "FALHA NA AUTOMAÇÃO",
     "UNDECLARED": "NÃO DECLARADO",
     "REVIEW": "REVISAR",
+    "INCONCLUSIVO": "INCONCLUSIVO",
 }
 
 

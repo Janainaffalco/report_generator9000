@@ -9,6 +9,10 @@ storefront. Product cards, category links, filters, or a shop link may exist onl
 the rendered body, and a public WooCommerce Store API can expose a published product
 without exposing any administrative data.
 
+_Amended by ADR 0007: after discovery, the store's declared empty cart and checkout
+pages may be opened with one read-only GET each, to print them as `SEÇÃO CARRINHO` and
+`SEÇÃO CHECKOUT`. Discovery itself still refuses them._
+
 The `storefront` module owns one interface:
 `discover_storefront_pages(capture_origin, existing_pages)`. Its implementation runs a
 fixed ladder: rendered same-origin links first, the same-origin read-only Store API

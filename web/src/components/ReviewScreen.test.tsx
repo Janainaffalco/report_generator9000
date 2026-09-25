@@ -43,7 +43,7 @@ afterEach(() => {
 })
 
 describe("ReviewScreen", () => {
-  it("distinguishes GATED, TOOL_BLOCKED and UNDECLARED Pendências", async () => {
+  it("distinguishes GATED, TOOL_BLOCKED, UNDECLARED and INCONCLUSIVO Pendências", async () => {
     vi.stubGlobal(
       "fetch",
       vi.fn().mockResolvedValue(
@@ -86,6 +86,17 @@ describe("ReviewScreen", () => {
               page: "documento",
               preview_page: null,
             },
+            {
+              classification: "INCONCLUSIVO",
+              classification_label: "INCONCLUSIVO",
+              classification_explanation:
+                "A evidência pública do site não permite concluir — confirme na loja e ajuste no Word; não é uma falha da geração.",
+              name: "caminho de compra",
+              required_action:
+                "Confirmar na loja pública como o visitante conclui a compra e revisar no Word",
+              page: "FUNCIONALIDADES DA LOJA",
+              preview_page: null,
+            },
           ],
           checks: [],
         })
@@ -116,13 +127,22 @@ describe("ReviewScreen", () => {
       within(undeclared).getByText(/característica do site/i)
     ).toBeInTheDocument()
 
-    // The three classes must never read as the same thing.
+    const inconclusive = screen.getByText("caminho de compra").closest("li")!
+    expect(
+      within(inconclusive).getByText("INCONCLUSIVO")
+    ).toBeInTheDocument()
+    expect(
+      within(inconclusive).getByText(/não permite concluir/i)
+    ).toBeInTheDocument()
+
+    // The classes must never read as the same thing.
     const labels = [
       within(gated).getByText("NÃO FORNECIDO").textContent,
       within(toolBlocked).getByText("FALHA NA AUTOMAÇÃO").textContent,
       within(undeclared).getByText("NÃO DECLARADO").textContent,
+      within(inconclusive).getByText("INCONCLUSIVO").textContent,
     ]
-    expect(new Set(labels).size).toBe(3)
+    expect(new Set(labels).size).toBe(4)
 
     expect(
       screen.getByText(/podem ser resolvidas agora ou depois, direto no Word/i)

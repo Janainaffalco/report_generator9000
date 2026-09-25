@@ -76,6 +76,7 @@ def contract_for(tema: str) -> TemaContract | None:
     from .gates.loja_blocks import check_loja_block_grammar
     from .gates.loja_credentials import check_loja_credentials
     from .gates.loja_handover import check_loja_handover_claims
+    from .gates.loja_purchase import check_loja_purchase_claims
     from .gates.master import BOILERPLATE_MEDIA, LOJA_VIRTUAL_GRAMMAR, check_loja_master, check_master_build
 
     if loja:
@@ -111,6 +112,7 @@ def contract_for(tema: str) -> TemaContract | None:
                 check_loja_block_grammar,
                 check_loja_credentials,
                 check_loja_handover_claims,
+                check_loja_purchase_claims,
             ),
         )
 

@@ -104,6 +104,15 @@ applicable public category or filter pages may follow it in the same Lista de P�
 private administrative `LISTA DE PRODUTOS` is a different Gated Input.
 _Avoid_: admin catalogue, product inventory
 
+**Caminho de Compra**:
+How a public visitor proceeds from the representative published product, as observed
+without adding to a cart, ordering or paying: an off-site WhatsApp referral, another
+external referral, a verified on-site cart route, or INCONCLUSIVO. The empty cart and
+checkout pages the store declares are printed as `SEÇÃO CARRINHO` and `SEÇÃO CHECKOUT`
+only as proof they exist. Never evidence that the site completes sales or has payment,
+shipping or stock configured.
+_Avoid_: checkout flow, sales process
+
 **Boilerplate**:
 Content identical in every report — the SEBRAE header logo, the WordPress explanation, the
 plugin reference URLs. Never substituted, never a leak risk.
@@ -177,6 +186,14 @@ _Avoid_: missing, not found, unavailable
 Pendência class meaning content was generated from observed facts but still requires a
 human approval before the report can be sent. The content is present and source-grounded;
 it is neither a Placeholder nor a Gated Input.
+
+**INCONCLUSIVO**:
+Pendência class meaning public evidence was read without failure but does not allow a
+conclusion — a purchase action with nothing verifiable behind it, a declared cart that
+answers 404, a checkout that falls back to the cart. Distinct from TOOL_BLOCKED, where the
+automation failed; from GATED, where the evidence is private; and from REVIEW, where the
+content is present. The claim is omitted, never guessed.
+_Avoid_: unknown, not found
 
 **Provenance**:
 The record of where each artifact in a finished report came from — Boilerplate, a Capture from

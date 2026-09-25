@@ -126,7 +126,8 @@ _UNTRANSLATED_CAUSE = _Remedy(
 # The Pendência classes must read correctly and differently: GATED is normal
 # and expected, TOOL_BLOCKED is a defect worth re-running for, and UNDECLARED
 # is a property of the site rather than a failure of either kind. REVIEW is
-# generated content still awaiting the consultant's approval.
+# generated content still awaiting the consultant's approval. INCONCLUSIVO is
+# public evidence that was read without failure but does not settle the fact.
 _CLASSIFICATION_EXPLANATIONS = {
     "GATED": (
         "Normal e esperado: nenhuma automação consegue obter este conteúdo "
@@ -143,6 +144,10 @@ _CLASSIFICATION_EXPLANATIONS = {
     "REVIEW": (
         "Gerado a partir de fatos observados, mas ainda precisa da sua "
         "aprovação antes do envio."
+    ),
+    "INCONCLUSIVO": (
+        "A evidência pública do site não permite concluir — confirme na loja "
+        "e ajuste no Word; não é uma falha da geração."
     ),
 }
 

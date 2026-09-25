@@ -34,6 +34,7 @@ from .prose import (
 from .lista_paginas import Pagina, derive_lista_paginas
 from .logo import CLIENT_LOGO_PART, LogoCapture, LogoFailure
 from .palette import PaletteDerivation, render_palette
+from .purchase_path import PurchasePath, describe_purchase_path
 from .run_context import (
     Artifact,
     Grounding,
@@ -261,6 +262,7 @@ def generate_report(
     run_pendencias: tuple[Pendencia, ...] = (),
     derived_palette: PaletteDerivation | None = None,
     client_logo: LogoCapture | LogoFailure | None = None,
+    purchase_path: PurchasePath | None = None,
 ) -> GeneratedReport:
     """Clone *master* and fill spreadsheet and available Gated Inputs."""
     contract = supported_contract(engagement.tema)
@@ -365,23 +367,18 @@ def generate_report(
                 ),
             )
         )
+    purchase_grounding: tuple[Grounding, ...] = ()
     if contract.name == LOJA_VIRTUAL_TEMA:
-        evidence = pendencia_marker(
-            "TOOL_BLOCKED", "evidencia_checkout_nao_suportada"
+        statement = describe_purchase_path(
+            purchase_path, engagement.capture_origin
         )
-        replacement_text["{{EVIDENCIA_CHECKOUT}}"] = evidence
-        emphasized_tokens.add("{{EVIDENCIA_CHECKOUT}}")
-        pendencias.append(
-            Pendencia(
-                slot="evidencia_checkout",
-                classification="TOOL_BLOCKED",
-                reason="o pipeline ainda não verifica o fluxo público de carrinho e checkout",
-                evidence=evidence,
-                name="evidência de carrinho e checkout",
-                page="FUNCIONALIDADES DA LOJA",
-                required_action="Revisar o fluxo público de carrinho e checkout no Word",
-            )
-        )
+        replacement_text["{{EVIDENCIA_CHECKOUT}}"] = statement.text
+        if statement.is_gap:
+            emphasized_tokens.add("{{EVIDENCIA_CHECKOUT}}")
+        if statement.pendencia is not None:
+            pendencias.append(statement.pendencia)
+        if statement.grounding is not None:
+            purchase_grounding = (statement.grounding,)
     for token, value in drafted.token_values.items():
         if _GAP.search(value):
             emphasized_tokens.add(token)
@@ -695,7 +692,11 @@ def generate_report(
             output_paths=(str(output.resolve()),),
             blocks=blocks,
             pendencias=tuple(pendencias),
-            prose_grounding=(*drafted.grounding, *palette_grounding),
+            prose_grounding=(
+                *drafted.grounding,
+                *palette_grounding,
+                *purchase_grounding,
+            ),
         )
         gate_report = run_gates(package, context, tema=engagement.tema)
         if not gate_report.passed:
