@@ -1822,6 +1822,145 @@ def test_loja_refuses_a_credential_attachment_and_reruns_on_a_product_list(
     assert (gated_folder / "produtos-admin.png").read_bytes() == _TINY_PNG
 
 
+def _png_bytes(width: int = 640, height: int = 360) -> bytes:
+    from io import BytesIO
+
+    from PIL import Image
+
+    buffer = BytesIO()
+    Image.new("RGB", (width, height), "white").save(buffer, format="PNG")
+    return buffer.getvalue()
+
+
+def _await_outcome(client: TestClient, run_id: str) -> dict:
+    deadline = monotonic() + 60
+    record = client.get(f"/api/runs/{run_id}").json()
+    while record["outcome"] == "running" and monotonic() < deadline:
+        sleep(0.05)
+        record = client.get(f"/api/runs/{run_id}").json()
+    return record
+
+
+def test_loja_attachment_reruns_the_real_loja_report_generation(
+    tmp_path: Path, recording_sink
+) -> None:
+    """The attachment endpoint joined to the production Loja document path.
+
+    Only the site Capture and the PDF rendering are replaced: the Loja Master,
+    its Gated Drop Folder, Pendências, Provenance and gates are the real ones.
+    """
+    from report_generator9000.generate import generate_report
+    from report_generator9000.run_context import load_run_context
+    from report_generator9000.tema import LOJA_VIRTUAL_TEMA, supported_contract
+    from tests.test_assembly import _FakePreviewRenderer
+
+    secret = "S3gredo-Loja-42"
+    sheet_store = SheetStore(tmp_path / "sheets")
+    app = _create_app(static_dir=tmp_path / "missing-web", sheet_store=sheet_store)
+
+    def assemble(master, output_root, engagement, gated_root, **options):
+        report = generate_report(
+            master, output_root, engagement, gated_root, pages=(), no_llm=True
+        )
+        for stage in STAGES:
+            options["progress"](stage, 0 if stage == "derive_pages" else None)
+        render = _FakePreviewRenderer().render(
+            report.document, report.document.parent / "previews"
+        )
+        return SimpleNamespace(
+            pages=(),
+            previews=render.pages,
+            pdf=render.pdf,
+            preview_render=render,
+            report=report,
+        )
+
+    service = RunService(
+        store=RunStore(tmp_path / "runs"),
+        master=tmp_path / "MASTER.docx",
+        output_root=tmp_path / "outputs",
+        gated_drop_root=tmp_path / "gated",
+        assembler=assemble,
+        no_llm=True,
+    )
+    app.state.run_service = service
+    client = _authed_client(app)
+    uploaded = _upload(client, FIXTURE)
+    started = client.post(
+        "/api/runs",
+        json={
+            "sheet_id": uploaded.json()["sheet_id"],
+            "row_number": LOJA_ROW_NUMBER,
+        },
+    )
+    first = _await_outcome(client, started.json()["run_id"])
+    assert first["outcome"] == "finished", first
+    filenames = supported_contract(LOJA_VIRTUAL_TEMA).image_filenames
+    report = client.get(f"/api/runs/{first['run_id']}/report").json()
+    product_list = [
+        item
+        for item in report["pendencias"]
+        if item["attachment_filename"] == filenames["produtos-admin"]
+    ]
+    assert [item["classification"] for item in product_list] == ["GATED"]
+    assert "LISTA DE PRODUTOS" in product_list[0]["name"].upper()
+    first_record = service.store.get(first["run_id"])
+    assert first_record is not None and first_record.document is not None
+    first_bytes = Path(first_record.document).read_bytes()
+
+    refused = client.post(
+        f"/api/runs/{first['run_id']}/attachments",
+        files=[
+            (
+                "files",
+                (
+                    VALUES_FILE,
+                    json.dumps(
+                        {
+                            "configuracao_woocommerce": (
+                                f"usuario admin / senha {secret}"
+                            )
+                        }
+                    ).encode("utf-8"),
+                    "application/json",
+                ),
+            )
+        ],
+    )
+    assert refused.status_code == 422
+    assert secret not in refused.text
+
+    attached = client.post(
+        f"/api/runs/{first['run_id']}/attachments",
+        files=[("files", ("produtos-admin.png", _png_bytes(), "image/png"))],
+    )
+    assert attached.status_code == 202
+    rerun = _await_outcome(client, attached.json()["run_id"])
+    assert rerun["outcome"] == "finished", rerun
+    assert rerun["stage_history"] == list(STAGES)
+    remaining = client.get(f"/api/runs/{rerun['run_id']}/report").json()
+    attachable = {item["attachment_filename"] for item in remaining["pendencias"]}
+    assert filenames["produtos-admin"] not in attachable
+    assert filenames["pagamentos-admin"] in attachable
+    assert remaining["status"] == "draft"
+
+    rerun_record = service.store.get(rerun["run_id"])
+    assert rerun_record is not None and rerun_record.document is not None
+    document = Path(rerun_record.document)
+    assert document == Path(first_record.document)
+    assert document.read_bytes() != first_bytes
+    context = load_run_context(document.with_name("run.json"))
+    gated_folder = service.gated_drop_root / LOJA_ENGAGEMENT_FOLDER
+    gated = context.artifacts_of("gated")
+    assert [item.label for item in gated] == ["produtos-admin"]
+    assert Path(gated[0].source).parent == gated_folder.resolve()
+
+    assert not any(secret in repr(event) for event in recording_sink.events)
+    for path in tmp_path.rglob("*"):
+        if path.is_file():
+            assert secret.encode() not in path.read_bytes(), path
+
+
 def test_report_endpoint_404s_before_the_run_finishes(tmp_path: Path) -> None:
     sheet_store = SheetStore(tmp_path / "sheets")
     app = _create_app(static_dir=tmp_path / "missing-web", sheet_store=sheet_store)

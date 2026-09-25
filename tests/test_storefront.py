@@ -14,6 +14,7 @@ import pytest
 from report_generator9000.assembly import assemble_output_package
 from report_generator9000.capture import CaptureConfig, capture_site
 from report_generator9000.control_sheet import Engagement
+from report_generator9000.docx_package import open_docx_package
 from report_generator9000.generate import StopCondition
 from report_generator9000.lista_paginas import (
     ELEMENTO_TRANSVERSAL,
@@ -27,7 +28,9 @@ from report_generator9000.prose import (
     GroundedField,
     ProseConfig,
     ProseResponse,
+    deterministic_page_paragraph,
 )
+from report_generator9000.runs import STAGES, RunService, RunStore
 from report_generator9000.storefront import (
     StorefrontDiscoveryConfig,
     StorefrontDiscoveryResponse,
@@ -42,6 +45,9 @@ class _StorefrontHandler(BaseHTTPRequestHandler):
     requests: list[tuple[str, str]] = []
     api_enabled = True
     customized_only = False
+    # A menu page gives the customized store one capturable Página, so a Run
+    # has usable evidence even when storefront discovery finds nothing.
+    customized_nav = False
 
     def log_message(self, format: str, *args: object) -> None:
         pass
@@ -95,8 +101,13 @@ class _StorefrontHandler(BaseHTTPRequestHandler):
                 </main>
                 <footer>Contato e informações da empresa</footer>
             """
-        customized_home = """
-                <h1>Empório</h1>
+        customized_nav = (
+            "<nav><a href='/sobre/'>Sobre</a></nav>"
+            if type(self).customized_nav
+            else ""
+        )
+        customized_home = f"""
+                <h1>Empório</h1>{customized_nav}
                 <main>
                   <a class='entry' href='/colecao-especial/'>Coleção especial</a>
                   <a class='entry' href='/sobre/'>Sobre</a>
@@ -152,13 +163,17 @@ class _StorefrontHandler(BaseHTTPRequestHandler):
 
 @contextmanager
 def _serve_storefront(
-    *, api_enabled: bool = True, customized_only: bool = False
+    *,
+    api_enabled: bool = True,
+    customized_only: bool = False,
+    customized_nav: bool = False,
 ) -> Iterator[tuple[str, type[_StorefrontHandler]]]:
     class Handler(_StorefrontHandler):
         requests: list[tuple[str, str]] = []
 
     Handler.api_enabled = api_enabled
     Handler.customized_only = customized_only
+    Handler.customized_nav = customized_nav
     server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
     thread = Thread(target=server.serve_forever, daemon=True)
     thread.start()
@@ -707,3 +722,204 @@ def test_customized_storefront_run_promotes_only_confirmed_fallback_pages(
         item.name == "SEÇÃO PRODUTOS"
         for item in package.report.context.pendencias
     )
+
+
+def _loja_engagement(origin: str, pasta: str, razao_social: str) -> Engagement:
+    return Engagement(
+        row_number=2,
+        demanda="013292/2026",
+        pasta=pasta,
+        razao_social=razao_social,
+        cnpj="52.052.612/0001-21",
+        kick_off=datetime(2026, 4, 15),
+        especialista="Especialista",
+        capture_origin=origin,
+        published_domain=None,
+        tema=LOJA_VIRTUAL_TEMA,
+    )
+
+
+def _assemble_loja(engagement: Engagement, root: Path, **options):
+    contract = supported_contract(engagement.tema)
+    assert contract.master is not None
+    return assemble_output_package(
+        contract.master,
+        root / "outputs",
+        engagement,
+        root / "gated",
+        preview_renderer=_FakePreviewRenderer(),
+        **options,
+    )
+
+
+class _RecordingProseProvider(_FakeStorefrontProvider):
+    """Records what the Briefing provider is shown, besides storefront calls."""
+
+    def __init__(self, response: StorefrontDiscoveryResponse | Exception) -> None:
+        super().__init__(response)
+        self.prose_requests = []
+
+    def generate(self, request, config):
+        self.prose_requests.append(request)
+        return super().generate(request, config)
+
+
+def _fallback_provider(origin: str) -> _RecordingProseProvider:
+    listing_url = origin + "colecao-especial/"
+    product_url = origin + "item/cafe-raro/"
+    return _RecordingProseProvider(
+        StorefrontDiscoveryResponse(
+            (
+                _candidate(
+                    kind=VITRINE,
+                    label="Coleção especial",
+                    url=listing_url,
+                    source_id="public-page-1",
+                    excerpt=f"Coleção especial | {listing_url}",
+                ),
+                _candidate(
+                    kind=PRODUTO_PUBLICADO,
+                    label="Café raro",
+                    url=product_url,
+                    source_id="public-page-2",
+                    excerpt=f"Café raro | {product_url}",
+                ),
+            )
+        )
+    )
+
+
+def test_conventional_storefront_briefing_reads_the_same_lista_as_the_blocks(
+    tmp_path: Path,
+) -> None:
+    provider = _RecordingProseProvider(StorefrontDiscoveryResponse(()))
+    with _serve_storefront() as (origin, _handler):
+        package = _assemble_loja(
+            _loja_engagement(origin, "50-2026", "EMPORIO TESTE"),
+            tmp_path,
+            prose_provider=provider,
+            prose_config=ProseConfig(model="fake", output_budget=200),
+        )
+
+    assert provider.discovery_requests == []
+    assert len(provider.prose_requests) == 1
+    texts = [page.text for page in provider.prose_requests[0].site_text]
+    # Every confirmed storefront Página the Blocks show is text the Briefing
+    # provider reads; the mobile duplicate of the listing is not read twice.
+    assert sum("Produtos disponíveis para compra pública." in t for t in texts) == 1
+    assert any("Produto publicado com descrição completa." in t for t in texts)
+    assert any("Categoria pública de produtos." in t for t in texts)
+    briefing_pages = [page for page in package.pages if page.entra_no_briefing]
+    assert len(texts) <= len(briefing_pages)
+    document_text = "\n".join(
+        paragraph.text
+        for paragraph in open_docx_package(package.report.document).paragraphs
+    )
+    paragraph = deterministic_page_paragraph(package.pages)
+    assert paragraph in document_text
+    for page in briefing_pages:
+        assert page.rotulo in paragraph
+
+
+def test_two_pastas_of_one_storefront_never_share_captures(
+    tmp_path: Path,
+) -> None:
+    with _serve_storefront() as (origin, _handler):
+        first = _assemble_loja(
+            _loja_engagement(origin, "50-2026", "EMPORIO TESTE"),
+            tmp_path,
+            no_llm=True,
+        )
+        second = _assemble_loja(
+            _loja_engagement(origin, "53-2026", "OUTRO EMPORIO"),
+            tmp_path,
+            no_llm=True,
+        )
+
+    assert first.directory != second.directory
+    for package, other in ((first, second), (second, first)):
+        sources = [
+            Path(item.source)
+            for item in package.report.context.artifacts_of("capture")
+            if item.source is not None
+        ]
+        assert sources
+        assert all(path.is_relative_to(package.directory) for path in sources)
+        assert not any(path.is_relative_to(other.directory) for path in sources)
+
+
+def test_provider_failure_on_a_usable_customized_store_leaves_a_classified_draft(
+    tmp_path: Path, recording_sink
+) -> None:
+    provider = _RecordingProseProvider(RuntimeError("provider unavailable"))
+    with _serve_storefront(
+        api_enabled=False, customized_only=True, customized_nav=True
+    ) as (origin, _handler):
+        package = _assemble_loja(
+            _loja_engagement(origin, "51-2026", "EMPORIO CUSTOMIZADO"),
+            tmp_path,
+            prose_provider=provider,
+            prose_config=ProseConfig(model="fake", output_budget=200),
+        )
+
+    assert len(provider.discovery_requests) == 1
+    assert any(
+        event.name == "storefront_provider_failed"
+        for event in recording_sink.events
+    )
+    headings = tuple(page.titulo_bloco for page in package.pages)
+    assert "SEÇÃO SOBRE" in headings
+    assert not any(page.tipo == PRODUTO_PUBLICADO for page in package.pages)
+    assert package.report.status == "draft"
+    produtos = [
+        item
+        for item in package.report.context.pendencias
+        if item.name == "SEÇÃO PRODUTOS"
+    ]
+    assert [item.classification for item in produtos] == ["TOOL_BLOCKED"]
+
+
+def test_loja_run_with_provider_fallback_reports_nine_stages_in_order(
+    tmp_path: Path, recording_sink
+) -> None:
+    def assemble(master, output_root, engagement, gated_root, **options):
+        return assemble_output_package(
+            master,
+            output_root,
+            engagement,
+            gated_root,
+            preview_renderer=_FakePreviewRenderer(),
+            **options,
+        )
+
+    with _serve_storefront(
+        api_enabled=False, customized_only=True
+    ) as (origin, _handler):
+        provider = _fallback_provider(origin)
+        service = RunService(
+            store=RunStore(tmp_path / "runs"),
+            master=tmp_path / "MASTER.docx",
+            output_root=tmp_path / "outputs",
+            gated_drop_root=tmp_path / "gated",
+            assembler=assemble,
+            prose_provider=provider,
+            prose_config=ProseConfig(model="fake", output_budget=200),
+        )
+        record = service.submit(
+            _loja_engagement(origin, "51-2026", "EMPORIO CUSTOMIZADO"),
+            sheet_id="sheet-1",
+        )
+        service.shutdown()
+
+    finished = service.store.get(record.run_id)
+    assert finished is not None
+    assert finished.outcome == "finished", finished.reason
+    assert finished.report_status == "draft"
+    assert finished.stage_history == STAGES
+    assert len(provider.discovery_requests) == 1
+    stage_events = [
+        event.name
+        for event in recording_sink.events
+        if event.kind == "stage" and event.run_id == record.run_id
+    ]
+    assert stage_events == list(STAGES)

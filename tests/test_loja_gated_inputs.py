@@ -9,6 +9,7 @@ import pytest
 from PIL import Image
 
 from fixtures.docx_builder import build_docx, paragraph
+from report_generator9000.assembly import assemble_output_package
 from report_generator9000.control_sheet import Engagement, read_control_sheet
 from report_generator9000.docx_package import media_location, open_docx_package
 from report_generator9000.gated_inputs import (
@@ -20,6 +21,7 @@ from report_generator9000.gates import run_gates
 from report_generator9000.gates.loja_handover import check_loja_handover_claims
 from report_generator9000.generate import GeneratedReport, generate_report
 from report_generator9000.run_context import Pendencia, RunContext
+from report_generator9000.runs import RunService, RunStore
 from report_generator9000.tema import (
     LOJA_VIRTUAL_TEMA,
     WEBSITE_TEMA,
@@ -157,6 +159,59 @@ def test_absent_gated_inputs_classify_every_admin_slot_and_keep_a_draft(
         "link_identidade_visual",
     ):
         assert pendencias[slot].classification == "GATED"
+
+
+def test_absent_gated_inputs_are_marked_in_the_document_and_pass_the_gates(
+    tmp_path: Path,
+) -> None:
+    engagement = _loja_engagement()
+    report = _run(engagement, tmp_path, tmp_path / "gated")
+    package = open_docx_package(report.document)
+    assert run_gates(package, report.context, tema=engagement.tema).passed
+    media = {item.sha256.lower() for item in package.media}
+    placeholders = {
+        item.digest.lower() for item in report.context.artifacts_of("placeholder")
+    }
+    pendencias = _pendencias_by_slot(report)
+    for slot in ADMIN_SLOT_LABELS:
+        evidence = pendencias[slot].evidence.lower()
+        assert evidence in media, slot
+        assert evidence in placeholders, slot
+
+
+def test_a_refused_credential_never_reaches_the_run_record_events_or_files(
+    tmp_path: Path, recording_sink
+) -> None:
+    secret = "S3gredo-Loja-42"
+    engagement = _loja_engagement()
+    gated = tmp_path / "gated"
+    folder = gated_drop_folder(gated, engagement)
+    _write_values(
+        folder,
+        {
+            **_identity(engagement),
+            "configuracao_woocommerce": f"usuario admin / senha {secret}",
+        },
+    )
+    service = RunService(
+        store=RunStore(tmp_path / "runs"),
+        master=tmp_path / "MASTER.docx",
+        output_root=tmp_path / "outputs",
+        gated_drop_root=gated,
+        assembler=assemble_output_package,
+        no_llm=True,
+    )
+    record = service.submit(engagement, sheet_id="sheet-1")
+    service.shutdown()
+
+    finished = service.store.get(record.run_id)
+    assert finished is not None
+    assert finished.outcome == "stopped"
+    assert secret not in (finished.reason or "")
+    assert not any(secret in repr(event) for event in recording_sink.events)
+    for path in tmp_path.rglob("*"):
+        if path.is_file() and not path.is_relative_to(folder):
+            assert secret.encode() not in path.read_bytes(), path
 
 
 def test_supplied_gated_inputs_embed_with_provenance_inside_the_pasta(
