@@ -45,6 +45,7 @@ from .run_context import (
     pendencia_marker,
 )
 from .tema import LOJA_VIRTUAL_TEMA, supported_contract
+from .wordpress_login import LOGIN_SLOT, LoginCapture
 
 
 # Only the bracketed markers this pipeline writes -- a Pendência marker or the
@@ -263,6 +264,7 @@ def generate_report(
     derived_palette: PaletteDerivation | None = None,
     client_logo: LogoCapture | LogoFailure | None = None,
     purchase_path: PurchasePath | None = None,
+    captured_login: LoginCapture | None = None,
 ) -> GeneratedReport:
     """Clone *master* and fill spreadsheet and available Gated Inputs."""
     contract = supported_contract(engagement.tema)
@@ -493,6 +495,26 @@ def generate_report(
                     source=str(source_path.resolve()),
                 )
             )
+        elif slot == LOGIN_SLOT and captured_login is not None:
+            # A consultant's login.png always wins; the public login screen
+            # captured this run is only the fallback, and stays a Capture.
+            if capture_folder is None or not is_within(
+                str(captured_login.path.resolve()),
+                str(Path(capture_folder).resolve()),
+            ):
+                raise ReportGenerationError(
+                    "login capture is outside this run's Capture folder"
+                )
+            content = captured_login.path.read_bytes()
+            if (
+                hashlib.sha256(content).hexdigest().casefold()
+                != captured_login.digest.casefold()
+            ):
+                raise ReportGenerationError(
+                    "login capture digest does not match its Capture"
+                )
+            parts[part_name] = content
+            artifacts.append(captured_login.artifact)
         elif slot == "paleta" and (
             derived_palette is not None and derived_palette.colors
         ):

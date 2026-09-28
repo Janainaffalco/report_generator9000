@@ -47,6 +47,12 @@ from .purchase_path import PurchasePath, classify_purchase_path, with_purchase_p
 from .run_context import Pendencia
 from .storefront import discover_storefront_pages
 from .tema import LOJA_VIRTUAL_TEMA, supported_contract
+from .wordpress_login import (
+    LOGIN_PIXEL_SIZE,
+    LOGIN_SLOT,
+    LoginCapture,
+    capture_wordpress_login,
+)
 
 ProgressCallback = Callable[[str, int | None], None]
 
@@ -168,6 +174,46 @@ def _assemble_staged_package(
         ),
     )
     report_progress("capture_logo")
+    captured_login: LoginCapture | None = None
+    login_part = next(
+        (
+            part_name
+            for slot, _filename, part_name in contract.gated_image_slots
+            if slot == LOGIN_SLOT
+        ),
+        None,
+    )
+    if (
+        contract.name == LOJA_VIRTUAL_TEMA
+        and login_part is not None
+        and login_part not in gated.images_by_part()
+    ):
+        login_slot = next(
+            (
+                slot
+                for slot in master_package.slots
+                if slot.media_part == login_part
+                and slot.width_emu is not None
+                and slot.height_emu is not None
+            ),
+            None,
+        )
+        login_result = capture_wordpress_login(
+            engagement.capture_origin,
+            captures.folder,
+            slot_pixel_size=(
+                LOGIN_PIXEL_SIZE
+                if login_slot is None
+                else slot_pixel_dimensions(
+                    login_slot.width_emu,
+                    login_slot.height_emu,
+                )
+            ),
+        )
+        # A failed login Capture invents nothing: the Slot keeps its GATED
+        # placeholder and Pendência, exactly as when no Capture was tried.
+        if isinstance(login_result, LoginCapture):
+            captured_login = login_result
     captures_by_page = {
         capture.pagina: capture for capture in captures.captures
     }
@@ -268,6 +314,7 @@ def _assemble_staged_package(
                 derived_palette=derived_palette,
                 client_logo=client_logo,
                 purchase_path=purchase_path,
+                captured_login=captured_login,
             )
             result["status"] = generated.status
         report_progress("draft_prose")
@@ -296,6 +343,7 @@ def _assemble_staged_package(
             if isinstance(client_logo, LogoCapture)
             else []
         )
+        + ([] if captured_login is None else [captured_login.path.resolve()])
     )
     output_paths = (
         generated.document.resolve(),
