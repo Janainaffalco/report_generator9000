@@ -23,6 +23,9 @@ from report_generator9000.lista_paginas import (
 )
 
 FIXTURE_SITE = Path(__file__).parent / "fixtures" / "site"
+TRAILING_SLASH_SITES = (
+    Path(__file__).parent / "fixtures" / "site-trailing-slash"
+)
 
 
 class _QuietHandler(SimpleHTTPRequestHandler):
@@ -31,9 +34,9 @@ class _QuietHandler(SimpleHTTPRequestHandler):
 
 
 @contextmanager
-def serve_fixture_site() -> Iterator[str]:
+def serve_fixture_site(directory: Path = FIXTURE_SITE) -> Iterator[str]:
     handler = lambda *args, **kwargs: _QuietHandler(
-        *args, directory=str(FIXTURE_SITE), **kwargs
+        *args, directory=str(directory), **kwargs
     )
     server = ThreadingHTTPServer(("127.0.0.1", 0), handler)
     thread = Thread(target=server.serve_forever, daemon=True)
@@ -99,6 +102,65 @@ def test_declared_list_wins_without_contacting_the_capture_origin() -> None:
         "TERMOS DE USO",
         "CABEÇALHO",
         "RODAPÉ",
+    ]
+    assert pages[1].url == "http://127.0.0.1:1/portfolio/"
+
+
+@pytest.mark.parametrize(
+    ("fixture", "kept_path"),
+    [
+        ("sem-barra-primeiro", "/cosmeticos"),
+        ("com-barra-primeiro", "/cosmeticos/"),
+    ],
+)
+def test_trailing_slash_variants_are_one_page_keeping_the_first_href(
+    fixture: str, kept_path: str
+) -> None:
+    with serve_fixture_site(TRAILING_SLASH_SITES / fixture) as origin:
+        pages = derive_lista_paginas(origin)
+
+    assert [page.titulo_bloco for page in pages] == [
+        "PÁGINA HOME",
+        "SEÇÃO COSMÉTICOS",
+        "SEÇÃO LOJA",
+        "CABEÇALHO",
+        "RODAPÉ",
+    ]
+    # Identity ignores the slash; the Capture URL is the href as found.
+    assert pages[1].url == origin.rstrip("/") + kept_path
+
+
+def test_declared_trailing_slash_variants_are_one_page() -> None:
+    pages = derive_lista_paginas(
+        "http://127.0.0.1:1/",
+        (
+            DeclaredPage(PAGINA_PRINCIPAL, "Portfólio", "/portfolio/"),
+            DeclaredPage(PAGINA_PRINCIPAL, "Portfólio", "/portfolio"),
+        ),
+        timeout=0.01,
+    )
+
+    assert [page.titulo_bloco for page in pages] == [
+        "SEÇÃO PORTFÓLIO",
+        "CABEÇALHO",
+        "RODAPÉ",
+    ]
+    assert pages[0].url == "http://127.0.0.1:1/portfolio/"
+
+
+def test_query_still_distinguishes_pages() -> None:
+    pages = derive_lista_paginas(
+        "http://127.0.0.1:1/",
+        (
+            DeclaredPage(PAGINA_PRINCIPAL, "Loja A", "/loja/?c=a"),
+            DeclaredPage(PAGINA_PRINCIPAL, "Loja B", "/loja?c=b"),
+        ),
+        timeout=0.01,
+    )
+
+    assert [page.url for page in pages[:2]] == [
+        "http://127.0.0.1:1/loja/?c=a",
+        "http://127.0.0.1:1/loja?c=b",
     ]
 
 

@@ -213,6 +213,17 @@ def _canonical_url(base: str, href: str, expected_host: str) -> str | None:
     )
 
 
+def _page_identity(url: str) -> str:
+    """Dedupe key: `/cosmeticos` and `/cosmeticos/` are one page.
+
+    Only identity ignores the trailing slash; `Pagina.url` keeps the href as
+    found, because some sites answer only one of the two forms.
+    """
+    parts = urlsplit(url)
+    path = parts.path.rstrip("/") or "/"
+    return urlunsplit((parts.scheme, parts.netloc, path, parts.query, ""))
+
+
 def _is_social(url: str) -> bool:
     hostname = (urlsplit(url).hostname or "").casefold()
     return any(
@@ -287,9 +298,10 @@ def _from_declared(
             raise ListaPaginasError(
                 f"declared page {position} is not on the Capture Origin host"
             )
-        if url in seen:
+        identity = _page_identity(url)
+        if identity in seen:
             continue
-        seen.add(url)
+        seen.add(identity)
         pages.append(_page(item.tipo, item.rotulo.strip(), url, home_url))
     return (*pages, *_transversals(home_url))
 
@@ -370,11 +382,14 @@ def derive_lista_paginas(
             if _is_social(resolved) or _is_attribution(link.label):
                 continue
             url = _canonical_url(final_url, link.href, expected_host)
-            if url is None or url in seen:
+            if url is None:
+                continue
+            identity = _page_identity(url)
+            if identity in seen:
                 continue
             if tipo == AREA_LEGAL and not _is_legal_area(link.label, url):
                 continue
-            seen.add(url)
+            seen.add(identity)
             pages.append(_page(tipo, link.label, url, home_url))
     return (*pages, *_transversals(home_url))
 
