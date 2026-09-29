@@ -23,7 +23,15 @@ WORKDIR /app
 COPY pyproject.toml README.md ./
 COPY report_generator9000/ ./report_generator9000/
 
-RUN python -m pip install --no-cache-dir --no-warn-script-location .
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends libreoffice-writer-nogui \
+    && rm -rf /var/lib/apt/lists/* \
+    && mkdir -p /usr/local/share/fonts/montserrat
+
+COPY report_generator9000/assets/*.ttf /usr/local/share/fonts/montserrat/
+
+RUN fc-cache -f \
+    && python -m pip install --no-cache-dir --no-warn-script-location .
 
 EXPOSE 8000
 
